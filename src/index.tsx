@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-type Bindings = { DB: D1Database }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string }
 type App = { Bindings: Bindings }
 
 const app = new Hono<App>()
@@ -128,6 +128,181 @@ app.post('/api/init', async (c) => {
 
 // Health check
 app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v5.0' }))
+
+// ===== EMAIL API (Resend) =====
+// 견적서/계약서 이메일 발송
+app.post('/api/email/send', async (c) => {
+  const apiKey = c.env.RESEND_API_KEY
+  if (!apiKey) return c.json({ error: 'RESEND_API_KEY not configured' }, 500)
+
+  const body = await c.req.json()
+  const { to, subject, html, from_name } = body
+
+  if (!to || !subject) return c.json({ error: 'to, subject are required' }, 400)
+
+  const fromAddr = from_name
+    ? `${from_name} <onboarding@resend.dev>`
+    : 'Frame Plus ERP <onboarding@resend.dev>'
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: fromAddr,
+        to: Array.isArray(to) ? to : [to],
+        subject,
+        html: html || `<p>${subject}</p>`
+      })
+    })
+
+    const data = await res.json() as Record<string, unknown>
+    if (!res.ok) return c.json({ error: 'Email send failed', detail: data }, res.status)
+    return c.json({ success: true, id: data.id })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return c.json({ error: msg }, 500)
+  }
+})
+
+// 견적서 이메일 발송 (프로젝트 데이터 기반 자동 HTML 생성)
+app.post('/api/email/estimate', async (c) => {
+  const apiKey = c.env.RESEND_API_KEY
+  if (!apiKey) return c.json({ error: 'RESEND_API_KEY not configured' }, 500)
+
+  const body = await c.req.json()
+  const { to, project_id, cc, custom_message } = body
+
+  if (!to || !project_id) return c.json({ error: 'to, project_id required' }, 400)
+
+  // 프로젝트 데이터 조회
+  const db = c.env.DB
+  const project = await db.prepare('SELECT * FROM projects WHERE id = ?').bind(project_id).first() as Record<string, unknown> | null
+  if (!project) return c.json({ error: 'Project not found' }, 404)
+
+  // 회사 정보 조회
+  const company = await db.prepare('SELECT * FROM company WHERE id = 1').first() as Record<string, unknown> | null
+
+  // 견적 아이템 파싱
+  let items: Array<Record<string, unknown>> = []
+  try { items = JSON.parse(project.items as string || '[]') } catch {}
+
+  // 총액 계산
+  let totalSell = 0
+  items.forEach((item) => {
+    const qty = Number(item.qty) || 0
+    const sp = Number(item.sp) || 1
+    const mp = Number(item.mp) || 0
+    const lp = Number(item.lp) || 0
+    const ep = Number(item.ep) || 0
+    totalSell += (mp + lp + ep) * qty * sp
+  })
+
+  const companyName = company?.name_ko || company?.name || 'Frame Plus'
+  const ceo = company?.ceo || ''
+  const tel = company?.tel || ''
+  const email = company?.email || ''
+
+  // 견적서 HTML 이메일 템플릿
+  const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:'Noto Sans KR',sans-serif;background:#f5f5f5;padding:20px;">
+<div style="max-width:650px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.1);">
+  <div style="background:#0a0a0a;color:#fff;padding:32px;text-align:center;">
+    <h1 style="margin:0;font-size:24px;font-weight:700;letter-spacing:.05em;">${companyName}</h1>
+    <p style="margin:8px 0 0;font-size:13px;opacity:.6;">견 적 서</p>
+  </div>
+  <div style="padding:32px;">
+    ${custom_message ? `<div style="background:#f0f7ff;border-left:4px solid #2563eb;padding:16px;margin-bottom:24px;border-radius:4px;font-size:14px;color:#333;">${custom_message}</div>` : ''}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">
+      <tr><td style="padding:8px 12px;background:#f8f8f8;font-weight:600;width:120px;border:1px solid #e5e5e5;">프로젝트명</td><td style="padding:8px 12px;border:1px solid #e5e5e5;">${project.nm}</td></tr>
+      <tr><td style="padding:8px 12px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">현장위치</td><td style="padding:8px 12px;border:1px solid #e5e5e5;">${project.loc}</td></tr>
+      <tr><td style="padding:8px 12px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">면적</td><td style="padding:8px 12px;border:1px solid #e5e5e5;">${project.area} m²</td></tr>
+      <tr><td style="padding:8px 12px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">견적일자</td><td style="padding:8px 12px;border:1px solid #e5e5e5;">${project.date}</td></tr>
+    </table>
+
+    <h3 style="font-size:15px;font-weight:700;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #0a0a0a;">견적 항목</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:24px;">
+      <thead>
+        <tr style="background:#0a0a0a;color:#fff;">
+          <th style="padding:10px 8px;text-align:left;font-size:11px;">공종</th>
+          <th style="padding:10px 8px;text-align:left;font-size:11px;">항목</th>
+          <th style="padding:10px 8px;text-align:right;font-size:11px;">수량</th>
+          <th style="padding:10px 8px;text-align:right;font-size:11px;">재료비</th>
+          <th style="padding:10px 8px;text-align:right;font-size:11px;">노무비</th>
+          <th style="padding:10px 8px;text-align:right;font-size:11px;">소계</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map((item) => {
+          const qty = Number(item.qty) || 0
+          const sp = Number(item.sp) || 1
+          const mp = Number(item.mp) || 0
+          const lp = Number(item.lp) || 0
+          const ep = Number(item.ep) || 0
+          const sub = (mp + lp + ep) * qty * sp
+          return `<tr style="border-bottom:1px solid #eee;">
+            <td style="padding:8px;">${item.cid || ''}</td>
+            <td style="padding:8px;">${item.nm || ''}</td>
+            <td style="padding:8px;text-align:right;">${qty.toLocaleString()}</td>
+            <td style="padding:8px;text-align:right;">${(mp * qty * sp).toLocaleString()}</td>
+            <td style="padding:8px;text-align:right;">${(lp * qty * sp).toLocaleString()}</td>
+            <td style="padding:8px;text-align:right;font-weight:600;">${sub.toLocaleString()}</td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+
+    <div style="background:#0a0a0a;color:#fff;border-radius:8px;padding:20px;text-align:center;margin-bottom:24px;">
+      <p style="margin:0 0 4px;font-size:12px;opacity:.6;">견적 총액 (VAT별도)</p>
+      <p style="margin:0;font-size:28px;font-weight:800;">${totalSell.toLocaleString()}원</p>
+    </div>
+
+    <div style="font-size:12px;color:#777;border-top:1px solid #eee;padding-top:16px;">
+      <p style="margin:2px 0;"><strong>${companyName}</strong>${ceo ? ` | 대표 ${ceo}` : ''}</p>
+      ${tel ? `<p style="margin:2px 0;">Tel: ${tel}</p>` : ''}
+      ${email ? `<p style="margin:2px 0;">Email: ${email}</p>` : ''}
+      <p style="margin:8px 0 0;font-size:11px;color:#aaa;">본 견적서는 Frame Plus ERP에서 자동 발송되었습니다.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>`
+
+  const fromAddr = `${companyName} <onboarding@resend.dev>`
+  const toList = Array.isArray(to) ? to : [to]
+
+  try {
+    const payload: Record<string, unknown> = {
+      from: fromAddr,
+      to: toList,
+      subject: `[견적서] ${project.nm} - ${companyName}`,
+      html: emailHtml
+    }
+    if (cc) payload.cc = Array.isArray(cc) ? cc : [cc]
+
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const data = await res.json() as Record<string, unknown>
+    if (!res.ok) return c.json({ error: 'Email send failed', detail: data }, res.status)
+    return c.json({ success: true, id: data.id, to: toList, subject: `[견적서] ${project.nm}` })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return c.json({ error: msg }, 500)
+  }
+})
 
 // ===== SERVE FRONTEND =====
 app.get('/*', async (c) => {

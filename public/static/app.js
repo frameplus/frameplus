@@ -1362,9 +1362,64 @@ function buildGanttPreview(p){
 function sendEstMail(pid){
   const p=getProject(pid);if(!p)return;
   const co=getCompany();
-  const subject=`[${co.name}] ${p.nm} 공사견적서`;
-  const body=`안녕하세요, ${p.contact||p.client}님.\n\n${co.name}입니다.\n\n요청하신 ${p.nm} 견적서를 첨부드립니다.\n견적금액: ₩${fmt(getTotal(p))} (VAT 별도)\n\n추가 문의사항은 언제든 연락주세요.\n\n담당: ${p.mgr||co.ceo}\n연락처: ${co.mobile||co.tel}`;
-  window.location.href=`mailto:${p.email||''}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  // 이메일 발송 모달 표시
+  openModal(`<div class="modal-bg"><div class="modal modal-sm">
+    <div class="modal-hdr">
+      <span class="modal-title">${svgIcon('mail',16)} 견적서 이메일 발송</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <label class="lbl">받는 사람 (이메일) *</label>
+        <input class="inp" id="email-to" value="${p.email||''}" placeholder="example@email.com">
+      </div>
+      <div style="margin-bottom:16px">
+        <label class="lbl">참조 (CC)</label>
+        <input class="inp" id="email-cc" placeholder="cc@email.com (선택사항)">
+      </div>
+      <div style="margin-bottom:16px">
+        <label class="lbl">추가 메시지 (선택)</label>
+        <textarea class="inp" id="email-msg" rows="3" placeholder="고객에게 전달할 추가 메시지...">${p.contact||p.client}님, 요청하신 ${p.nm} 견적서를 보내드립니다.</textarea>
+      </div>
+      <div style="background:var(--g50);border-radius:8px;padding:12px;font-size:12px;color:var(--g600);">
+        <div style="font-weight:600;margin-bottom:6px;">📋 발송 내용 미리보기</div>
+        <div>• 제목: [견적서] ${p.nm} - ${co.name}</div>
+        <div>• 프로젝트: ${p.nm}</div>
+        <div>• 견적금액: ₩${fmt(getTotal(p))}</div>
+        <div>• 항목 ${(p.items||[]).length}건 포함</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-blue" onclick="doSendEstMail('${pid}')">
+        ${svgIcon('mail',13)} 발송하기
+      </button>
+    </div>
+  </div></div>`);
+}
+async function doSendEstMail(pid){
+  const to=document.getElementById('email-to').value.trim();
+  const cc=document.getElementById('email-cc').value.trim();
+  const msg=document.getElementById('email-msg').value.trim();
+  if(!to){toast('이메일 주소를 입력해주세요','error');return;}
+  if(!to.includes('@')){toast('올바른 이메일 형식이 아닙니다','error');return;}
+  try{
+    const payload={to, project_id:pid};
+    if(cc)payload.cc=cc;
+    if(msg)payload.custom_message=msg;
+    const btn=document.querySelector('.modal-footer .btn-blue');
+    if(btn){btn.disabled=true;btn.innerHTML='발송중...';}
+    const res=await api('email/estimate','POST',payload);
+    if(res&&res.success){
+      closeModal();
+      toast('✉️ 견적서 이메일이 발송되었습니다!','success');
+    }else{
+      toast('발송 실패: '+(res?.error||res?.detail?.message||'알 수 없는 오류'),'error');
+      if(btn){btn.disabled=false;btn.innerHTML=svgIcon('mail',13)+' 발송하기';}
+    }
+  }catch(e){
+    toast('발송 중 오류가 발생했습니다: '+e.message,'error');
+  }
 }
 // ===== GANTT =====
 function renderGanttList(){
@@ -1734,9 +1789,70 @@ function updateOrder(field,val){
 function sendOrderMail(oid){
   const o=getOrders().find(x=>x.id===oid);if(!o)return;
   const p=getProject(o.pid);const co=getCompany();
-  const subject=`[${co.name}] 발주서 - ${catNm(o.cid)} (${p?.nm})`;
-  const body=`발주서를 전달드립니다.\n\n현장: ${p?.nm}\n공종: ${catNm(o.cid)}\n금액: ₩${fmt(o.amount)}\n\n${co.name} 드림`;
-  window.location.href=`mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  openModal(`<div class="modal-bg"><div class="modal modal-sm">
+    <div class="modal-hdr">
+      <span class="modal-title">${svgIcon('mail',16)} 발주서 이메일 발송</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <label class="lbl">받는 사람 (이메일) *</label>
+        <input class="inp" id="order-email-to" placeholder="vendor@email.com">
+      </div>
+      <div style="margin-bottom:16px">
+        <label class="lbl">추가 메시지 (선택)</label>
+        <textarea class="inp" id="order-email-msg" rows="3" placeholder="업체에 전달할 메시지...">발주서를 전달드립니다. 확인 부탁드립니다.</textarea>
+      </div>
+      <div style="background:var(--g50);border-radius:8px;padding:12px;font-size:12px;color:var(--g600);">
+        <div style="font-weight:600;margin-bottom:6px;">📋 발주 내용</div>
+        <div>• 현장: ${p?.nm||''}</div>
+        <div>• 공종: ${catNm(o.cid)}</div>
+        <div>• 금액: ₩${fmt(o.amount)}</div>
+        <div>• 업체: ${o.vendor||'미지정'}</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-blue" onclick="doSendOrderMail('${oid}')">
+        ${svgIcon('mail',13)} 발송하기
+      </button>
+    </div>
+  </div></div>`);
+}
+async function doSendOrderMail(oid){
+  const o=getOrders().find(x=>x.id===oid);if(!o)return;
+  const p=getProject(o.pid);const co=getCompany();
+  const to=document.getElementById('order-email-to').value.trim();
+  const msg=document.getElementById('order-email-msg').value.trim();
+  if(!to||!to.includes('@')){toast('올바른 이메일을 입력해주세요','error');return;}
+  const html=`
+<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+  <div style="background:#0a0a0a;color:#fff;padding:24px;text-align:center;border-radius:8px 8px 0 0;">
+    <h2 style="margin:0;font-size:20px;">발주서</h2>
+    <p style="margin:4px 0 0;opacity:.6;font-size:12px;">${co.name}</p>
+  </div>
+  <div style="padding:24px;background:#fff;border:1px solid #eee;border-radius:0 0 8px 8px;">
+    ${msg?`<p style="margin:0 0 16px;color:#333;">${msg}</p>`:''}
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">현장명</td><td style="padding:8px;border:1px solid #e5e5e5;">${p?.nm||''}</td></tr>
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">공종</td><td style="padding:8px;border:1px solid #e5e5e5;">${catNm(o.cid)}</td></tr>
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">발주금액</td><td style="padding:8px;border:1px solid #e5e5e5;font-weight:700;">₩${fmt(o.amount)}</td></tr>
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">납기일</td><td style="padding:8px;border:1px solid #e5e5e5;">${o.deliv_date||'협의'}</td></tr>
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">담당자</td><td style="padding:8px;border:1px solid #e5e5e5;">${o.assignee||co.ceo}</td></tr>
+    </table>
+    <p style="margin:16px 0 0;font-size:11px;color:#999;">본 발주서는 Frame Plus ERP에서 자동 발송되었습니다.</p>
+  </div>
+</div>`;
+  try{
+    const btn=document.querySelector('.modal-footer .btn-blue');
+    if(btn){btn.disabled=true;btn.innerHTML='발송중...';}
+    const res=await api('email/send','POST',{
+      to, subject:`[발주서] ${catNm(o.cid)} - ${p?.nm||''} (${co.name})`,
+      html, from_name:co.name
+    });
+    if(res&&res.success){closeModal();toast('✉️ 발주서 이메일이 발송되었습니다!','success');}
+    else{toast('발송 실패: '+(res?.error||'알 수 없는 오류'),'error');if(btn){btn.disabled=false;btn.innerHTML=svgIcon('mail',13)+' 발송하기';}}
+  }catch(e){toast('발송 오류: '+e.message,'error');}
 }
 function copyOrder(){toast('발주서가 복사되었습니다','success');}
 function deleteOrder(oid){
@@ -1976,7 +2092,7 @@ function openAddMeeting(){
         <div style="display:flex;gap:8px">
           <button class="btn btn-outline btn-sm" onclick="openMsgTemplate('meeting')">📱 문자 발송</button>
           <button class="btn btn-outline btn-sm" onclick="toast('카카오톡 알림은 API 연동 후 사용 가능합니다','warning')">💬 카카오톡</button>
-          <button class="btn btn-outline btn-sm" onclick="toast('이메일 발송은 저장 후 사용 가능합니다','warning')">${svgIcon('mail',12)} 이메일</button>
+          <button class="btn btn-outline btn-sm" onclick="sendMeetingMail()">${svgIcon('mail',12)} 이메일</button>
         </div>
       </div>
     </div>
@@ -2039,6 +2155,68 @@ function openDayMeetings(dateStr){
 function sendMeetingNotif(mid){
   const m=getMeetings().find(x=>x.id===mid);if(!m)return;
   openMsgTemplate('meeting',m);
+}
+async function sendMeetingMail(){
+  const client=document.getElementById('mt_client')?.value||'';
+  const contact=document.getElementById('mt_contact')?.value||'';
+  const date=document.getElementById('mt_date')?.value||'';
+  const time=document.getElementById('mt_time')?.value||'';
+  const loc=document.getElementById('mt_loc')?.value||'';
+  const title=document.getElementById('mt_title')?.value||'미팅';
+  const co=getCompany();
+  openModal(`<div class="modal-bg"><div class="modal modal-sm">
+    <div class="modal-hdr">
+      <span class="modal-title">${svgIcon('mail',16)} 미팅 알림 이메일</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <label class="lbl">받는 사람 (이메일) *</label>
+        <input class="inp" id="meeting-email-to" placeholder="client@email.com">
+      </div>
+      <div style="background:var(--g50);border-radius:8px;padding:12px;font-size:12px;color:var(--g600);">
+        <div style="font-weight:600;margin-bottom:6px;">📋 미팅 안내</div>
+        <div>• 제목: ${title}</div>
+        <div>• 일시: ${date} ${time}</div>
+        <div>• 장소: ${loc||'미정'}</div>
+        <div>• 고객: ${client} ${contact}</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-blue" onclick="doSendMeetingMail('${title}','${date}','${time}','${loc}','${client}','${contact}')">
+        ${svgIcon('mail',13)} 발송
+      </button>
+    </div>
+  </div></div>`);
+}
+async function doSendMeetingMail(title,date,time,loc,client,contact){
+  const to=document.getElementById('meeting-email-to').value.trim();
+  if(!to||!to.includes('@')){toast('올바른 이메일을 입력해주세요','error');return;}
+  const co=getCompany();
+  const html=`
+<div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+  <div style="background:#0a0a0a;color:#fff;padding:24px;text-align:center;border-radius:8px 8px 0 0;">
+    <h2 style="margin:0;font-size:20px;">미팅 안내</h2>
+    <p style="margin:4px 0 0;opacity:.6;font-size:12px;">${co.name||'Frame Plus'}</p>
+  </div>
+  <div style="padding:24px;background:#fff;border:1px solid #eee;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 16px;color:#333;">${contact||client}님 안녕하세요, 미팅 일정을 안내드립니다.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;width:100px;">미팅 제목</td><td style="padding:8px;border:1px solid #e5e5e5;">${title}</td></tr>
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">일시</td><td style="padding:8px;border:1px solid #e5e5e5;">${date} ${time}</td></tr>
+      <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;">장소</td><td style="padding:8px;border:1px solid #e5e5e5;">${loc||'추후 안내'}</td></tr>
+    </table>
+    <p style="margin:16px 0 0;font-size:11px;color:#999;">본 메일은 Frame Plus ERP에서 자동 발송되었습니다.</p>
+  </div>
+</div>`;
+  try{
+    const btn=document.querySelector('.modal-footer .btn-blue');
+    if(btn){btn.disabled=true;btn.innerHTML='발송중...';}
+    const res=await api('email/send','POST',{to,subject:`[미팅안내] ${title} - ${date} ${time}`,html,from_name:co.name});
+    if(res&&res.success){closeModal();toast('✉️ 미팅 안내 이메일이 발송되었습니다!','success');}
+    else{toast('발송 실패: '+(res?.error||'알 수 없는 오류'),'error');if(btn){btn.disabled=false;btn.innerHTML=svgIcon('mail',13)+' 발송';}}
+  }catch(e){toast('발송 오류: '+e.message,'error');}
 }
 function openMsgTemplate(cat,context=null){
   const templates=getMsgTemplates().filter(t=>t.cat===cat||!cat);
