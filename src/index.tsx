@@ -7,6 +7,16 @@ type App = { Bindings: Bindings }
 const app = new Hono<App>()
 app.use('/api/*', cors())
 
+// Ensure all tables exist on every API request (auto-migrate)
+let _tablesReady = false
+app.use('/api/*', async (c, next) => {
+  if (!_tablesReady) {
+    await ensureTables(c.env.DB)
+    _tablesReady = true
+  }
+  await next()
+})
+
 // ===== DB INIT =====
 async function ensureTables(db: D1Database) {
   // Auto-create tables if not exists (for first run)
@@ -26,6 +36,11 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS expenses (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', category TEXT DEFAULT '', title TEXT NOT NULL, amount REAL DEFAULT 0, tax_amount REAL DEFAULT 0, vendor TEXT DEFAULT '', payment_method TEXT DEFAULT '', receipt_type TEXT DEFAULT '', receipt_no TEXT DEFAULT '', receipt_image TEXT DEFAULT '', requester TEXT DEFAULT '', approver TEXT DEFAULT '', status TEXT DEFAULT '대기', approved_date TEXT DEFAULT '', reject_reason TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS item_images (id TEXT PRIMARY KEY, item_id TEXT DEFAULT '', pid TEXT DEFAULT '', image_data TEXT DEFAULT '', file_name TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS work_presets (id TEXT PRIMARY KEY, cid TEXT DEFAULT '', name TEXT NOT NULL, items TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS notifications (id TEXT PRIMARY KEY, type TEXT DEFAULT 'info', title TEXT NOT NULL, message TEXT DEFAULT '', from_user TEXT DEFAULT '', to_user TEXT DEFAULT '', related_type TEXT DEFAULT '', related_id TEXT DEFAULT '', status TEXT DEFAULT 'unread', priority TEXT DEFAULT 'normal', action_url TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, read_at DATETIME DEFAULT NULL);
+    CREATE TABLE IF NOT EXISTS pricedb_history (id TEXT PRIMARY KEY, price_id TEXT DEFAULT '', pid TEXT DEFAULT '', used_date TEXT DEFAULT '', qty REAL DEFAULT 0, unit_price REAL DEFAULT 0, mp REAL DEFAULT 0, lp REAL DEFAULT 0, ep REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS estimate_template_sets (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT DEFAULT '', category TEXT DEFAULT '', tags TEXT DEFAULT '[]', items TEXT DEFAULT '[]', usage_count INTEGER DEFAULT 0, last_used_at DATETIME DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, type TEXT DEFAULT '', related_id TEXT DEFAULT '', title TEXT DEFAULT '', amount REAL DEFAULT 0, requester TEXT DEFAULT '', approver TEXT DEFAULT '', status TEXT DEFAULT '대기', request_date TEXT DEFAULT '', approve_date TEXT DEFAULT '', reject_reason TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS user_prefs (id TEXT PRIMARY KEY, dark_mode INTEGER DEFAULT 0, sidebar_collapsed INTEGER DEFAULT 0, default_view TEXT DEFAULT 'dash', notification_enabled INTEGER DEFAULT 1, language TEXT DEFAULT 'ko', updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
 }
 
@@ -101,6 +116,11 @@ app.route('/api/labor', crud('labor_costs'))
 app.route('/api/expenses', crud('expenses'))
 app.route('/api/item-images', crud('item_images'))
 app.route('/api/presets', crud('work_presets'))
+app.route('/api/notifications', crud('notifications'))
+app.route('/api/pricedb-history', crud('pricedb_history'))
+app.route('/api/estimate-templates', crud('estimate_template_sets'))
+app.route('/api/approvals', crud('approvals'))
+app.route('/api/user-prefs', crud('user_prefs'))
 
 // Company (singleton)
 app.get('/api/company', async (c) => {
@@ -132,20 +152,118 @@ app.post('/api/init', async (c) => {
   const count = await db.prepare('SELECT COUNT(*) as cnt FROM projects').first<{ cnt: number }>()
   if (count && count.cnt > 0) return c.json({ status: 'already_initialized' })
 
-  // Seed work presets
-  await db.exec(`
-    INSERT OR IGNORE INTO work_presets (id, cid, name, items) VALUES
-    ('wp1', 'C01', '기초공사', '[{"nm":"먹메김","spec":"식","unit":"식","qty":1},{"nm":"보양","spec":"식","unit":"식","qty":1},{"nm":"내부수평비계","spec":"식","unit":"식","qty":1},{"nm":"소운반비","spec":"식","unit":"식","qty":1},{"nm":"대운반비","spec":"식","unit":"식","qty":1},{"nm":"폐자재처리","spec":"식","unit":"식","qty":1},{"nm":"현장정리정돈","spec":"식","unit":"식","qty":1},{"nm":"준공청소","spec":"식","unit":"식","qty":1}]'),
-    ('wp2', 'C02', '철거공사', '[{"nm":"기존 벽체 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 바닥 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 천정 철거","spec":"m²","unit":"m²","qty":1},{"nm":"설비 철거","spec":"식","unit":"식","qty":1},{"nm":"잡철거","spec":"식","unit":"식","qty":1}]'),
-    ('wp3', 'C04', '목공사', '[{"nm":"경량칸막이","spec":"m²","unit":"m²","qty":1},{"nm":"천정틀","spec":"m²","unit":"m²","qty":1},{"nm":"합판작업","spec":"m²","unit":"m²","qty":1},{"nm":"몰딩","spec":"m","unit":"m","qty":1},{"nm":"문틀/문짝","spec":"세트","unit":"세트","qty":1}]'),
-    ('wp4', 'C06', '도장공사', '[{"nm":"벽면도장","spec":"m²","unit":"m²","qty":1},{"nm":"천정도장","spec":"m²","unit":"m²","qty":1},{"nm":"친환경페인트","spec":"m²","unit":"m²","qty":1},{"nm":"퍼티작업","spec":"m²","unit":"m²","qty":1}]')
-  `)
+  // Seed work presets (using individual inserts for D1 compatibility)
+  try {
+    await db.exec(`
+      INSERT OR IGNORE INTO work_presets (id, cid, name, items) VALUES
+      ('wp1', 'C01', '기초공사', '[{"nm":"먹메김","spec":"식","unit":"식","qty":1},{"nm":"보양","spec":"식","unit":"식","qty":1},{"nm":"내부수평비계","spec":"식","unit":"식","qty":1},{"nm":"소운반비","spec":"식","unit":"식","qty":1},{"nm":"대운반비","spec":"식","unit":"식","qty":1},{"nm":"폐자재처리","spec":"식","unit":"식","qty":1},{"nm":"현장정리정돈","spec":"식","unit":"식","qty":1},{"nm":"준공청소","spec":"식","unit":"식","qty":1}]'),
+      ('wp2', 'C02', '철거공사', '[{"nm":"기존 벽체 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 바닥 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 천정 철거","spec":"m²","unit":"m²","qty":1},{"nm":"설비 철거","spec":"식","unit":"식","qty":1},{"nm":"잡철거","spec":"식","unit":"식","qty":1}]'),
+      ('wp3', 'C04', '목공사', '[{"nm":"경량칸막이","spec":"m²","unit":"m²","qty":1},{"nm":"천정틀","spec":"m²","unit":"m²","qty":1},{"nm":"합판작업","spec":"m²","unit":"m²","qty":1},{"nm":"몰딩","spec":"m","unit":"m","qty":1},{"nm":"문틀/문짝","spec":"세트","unit":"세트","qty":1}]'),
+      ('wp4', 'C06', '도장공사', '[{"nm":"벽면도장","spec":"m²","unit":"m²","qty":1},{"nm":"천정도장","spec":"m²","unit":"m²","qty":1},{"nm":"친환경페인트","spec":"m²","unit":"m²","qty":1},{"nm":"퍼티작업","spec":"m²","unit":"m²","qty":1}]')
+    `)
+  } catch(e) { console.log('Preset seed skipped:', e) }
+
+  // Seed estimate template sets
+  try {
+    const templateData = [
+      { id: 'ets1', name: '기초공사 세트', description: '먹메김, 보양, 비계, 운반, 청소 포함', category: '기초공사', items: JSON.stringify([{nm:"먹메김",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"보양",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"내부수평비계",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"소운반비",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"대운반비",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"폐자재처리",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"현장정리정돈",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"준공청소",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets2', name: '철거공사 세트', description: '벽체, 바닥, 천정, 설비 철거', category: '철거공사', items: JSON.stringify([{nm:"기존 벽체 철거",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"기존 바닥 철거",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"기존 천정 철거",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"설비 철거",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"잡철거",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets3', name: '목공사 세트', description: '경량칸막이, 천정틀, 합판, 몰딩, 문짝', category: '목공사', items: JSON.stringify([{nm:"경량칸막이",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"천정틀",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"합판작업",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"몰딩",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"문틀/문짝",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets4', name: '도장공사 세트', description: '벽면/천정 도장, 친환경페인트', category: '도장공사', items: JSON.stringify([{nm:"벽면도장",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"천정도장",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"친환경페인트",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"퍼티작업",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets5', name: '전기공사 세트', description: '조명, 콘센트, 스위치, 분전반', category: '전기공사', items: JSON.stringify([{nm:"LED조명 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"콘센트 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"스위치 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"분전반 교체",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"배선공사",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets6', name: '바닥공사 세트', description: '타일, 장판, 마루, 에폭시', category: '바닥공사', items: JSON.stringify([{nm:"바닥타일",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"장판시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"강마루시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"걸레받이",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0}]) },
+    ]
+    for (const t of templateData) {
+      await db.prepare('INSERT OR IGNORE INTO estimate_template_sets (id, name, description, category, items) VALUES (?, ?, ?, ?, ?)').bind(t.id, t.name, t.description, t.category, t.items).run()
+    }
+  } catch(e) { console.log('Template seed skipped:', e) }
+
+  // Seed default user preferences
+  try {
+    await db.prepare('INSERT OR IGNORE INTO user_prefs (id) VALUES (?)').bind('default').run()
+  } catch(e) { console.log('User prefs seed skipped:', e) }
 
   return c.json({ status: 'tables_ready' })
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v5.0' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v6.0' }))
+
+// ===== NOTIFICATIONS: Mark as read =====
+app.put('/api/notifications/:id/read', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  await db.prepare('UPDATE notifications SET status = ?, read_at = ? WHERE id = ?').bind('read', new Date().toISOString(), id).run()
+  return c.json({ success: true })
+})
+
+// Mark all notifications as read
+app.put('/api/notifications-read-all', async (c) => {
+  const db = c.env.DB
+  await db.prepare('UPDATE notifications SET status = ?, read_at = ? WHERE status = ?').bind('read', new Date().toISOString(), 'unread').run()
+  return c.json({ success: true })
+})
+
+// Get unread count
+app.get('/api/notifications/unread-count', async (c) => {
+  const db = c.env.DB
+  const result = await db.prepare('SELECT COUNT(*) as cnt FROM notifications WHERE status = ?').bind('unread').first<{ cnt: number }>()
+  return c.json({ count: result?.cnt || 0 })
+})
+
+// ===== PRICEDB STATS =====
+app.get('/api/pricedb/:id/stats', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  const history = await db.prepare('SELECT * FROM pricedb_history WHERE price_id = ? ORDER BY used_date DESC').bind(id).all()
+  const items = (history.results || []) as Array<Record<string, unknown>>
+  const avgPrice = items.length > 0 ? items.reduce((a, h) => a + (Number(h.unit_price) || 0), 0) / items.length : 0
+  const lastPrice = items.length > 0 ? Number(items[0].unit_price) || 0 : 0
+  return c.json({ history: items, avgPrice, lastPrice, usageCount: items.length })
+})
+
+// ===== APPROVAL WORKFLOW =====
+app.put('/api/approvals/:id/approve', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  await db.prepare('UPDATE approvals SET status = ?, approve_date = ?, approver = ? WHERE id = ?').bind('승인', new Date().toISOString().split('T')[0], body.approver || '', id).run()
+  // Also update related item if expense
+  const approval = await db.prepare('SELECT * FROM approvals WHERE id = ?').bind(id).first() as Record<string, unknown> | null
+  if (approval?.type === 'expense' && approval?.related_id) {
+    await db.prepare('UPDATE expenses SET status = ?, approver = ?, approved_date = ? WHERE id = ?').bind('승인', body.approver || '', new Date().toISOString().split('T')[0], approval.related_id).run()
+  }
+  return c.json({ success: true })
+})
+
+app.put('/api/approvals/:id/reject', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  const body = await c.req.json()
+  await db.prepare('UPDATE approvals SET status = ?, reject_reason = ?, approve_date = ? WHERE id = ?').bind('반려', body.reason || '', new Date().toISOString().split('T')[0], id).run()
+  const approval = await db.prepare('SELECT * FROM approvals WHERE id = ?').bind(id).first() as Record<string, unknown> | null
+  if (approval?.type === 'expense' && approval?.related_id) {
+    await db.prepare('UPDATE expenses SET status = ?, reject_reason = ? WHERE id = ?').bind('반려', body.reason || '', approval.related_id).run()
+  }
+  return c.json({ success: true })
+})
+
+// ===== DASHBOARD STATS (cost flow summary) =====
+app.get('/api/dashboard/stats', async (c) => {
+  const db = c.env.DB
+  const [projects, labor, expenses, orders] = await Promise.all([
+    db.prepare('SELECT * FROM projects').all(),
+    db.prepare('SELECT pid, SUM(net_amount) as total, SUM(CASE WHEN paid=1 THEN net_amount ELSE 0 END) as paid_total FROM labor_costs GROUP BY pid').all(),
+    db.prepare('SELECT pid, SUM(amount) as total, SUM(CASE WHEN status="승인" THEN amount ELSE 0 END) as approved_total FROM expenses GROUP BY pid').all(),
+    db.prepare('SELECT pid, SUM(amount) as total, SUM(CASE WHEN paid=1 THEN amount ELSE 0 END) as paid_total FROM orders_manual GROUP BY pid').all(),
+  ])
+  return c.json({
+    projects: projects.results || [],
+    laborByProject: labor.results || [],
+    expensesByProject: expenses.results || [],
+    ordersByProject: orders.results || [],
+  })
+})
 
 // ===== WEATHER API (OpenWeatherMap Proxy) =====
 app.get('/api/weather', async (c) => {
@@ -546,7 +664,7 @@ function getIndexHTML() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Frame Plus ERP v5</title>
+<title>Frame Plus ERP v6</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@200;300;400;500;600;700;900&family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
@@ -565,6 +683,28 @@ function getIndexHTML() {
   --radius:8px;--radius-lg:12px;--shadow:0 1px 4px rgba(0,0,0,.08);--shadow-md:0 4px 16px rgba(0,0,0,.12);
 }
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+/* ===== DARK MODE ===== */
+html.dark{
+  --black:#0a0a0a;--dark:#e8e8e8;--charcoal:#d1d5db;
+  --g800:#ccc;--g700:#bbb;--g600:#aaa;--g500:#888;--g400:#666;--g300:#444;--g200:#333;--g150:#2a2a2a;--g100:#222;--g50:#1a1a1a;
+  --white:#0f0f0f;--bg:#111;--card:#1a1a1a;--border:#2d2d2d;--border2:#3a3a3a;
+  --blue:#3b82f6;--blue-l:rgba(59,130,246,.12);--green:#22c55e;--green-l:rgba(34,197,94,.12);
+  --red:#ef4444;--red-l:rgba(239,68,68,.12);--orange:#f59e0b;--orange-l:rgba(245,158,11,.12);
+  --purple:#8b5cf6;--purple-l:rgba(139,92,246,.12);--teal:#14b8a6;--teal-l:rgba(20,184,166,.12);
+}
+html.dark body{background:var(--bg);color:var(--dark)}
+html.dark #sidebar{background:#000}
+html.dark .btn-primary{background:var(--blue);color:#fff}
+html.dark .btn-outline{background:var(--card);border-color:var(--border2);color:var(--dark)}
+html.dark .inp,.dark .sel{background:var(--card);border-color:var(--border2);color:var(--dark)}
+html.dark .tbl th{background:var(--g100);color:var(--g600)}
+html.dark .tbl tr:hover td{background:var(--g50)}
+html.dark .modal{background:var(--card);color:var(--dark)}
+html.dark .est-summary{background:#000}
+html.dark .toast{background:var(--blue)}
+html.dark .contract-doc{background:var(--card);color:var(--dark)}
+/* Skeleton shimmer animation */
+@keyframes shimmer{0%{opacity:.6}50%{opacity:.3}100%{opacity:.6}}
 body{font-family:var(--sans);background:var(--bg);color:var(--dark);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
 button{cursor:pointer;font-family:var(--sans)}
 input,select,textarea{font-family:var(--sans);font-size:13px}
@@ -881,7 +1021,7 @@ a{text-decoration:none;color:inherit}
     </button>
   </div>
 </div>
-<div class="fs-badge">v5 Full-Stack · D1 Database</div>
+<div class="fs-badge">v6 Full-Stack · D1 Database · Dark Mode</div>
 <script src="/static/app.js"></script>
 </body>
 </html>`

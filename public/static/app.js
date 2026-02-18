@@ -1,15 +1,34 @@
-// ===== Frame Plus ERP v5 - Full-Stack Frontend =====
+// ===== Frame Plus ERP v6 - Full-Stack Frontend =====
 // D1 Database backend with in-memory cache for UI performance
-// Added: SheetJS Excel export, html2pdf PDF generation, Mobile responsive
+// v6: Dark mode, Notifications, Approval workflow, Cost flow dashboard,
+//     Browser routing, Optimistic UI, Enhanced templates, Price DB hierarchy
 
-// ===== API LAYER =====
+// ===== API LAYER (with Optimistic UI support) =====
 async function api(path, method, body) {
   const opts = { method: method || 'GET', headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
   try {
     const res = await fetch('/api/' + path, opts);
+    if (!res.ok) {
+      const err = await res.json().catch(()=>({error:'Server error'}));
+      console.error('API Error:', res.status, err);
+      return { __error: true, status: res.status, ...err };
+    }
     return await res.json();
-  } catch(e) { console.error('API Error:', e); return null; }
+  } catch(e) { 
+    console.error('API Error:', e);
+    toast('네트워크 오류가 발생했습니다', 'error');
+    return { __error: true, message: e.message };
+  }
+}
+
+// Optimistic UI helper: run action optimistically, rollback on failure
+async function optimistic(doFn, apiFn, rollbackFn) {
+  doFn();
+  try {
+    const result = await apiFn();
+    if (result?.__error) { rollbackFn(); toast('저장 실패: 다시 시도해주세요', 'error'); }
+  } catch(e) { rollbackFn(); toast('저장 실패', 'error'); }
 }
 
 // ===== DATA CACHE =====
@@ -20,18 +39,88 @@ async function initData() {
   if (_initializing) return;
   _initializing = true;
   try {
-    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets] = await Promise.all([
+    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs] = await Promise.all([
       api('projects'), api('vendors'), api('meetings'), api('pricedb'),
       api('orders'), api('as'), api('notices'), api('tax'),
       api('templates'), api('team'), api('company'),
-      api('labor'), api('expenses'), api('presets')
+      api('labor'), api('expenses'), api('presets'),
+      api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],
       tax: tax||[], templates: templates||[], team: team||[], company: company||{},
-      labor: labor||[], expenses: expenses||[], presets: presets||[] };
+      labor: labor||[], expenses: expenses||[], presets: presets||[],
+      notifications: notifications||[], estTemplates: estTemplates||[], approvals: approvals||[],
+      userPrefs: (Array.isArray(userPrefs)?userPrefs[0]:userPrefs)||{} };
+    // Apply dark mode from saved prefs
+    if (_d.userPrefs?.dark_mode) applyDarkMode(true);
   } catch(e) { console.error('Init failed:', e); _d = {}; }
   _initializing = false;
+}
+
+// ===== DARK MODE =====
+function applyDarkMode(on) {
+  document.documentElement.classList.toggle('dark', on);
+  S.darkMode = on;
+}
+function toggleDarkMode() {
+  S.darkMode = !S.darkMode;
+  applyDarkMode(S.darkMode);
+  api('user-prefs', 'POST', { id: 'default', dark_mode: S.darkMode ? 1 : 0 });
+  toast(S.darkMode ? '다크 모드 활성화' : '라이트 모드 활성화');
+}
+
+// ===== NOTIFICATION HELPERS =====
+function getNotifications() { return (_d.notifications||[]).filter(n=>n.status==='unread'); }
+function getUnreadCount() { return getNotifications().length; }
+async function markNotifRead(id) {
+  await api('notifications/'+id+'/read', 'PUT');
+  const n = (_d.notifications||[]).find(x=>x.id===id);
+  if(n) n.status='read';
+  renderNav(); updateNotifBadge();
+}
+async function markAllNotifsRead() {
+  await api('notifications-read-all', 'PUT');
+  (_d.notifications||[]).forEach(n=>n.status='read');
+  renderNav(); updateNotifBadge(); toast('모든 알림을 읽음 처리했습니다');
+}
+function updateNotifBadge() {
+  const cnt = getUnreadCount();
+  const badge = document.getElementById('notif-badge');
+  if(badge) { badge.textContent = cnt; badge.style.display = cnt > 0 ? '' : 'none'; }
+}
+async function createNotification(data) {
+  const notif = { id: uid(), created_at: new Date().toISOString(), status: 'unread', ...data };
+  await api('notifications', 'POST', notif);
+  (_d.notifications = _d.notifications||[]).unshift(notif);
+  updateNotifBadge();
+}
+
+// ===== APPROVAL HELPERS =====
+function getApprovals() { return _d.approvals||[]; }
+function getPendingApprovals() { return getApprovals().filter(a=>a.status==='대기'); }
+async function createApproval(data) {
+  const appr = { id: uid(), status: '대기', request_date: today(), created_at: new Date().toISOString(), ...data };
+  await api('approvals', 'POST', appr);
+  (_d.approvals = _d.approvals||[]).unshift(appr);
+  // Auto-create notification for approver
+  await createNotification({ type:'approval', title:`결재 요청: ${data.title}`, message:`${data.requester||''}님이 결재를 요청했습니다 (${fmt(data.amount||0)}원)`, related_type: data.type, related_id: data.related_id, priority: 'high' });
+  return appr;
+}
+async function approveApprovalItem(id) {
+  const co = getCompany();
+  await api('approvals/'+id+'/approve', 'PUT', { approver: co.ceo||'대표' });
+  const a = getApprovals().find(x=>x.id===id);
+  if(a) { a.status='승인'; a.approve_date=today(); a.approver=co.ceo||'대표'; }
+  await createNotification({ type:'approval', title:`결재 승인: ${a?.title||''}`, message:`${co.ceo||'대표'}님이 승인했습니다`, related_type: a?.type, related_id: a?.related_id });
+  toast('승인되었습니다','success');
+}
+async function rejectApprovalItem(id, reason) {
+  await api('approvals/'+id+'/reject', 'PUT', { reason });
+  const a = getApprovals().find(x=>x.id===id);
+  if(a) { a.status='반려'; a.reject_reason=reason; }
+  await createNotification({ type:'approval', title:`결재 반려: ${a?.title||''}`, message:`사유: ${reason}`, related_type: a?.type, related_id: a?.related_id });
+  toast('반려되었습니다','warning');
 }
 
 function dbToProject(row) {
@@ -182,7 +271,7 @@ const CONTRACT_STATUS=['미생성','초안작성','고객검토','서명완료',
 const TEAM_MEMBERS=['김승환','박관우','이지현','최민준','정수연','한동욱'];
 
 // ===== STATE =====
-let S={page:'dash',subPage:null,selPid:null,selOid:null,sidebarCollapsed:false,sortCol:{},sortDir:{},calY:new Date().getFullYear(),calM:new Date().getMonth(),isAdmin:false,notices:[],msgTemplates:[],editingEstPid:null};
+let S={page:'dash',subPage:null,selPid:null,selOid:null,sidebarCollapsed:false,sortCol:{},sortDir:{},calY:new Date().getFullYear(),calM:new Date().getMonth(),isAdmin:false,notices:[],msgTemplates:[],editingEstPid:null,darkMode:false};
 
 // ===== CALC ENGINE (identical to v4) =====
 function calcP(p){
@@ -310,12 +399,17 @@ const NAV=[
   {id:'as',label:'AS·하자보수',icon:'wrench'},
   {id:'team',label:'팀원 관리',icon:'users'},
   {id:'reports',label:'리포트',icon:'chart'},
+  {section:'시스템'},
+  {id:'notifications',label:'알림 센터',icon:'alert'},
+  {id:'approvals',label:'결재함',icon:'check'},
   {id:'admin',label:'관리자',icon:'settings'},
 ];
 function renderNav(){
   const ps=getProjects();
   const unpaid=ps.filter(p=>getUnpaid(p)>0).length;
   const risks=ps.flatMap(p=>getRisks(p));
+  const pendingApprovals=getPendingApprovals().length;
+  const unreadNotifs=getUnreadCount();
   let h='';
   NAV.forEach(n=>{
     if(n.section){
@@ -324,7 +418,8 @@ function renderNav(){
       const active=S.page===n.id?'active':'';
       let badge='';
       if(n.id==='collection'&&unpaid>0)badge=`<span class="sb-badge">${unpaid}</span>`;
-      if(n.id==='dash'&&risks.length>0)badge=`<span class="sb-badge">${risks.length}</span>`;
+      if(n.id==='dash'&&(risks.length>0||unreadNotifs>0))badge=`<span class="sb-badge">${risks.length+unreadNotifs}</span>`;
+      if(n.id==='expenses'&&pendingApprovals>0)badge=`<span class="sb-badge">${pendingApprovals}</span>`;
       h+=`<div class="sb-item ${active}" onclick="nav('${n.id}')" title="${n.label}">
         <span class="sb-icon">${svgIcon(n.icon)}</span>
         <span class="sb-label">${n.label}</span>${badge}
@@ -341,15 +436,28 @@ function toggleSidebar(){
   document.getElementById('sidebar').classList.toggle('collapsed',S.sidebarCollapsed);
 }
 
-// ===== ROUTER =====
-function nav(page,sub=null,pid=null){
+// ===== ROUTER (with browser history) =====
+function nav(page,sub=null,pid=null,pushHistory=true){
   S.page=page;S.subPage=sub;
   if(pid)S.selPid=pid;
+  // Push to browser history
+  if(pushHistory){
+    const url = pid ? `/${page}/${sub||''}/${pid}` : sub ? `/${page}/${sub}` : `/${page}`;
+    history.pushState({page,sub,pid}, '', url);
+  }
   renderNav();
   const pageInfo=NAV.find(n=>n.id===page);
   document.getElementById('tb-title').textContent=pageInfo?.label||page;
   document.getElementById('tb-sub').textContent='';
-  document.getElementById('tb-actions').innerHTML='';
+  // Add dark mode toggle + notification bell to topbar
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-ghost btn-icon" onclick="toggleDarkMode()" title="다크모드">
+      ${S.darkMode?'☀️':'🌙'}
+    </button>
+    <button class="btn btn-ghost btn-icon" style="position:relative" onclick="toggleNotifPanel()" title="알림">
+      🔔<span id="notif-badge" class="sb-badge" style="position:absolute;top:2px;right:2px;font-size:8px;${getUnreadCount()>0?'':'display:none'}">${getUnreadCount()}</span>
+    </button>
+  `;
   const content=document.getElementById('content');
   switch(page){
     case 'dash':renderDash();break;
@@ -370,8 +478,159 @@ function nav(page,sub=null,pid=null){
     case 'expenses':sub==='detail'?renderExpenseDetail():renderExpenses();break;
     case 'reports':renderReports();break;
     case 'admin':renderAdmin();break;
+    case 'notifications':renderNotifications();break;
+    case 'approvals':renderApprovals();break;
     default:content.innerHTML=`<div class="card"><p>${page} 페이지</p></div>`;
   }
+  // Close mobile menu on nav
+  closeMobileMenu();
+}
+
+// Browser history back/forward support
+window.addEventListener('popstate', (e) => {
+  if(e.state) { nav(e.state.page, e.state.sub, e.state.pid, false); }
+  else { nav('dash', null, null, false); }
+});
+
+// Parse URL on load
+function parseUrlRoute() {
+  const path = location.pathname.replace(/^\/+/, '').split('/');
+  if(path[0] && path[0] !== '') return { page: path[0], sub: path[1]||null, pid: path[2]||null };
+  return { page: 'dash', sub: null, pid: null };
+}
+
+// ===== NOTIFICATION PANEL (dropdown) =====
+function toggleNotifPanel() {
+  const existing = document.getElementById('notif-panel');
+  if(existing) { existing.remove(); return; }
+  const notifs = (_d.notifications||[]).slice(0,20);
+  const h = `<div id="notif-panel" style="position:fixed;top:52px;right:16px;width:360px;max-height:480px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-md);z-index:500;overflow:hidden;display:flex;flex-direction:column">
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:14px;font-weight:700">알림</span>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick="markAllNotifsRead();document.getElementById('notif-panel')?.remove()">모두 읽음</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('notif-panel')?.remove();nav('notifications')">전체보기</button>
+      </div>
+    </div>
+    <div style="overflow-y:auto;max-height:380px;padding:4px 0">
+      ${notifs.length?notifs.map(n=>{
+        const isUnread = n.status==='unread';
+        const typeIcon = {'approval':'📋','alert':'⚠️','expense':'💰','payment':'💳','system':'⚙️'}[n.type]||'🔔';
+        const timeAgo = getTimeAgo(n.created_at);
+        return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;background:${isUnread?'var(--blue-l)':'transparent'}" 
+          onclick="markNotifRead('${n.id}');${n.action_url?`nav('${n.action_url}');`:''}document.getElementById('notif-panel')?.remove()">
+          <div style="display:flex;align-items:flex-start;gap:8px">
+            <span style="font-size:16px;flex-shrink:0">${typeIcon}</span>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12.5px;font-weight:${isUnread?'600':'400'};color:var(--dark)">${n.title||''}</div>
+              <div style="font-size:11px;color:var(--g500);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.message||''}</div>
+              <div style="font-size:10px;color:var(--g400);margin-top:3px">${timeAgo}</div>
+            </div>
+            ${isUnread?'<span style="width:6px;height:6px;border-radius:50%;background:var(--blue);flex-shrink:0;margin-top:5px"></span>':''}
+          </div>
+        </div>`;
+      }).join(''):`<div style="padding:32px;text-align:center;color:var(--g400);font-size:12px">알림이 없습니다</div>`}
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', h);
+  // Close on outside click
+  setTimeout(()=>{
+    document.addEventListener('click', function handler(e) {
+      const panel = document.getElementById('notif-panel');
+      if(panel && !panel.contains(e.target) && !e.target.closest('[onclick*="toggleNotifPanel"]')) {
+        panel.remove(); document.removeEventListener('click', handler);
+      }
+    });
+  }, 100);
+}
+
+function getTimeAgo(dateStr) {
+  if(!dateStr) return '';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff/60000);
+  if(mins < 1) return '방금 전';
+  if(mins < 60) return `${mins}분 전`;
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return `${hrs}시간 전`;
+  const days = Math.floor(hrs/24);
+  if(days < 7) return `${days}일 전`;
+  return dateStr.split('T')[0];
+}
+
+// ===== FULL NOTIFICATIONS PAGE =====
+function renderNotifications() {
+  const notifs = (_d.notifications||[]);
+  document.getElementById('tb-title').textContent = '알림 센터';
+  document.getElementById('content').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:14px;font-weight:600">전체 알림 (${notifs.length})</div>
+      <button class="btn btn-outline btn-sm" onclick="markAllNotifsRead();renderNotifications()">모두 읽음 처리</button>
+    </div>
+    <div class="card">
+      ${notifs.length?notifs.map(n=>{
+        const isUnread=n.status==='unread';
+        const typeIcon={'approval':'📋','alert':'⚠️','expense':'💰','payment':'💳','system':'⚙️'}[n.type]||'🔔';
+        return `<div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:10px;background:${isUnread?'var(--blue-l)':'transparent'}">
+          <span style="font-size:18px">${typeIcon}</span>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:${isUnread?'600':'400'}">${n.title||''}</div>
+            <div style="font-size:12px;color:var(--g600);margin-top:3px">${n.message||''}</div>
+            <div style="font-size:11px;color:var(--g400);margin-top:4px">${n.created_at?.split('T')[0]||''} · ${getTimeAgo(n.created_at)}</div>
+          </div>
+          ${isUnread?`<button class="btn btn-ghost btn-sm" onclick="markNotifRead('${n.id}');renderNotifications()">읽음</button>`:''}
+        </div>`;
+      }).join(''):`<div style="padding:40px;text-align:center;color:var(--g400)">알림이 없습니다</div>`}
+    </div>`;
+}
+
+// ===== APPROVALS PAGE =====
+function renderApprovals() {
+  const apps = getApprovals();
+  const pending = apps.filter(a=>a.status==='대기');
+  const processed = apps.filter(a=>a.status!=='대기');
+  document.getElementById('tb-title').textContent = '결재함';
+  document.getElementById('content').innerHTML = `
+    <div class="tab-list">
+      <button class="tab-btn active" onclick="showApprovalTab(this,'pending')">대기 (${pending.length})</button>
+      <button class="tab-btn" onclick="showApprovalTab(this,'processed')">처리 완료 (${processed.length})</button>
+    </div>
+    <div id="pending" class="tab-pane active">
+      ${pending.length?`<div class="card">${pending.map(a=>`<div style="padding:14px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:8px;background:var(--orange-l);display:flex;align-items:center;justify-content:center;font-size:18px">📋</div>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600">${a.title||''}</div>
+          <div style="font-size:12px;color:var(--g500)">${a.type||''} · ${a.requester||''} · ${fmt(a.amount||0)}원</div>
+          <div style="font-size:11px;color:var(--g400)">${a.request_date||''}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-green btn-sm" onclick="approveApprovalItem('${a.id}');renderApprovals()">승인</button>
+          <button class="btn btn-red btn-sm" onclick="promptRejectApproval('${a.id}')">반려</button>
+        </div>
+      </div>`).join('')}</div>`:
+      `<div class="card" style="text-align:center;padding:40px;color:var(--g400)">대기 중인 결재가 없습니다</div>`}
+    </div>
+    <div id="processed" class="tab-pane">
+      ${processed.length?`<div class="card">${processed.map(a=>`<div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px">
+        <span style="font-size:18px">${a.status==='승인'?'✅':'❌'}</span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:500">${a.title||''}</div>
+          <div style="font-size:11px;color:var(--g500)">${a.type} · ${a.requester} · ${fmt(a.amount||0)}원 · ${a.approve_date||''}</div>
+          ${a.reject_reason?`<div style="font-size:11px;color:var(--red)">사유: ${a.reject_reason}</div>`:''}
+        </div>
+        ${statusBadge(a.status)}
+      </div>`).join('')}</div>`:
+      `<div class="card" style="text-align:center;padding:40px;color:var(--g400)">처리된 결재가 없습니다</div>`}
+    </div>`;
+}
+function showApprovalTab(btn,tabId){
+  btn.closest('.tab-list').querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  document.getElementById(tabId)?.classList.add('active');
+}
+function promptRejectApproval(id) {
+  const reason = prompt('반려 사유를 입력하세요:');
+  if(reason) { rejectApprovalItem(id, reason); renderApprovals(); }
 }
 
 // ===== TOAST =====
@@ -447,6 +706,21 @@ function renderDash(){
     (p.payments||[]).forEach(pay=>{if(!pay.paid&&pay.due&&pay.due>=thisWeekStart&&pay.due<=thisWeekEnd)a+=getTotal(p)*Number(pay.pct||0)/100;});return a;
   },0);
   
+  // Cost flow calculations
+  const totalEstimate = ps.reduce((a,p)=>a+getTotal(p),0);
+  const totalContract = ps.filter(p=>['계약완료','시공중','완료'].includes(p.status)).reduce((a,p)=>a+getTotal(p),0);
+  const laborData = getLabor();
+  const expenseData = getExpenses();
+  const totalLaborCost = laborData.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+  const totalExpenseCost = expenseData.filter(e=>e.status==='승인').reduce((a,e)=>a+(Number(e.amount)||0),0);
+  const ordersData = getOrders();
+  const totalOrderCost = ordersData.reduce((a,o)=>a+(Number(o.amount)||0),0);
+  const totalCosts = totalLaborCost + totalExpenseCost + totalOrderCost;
+  const totalPaid = ps.reduce((a,p)=>a+getPaid(p),0);
+  const totalProfit = totalContract - totalCosts;
+  const profitRate = totalContract > 0 ? (totalProfit/totalContract*100) : 0;
+  const pendingApprovalsCnt = getPendingApprovals().length;
+  
   // Date display
   const now=new Date();
   const dayNames=['일','월','화','수','목','금','토'];
@@ -463,12 +737,60 @@ function renderDash(){
       <div style="font-size:11px;color:var(--g500);margin-bottom:2px">${dateStr}</div>
       <div style="font-size:18px;font-weight:700;font-family:var(--serif)">안녕하세요, ${co.ceo||'김승환'}님 👋</div>
     </div>
-    <div id="weather-widget" style="background:#fff;border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 16px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--g600)">
-      <span style="font-size:24px">⛅</span>
-      <div><div style="font-weight:600;color:var(--dark)">서울 · 맑음</div><div>기온 정보 로딩중...</div></div>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${pendingApprovalsCnt>0?`<button class="btn btn-outline btn-sm" onclick="nav('approvals')" style="color:var(--orange)">📋 결재 대기 <span class="sb-badge">${pendingApprovalsCnt}</span></button>`:''}
+      <div id="weather-widget" style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 16px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--g600)">
+        <span style="font-size:24px">⛅</span>
+        <div><div style="font-weight:600;color:var(--dark)">서울 · 맑음</div><div>기온 정보 로딩중...</div></div>
+      </div>
     </div>
   </div>
   
+  <!-- 비용 흐름 요약 (Cost Flow Summary) -->
+  <div class="card" style="margin-bottom:14px;background:linear-gradient(135deg,var(--dark) 0%,var(--charcoal) 100%);color:#fff;border:none">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div style="font-size:14px;font-weight:700;letter-spacing:.03em">💰 비용 흐름 요약</div>
+      <div style="font-size:11px;opacity:.6">견적→계약→비용→수금→수익</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+      <div style="text-align:center">
+        <div style="font-size:10px;opacity:.5;margin-bottom:4px">총 견적액</div>
+        <div style="font-size:18px;font-weight:800">${fmtShort(totalEstimate)}</div>
+        <div style="font-size:10px;opacity:.4">${ps.length}건</div>
+      </div>
+      <div style="text-align:center;position:relative">
+        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
+        <div style="font-size:10px;opacity:.5;margin-bottom:4px">계약액</div>
+        <div style="font-size:18px;font-weight:800;color:#60a5fa">${fmtShort(totalContract)}</div>
+        <div style="font-size:10px;opacity:.4">${ps.filter(p=>['계약완료','시공중','완료'].includes(p.status)).length}건</div>
+      </div>
+      <div style="text-align:center;position:relative">
+        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
+        <div style="font-size:10px;opacity:.5;margin-bottom:4px">총 비용</div>
+        <div style="font-size:18px;font-weight:800;color:#f87171">${fmtShort(totalCosts)}</div>
+        <div style="font-size:10px;opacity:.4">인건${fmtShort(totalLaborCost)} · 자재${fmtShort(totalOrderCost)}</div>
+      </div>
+      <div style="text-align:center;position:relative">
+        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
+        <div style="font-size:10px;opacity:.5;margin-bottom:4px">수금액</div>
+        <div style="font-size:18px;font-weight:800;color:#4ade80">${fmtShort(totalPaid)}</div>
+        <div style="font-size:10px;opacity:.4">미수금 ${fmtShort(totalUnpaid)}</div>
+      </div>
+      <div style="text-align:center;position:relative">
+        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
+        <div style="font-size:10px;opacity:.5;margin-bottom:4px">수익</div>
+        <div style="font-size:18px;font-weight:800;color:${profitRate>=10?'#4ade80':profitRate>=0?'#fbbf24':'#f87171'}">${fmtShort(totalProfit)}</div>
+        <div style="font-size:10px;opacity:.4">마진율 ${profitRate.toFixed(1)}%</div>
+      </div>
+    </div>
+    <div style="margin-top:12px;height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden;display:flex">
+      <div style="height:100%;background:#60a5fa;width:${totalContract>0?Math.min(totalPaid/totalContract*100,100):0}%"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;opacity:.4">
+      <span>수금 진행률</span><span>${totalContract>0?Math.round(totalPaid/totalContract*100):0}%</span>
+    </div>
+  </div>
+
   <!-- KPI -->
   <div class="dash-grid" style="margin-bottom:14px">
     <div class="kpi-card" style="border-left:3px solid var(--blue)">
@@ -3462,11 +3784,27 @@ function importXLSX(type){
 // ===== INIT =====
 // ===== ASYNC INIT =====
 async function boot() {
+  // Show skeleton loading
+  document.getElementById('content').innerHTML = `
+    <div style="padding:20px;display:flex;flex-direction:column;gap:16px">
+      <div style="height:80px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite"></div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
+        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite"></div>
+        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.2s"></div>
+        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.4s"></div>
+        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.6s"></div>
+      </div>
+      <div style="height:200px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.3s"></div>
+    </div>`;
+  
   await initData();
   // Convert company from DB format
   if(_d.company && _d.company.name_ko) _d.company = getCompanyFromDb(_d.company);
   renderNav();
-  nav("dash");
+  
+  // Parse URL for initial route
+  const route = parseUrlRoute();
+  nav(route.page, route.sub, route.pid, false);
 }
 document.addEventListener("DOMContentLoaded", boot);
 
@@ -3479,10 +3817,6 @@ function closeMobileMenu(){
   document.getElementById('sidebar').classList.remove('mobile-open');
   document.getElementById('mobile-overlay').classList.remove('open');
 }
-// Close mobile menu on nav click
-const origNav = nav;
-// Override nav to also close mobile menu
-const _origNav = window.nav || function(){};
 
 // ===== EXCEL EXPORT (SheetJS) =====
 function exportXLSX(type){
@@ -4455,4 +4789,181 @@ function monthlyAccordion(groups, renderRowFn, headerHtml){
 
 // ===== CAMERA SVG ICON ADDITION =====
 // (svgIcon 'camera' is used for photo upload button)
+
+// ===== ESTIMATE TEMPLATE SET SELECTOR (Enhanced) =====
+function getEstTemplates() { return _d.estTemplates || []; }
+function openEstTemplateSelector(pid) {
+  const templates = getEstTemplates();
+  const presets = getPresets();
+  // Combine both sources
+  const allSets = [
+    ...templates.map(t => ({ id: t.id, name: t.name, desc: t.description||'', category: t.category||'', items: typeof t.items==='string'?JSON.parse(t.items||'[]'):t.items||[], source: 'template', usage: t.usage_count||0 })),
+    ...presets.map(p => ({ id: p.id, name: p.name, desc: '', category: p.cid||'', items: typeof p.items==='string'?JSON.parse(p.items||'[]'):p.items||[], source: 'preset', usage: 0 }))
+  ];
+  
+  const categories = [...new Set(allSets.map(s=>s.category).filter(Boolean))];
+  
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr">
+      <span class="modal-title">📋 견적 템플릿 세트 선택</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm btn-primary tmpl-cat-btn" onclick="filterTemplates('')" data-cat="">전체 (${allSets.length})</button>
+        ${categories.map(c=>`<button class="btn btn-sm btn-outline tmpl-cat-btn" onclick="filterTemplates('${c}')" data-cat="${c}">${c} (${allSets.filter(s=>s.category===c).length})</button>`).join('')}
+      </div>
+      <div id="tmpl-set-list">
+        ${allSets.map(s=>`<div class="tmpl-set-item" data-cat="${s.category}" style="border:1px solid var(--border);border-radius:var(--radius-lg);padding:14px;margin-bottom:8px;display:flex;align-items:center;gap:14px;cursor:pointer;transition:all .15s" 
+          onmouseover="this.style.borderColor='var(--blue)';this.style.background='var(--blue-l)'" 
+          onmouseout="this.style.borderColor='var(--border)';this.style.background=''" 
+          onclick="applyTemplateSet('${s.id}','${s.source}','${pid}')">
+          <div style="width:44px;height:44px;background:var(--g100);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">
+            ${{'\uae30\ucd08\uacf5\uc0ac':'🏗️','\ucca0\uac70\uacf5\uc0ac':'🔨','\ubaa9\uacf5\uc0ac':'🪵','\ub3c4\uc7a5\uacf5\uc0ac':'🎨','\uc804\uae30\uacf5\uc0ac':'⚡','\ubc14\ub2e5\uacf5\uc0ac':'🏠','C01':'🏗️','C02':'🔨','C04':'🪵','C06':'🎨'}[s.category]||'📦'}
+          </div>
+          <div style="flex:1">
+            <div style="font-size:13px;font-weight:600">${s.name}</div>
+            <div style="font-size:11px;color:var(--g500);margin-top:2px">${s.desc||s.category||''} · ${s.items.length}개 항목${s.usage>0?` · ${s.usage}회 사용`:''}</div>
+          </div>
+          <div style="font-size:12px;color:var(--blue);font-weight:600">${s.items.length}개 추가 →</div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div></div>`);
+}
+
+function filterTemplates(cat) {
+  document.querySelectorAll('.tmpl-cat-btn').forEach(b=>{
+    b.className = `btn btn-sm ${b.dataset.cat===cat?'btn-primary':'btn-outline'} tmpl-cat-btn`;
+  });
+  document.querySelectorAll('.tmpl-set-item').forEach(el=>{
+    el.style.display = (!cat || el.dataset.cat===cat) ? '' : 'none';
+  });
+}
+
+async function applyTemplateSet(setId, source, pid) {
+  let items = [];
+  if(source==='template') {
+    const t = getEstTemplates().find(x=>x.id===setId);
+    if(!t) return;
+    items = typeof t.items==='string'?JSON.parse(t.items||'[]'):t.items||[];
+    // Update usage count
+    t.usage_count = (t.usage_count||0)+1;
+    t.last_used_at = new Date().toISOString();
+    api('estimate-templates', 'POST', { ...t, items: typeof t.items==='string'?t.items:JSON.stringify(t.items) });
+  } else {
+    const preset = getPresets().find(x=>x.id===setId);
+    if(!preset) return;
+    items = typeof preset.items==='string'?JSON.parse(preset.items||'[]'):preset.items||[];
+  }
+  if(!items.length){ toast('항목이 없습니다','warning'); return; }
+  
+  const p = getProject(pid); if(!p) return;
+  const existing = p.items || [];
+  items.forEach(item => {
+    existing.push({
+      id: 'i'+Math.random().toString(36).slice(2,6),
+      cid: item.cid||'', nm: item.nm, spec: item.spec||'', unit: item.unit||'식',
+      qty: item.qty||1, mp: item.mp||0, lp: item.lp||0, ep: item.ep||0,
+      sp: 1, cmp: 0, clp: 0, cep: 0, rm: ''
+    });
+  });
+  p.items = existing;
+  await saveProject(p);
+  closeModal();
+  toast(`✅ ${items.length}개 항목이 추가되었습니다`, 'success');
+  renderEstimate();
+}
+
+// ===== PRICE DB HIERARCHY & STATS =====
+function openPriceDBStats(priceId) {
+  const item = getPriceDB().find(p=>p.id===priceId);
+  if(!item) return;
+  // Fetch stats from API
+  api('pricedb/'+priceId+'/stats').then(stats => {
+    if(!stats || stats.__error) { toast('통계를 불러올 수 없습니다','error'); return; }
+    openModal(`<div class="modal-bg"><div class="modal">
+      <div class="modal-hdr">
+        <span class="modal-title">📊 단가 통계 — ${item.nm}</span>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="dash-grid dash-grid-3" style="margin-bottom:16px">
+          <div class="kpi-card" style="border-left:3px solid var(--blue)">
+            <div class="kpi-label">현재 단가</div>
+            <div class="kpi-value" style="font-size:16px;color:var(--blue)">${fmt((item.mp||0)+(item.lp||0)+(item.ep||0))}</div>
+          </div>
+          <div class="kpi-card" style="border-left:3px solid var(--green)">
+            <div class="kpi-label">평균 사용단가</div>
+            <div class="kpi-value" style="font-size:16px;color:var(--green)">${fmt(stats.avgPrice||0)}</div>
+          </div>
+          <div class="kpi-card" style="border-left:3px solid var(--orange)">
+            <div class="kpi-label">최근 사용단가</div>
+            <div class="kpi-value" style="font-size:16px;color:var(--orange)">${fmt(stats.lastPrice||0)}</div>
+          </div>
+        </div>
+        <div class="card-title">사용 이력 (${stats.usageCount||0}회)</div>
+        ${stats.history?.length?`<div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>날짜</th><th>프로젝트</th><th>수량</th><th>단가</th></tr></thead>
+          <tbody>
+            ${stats.history.map(h=>{
+              const p = getProject(h.pid);
+              return `<tr>
+                <td>${h.used_date||''}</td>
+                <td>${p?.nm||h.pid||'-'}</td>
+                <td class="num">${h.qty||0}</td>
+                <td class="num">${fmt(h.unit_price||0)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table></div>`:`<div style="text-align:center;padding:24px;color:var(--g400);font-size:12px">사용 이력이 없습니다</div>`}
+      </div>
+      <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">닫기</button></div>
+    </div></div>`);
+  });
+}
+
+// Record price usage when estimate is saved
+async function recordPriceUsage(pid, items) {
+  for(const item of items) {
+    if(!item.nm) continue;
+    // Find matching price DB entry
+    const dbItem = getPriceDB().find(d => d.nm === item.nm);
+    if(dbItem) {
+      const unitPrice = (Number(item.mp)||0) + (Number(item.lp)||0) + (Number(item.ep)||0);
+      await api('pricedb-history', 'POST', {
+        id: uid(), price_id: dbItem.id, pid: pid,
+        used_date: today(), qty: Number(item.qty)||0,
+        unit_price: unitPrice, mp: Number(item.mp)||0,
+        lp: Number(item.lp)||0, ep: Number(item.ep)||0
+      });
+    }
+  }
+}
+
+// ===== EXPENSE → APPROVAL FLOW INTEGRATION =====
+async function submitExpenseForApproval(expenseId) {
+  const exp = getExpenses().find(e=>e.id===expenseId);
+  if(!exp) return;
+  const co = getCompany();
+  await createApproval({
+    type: 'expense', related_id: expenseId,
+    title: `지출결의: ${exp.title}`,
+    amount: Number(exp.amount)||0,
+    requester: exp.requester||'',
+    approver: co.ceo||'대표'
+  });
+  exp.status = '결재중';
+  await api('expenses', 'POST', exp);
+  toast('결재 요청이 전송되었습니다', 'success');
+  renderExpenses();
+}
+
+// ===== VERSION BADGE UPDATE =====
+// Update footer badge
+(function(){
+  const badge = document.querySelector('.fs-badge');
+  if(badge) badge.textContent = 'v6 Full-Stack · D1 Database · Dark Mode';
+})();
+
 
