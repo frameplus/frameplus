@@ -22,6 +22,10 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS notices (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT DEFAULT '', pinned INTEGER DEFAULT 0, date TEXT DEFAULT '', read_by TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS tax_invoices (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', supply_amt REAL DEFAULT 0, tax_amt REAL DEFAULT 0, buyer_biz TEXT DEFAULT '', status TEXT DEFAULT '미발행', item TEXT DEFAULT '공사', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS msg_templates (id TEXT PRIMARY KEY, cat TEXT DEFAULT '', title TEXT NOT NULL, content TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS labor_costs (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', worker_name TEXT DEFAULT '', worker_type TEXT DEFAULT '', daily_rate REAL DEFAULT 0, days REAL DEFAULT 0, total REAL DEFAULT 0, meal_cost REAL DEFAULT 0, transport_cost REAL DEFAULT 0, overtime_cost REAL DEFAULT 0, deduction REAL DEFAULT 0, net_amount REAL DEFAULT 0, paid INTEGER DEFAULT 0, paid_date TEXT DEFAULT '', payment_method TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS expenses (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', category TEXT DEFAULT '', title TEXT NOT NULL, amount REAL DEFAULT 0, tax_amount REAL DEFAULT 0, vendor TEXT DEFAULT '', payment_method TEXT DEFAULT '', receipt_type TEXT DEFAULT '', receipt_no TEXT DEFAULT '', receipt_image TEXT DEFAULT '', requester TEXT DEFAULT '', approver TEXT DEFAULT '', status TEXT DEFAULT '대기', approved_date TEXT DEFAULT '', reject_reason TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS item_images (id TEXT PRIMARY KEY, item_id TEXT DEFAULT '', pid TEXT DEFAULT '', image_data TEXT DEFAULT '', file_name TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS work_presets (id TEXT PRIMARY KEY, cid TEXT DEFAULT '', name TEXT NOT NULL, items TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
 }
 
@@ -93,6 +97,10 @@ app.route('/api/notices', crud('notices'))
 app.route('/api/tax', crud('tax_invoices'))
 app.route('/api/templates', crud('msg_templates'))
 app.route('/api/team', crud('team'))
+app.route('/api/labor', crud('labor_costs'))
+app.route('/api/expenses', crud('expenses'))
+app.route('/api/item-images', crud('item_images'))
+app.route('/api/presets', crud('work_presets'))
 
 // Company (singleton)
 app.get('/api/company', async (c) => {
@@ -123,6 +131,16 @@ app.post('/api/init', async (c) => {
   // Check if already seeded
   const count = await db.prepare('SELECT COUNT(*) as cnt FROM projects').first<{ cnt: number }>()
   if (count && count.cnt > 0) return c.json({ status: 'already_initialized' })
+
+  // Seed work presets
+  await db.exec(`
+    INSERT OR IGNORE INTO work_presets (id, cid, name, items) VALUES
+    ('wp1', 'C01', '기초공사', '[{"nm":"먹메김","spec":"식","unit":"식","qty":1},{"nm":"보양","spec":"식","unit":"식","qty":1},{"nm":"내부수평비계","spec":"식","unit":"식","qty":1},{"nm":"소운반비","spec":"식","unit":"식","qty":1},{"nm":"대운반비","spec":"식","unit":"식","qty":1},{"nm":"폐자재처리","spec":"식","unit":"식","qty":1},{"nm":"현장정리정돈","spec":"식","unit":"식","qty":1},{"nm":"준공청소","spec":"식","unit":"식","qty":1}]'),
+    ('wp2', 'C02', '철거공사', '[{"nm":"기존 벽체 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 바닥 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 천정 철거","spec":"m²","unit":"m²","qty":1},{"nm":"설비 철거","spec":"식","unit":"식","qty":1},{"nm":"잡철거","spec":"식","unit":"식","qty":1}]'),
+    ('wp3', 'C04', '목공사', '[{"nm":"경량칸막이","spec":"m²","unit":"m²","qty":1},{"nm":"천정틀","spec":"m²","unit":"m²","qty":1},{"nm":"합판작업","spec":"m²","unit":"m²","qty":1},{"nm":"몰딩","spec":"m","unit":"m","qty":1},{"nm":"문틀/문짝","spec":"세트","unit":"세트","qty":1}]'),
+    ('wp4', 'C06', '도장공사', '[{"nm":"벽면도장","spec":"m²","unit":"m²","qty":1},{"nm":"천정도장","spec":"m²","unit":"m²","qty":1},{"nm":"친환경페인트","spec":"m²","unit":"m²","qty":1},{"nm":"퍼티작업","spec":"m²","unit":"m²","qty":1}]')
+  `)
+
   return c.json({ status: 'tables_ready' })
 })
 

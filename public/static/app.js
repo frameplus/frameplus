@@ -20,14 +20,16 @@ async function initData() {
   if (_initializing) return;
   _initializing = true;
   try {
-    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company] = await Promise.all([
+    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets] = await Promise.all([
       api('projects'), api('vendors'), api('meetings'), api('pricedb'),
       api('orders'), api('as'), api('notices'), api('tax'),
-      api('templates'), api('team'), api('company')
+      api('templates'), api('team'), api('company'),
+      api('labor'), api('expenses'), api('presets')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],
-      tax: tax||[], templates: templates||[], team: team||[], company: company||{} };
+      tax: tax||[], templates: templates||[], team: team||[], company: company||{},
+      labor: labor||[], expenses: expenses||[], presets: presets||[] };
   } catch(e) { console.error('Init failed:', e); _d = {}; }
   _initializing = false;
 }
@@ -278,6 +280,7 @@ function svgIcon(name,size=14){
     wrench:`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>`,
     activity:`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
     book:`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>`,
+    camera:`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`,
   };
   return icons[name]||`<span style="font-size:${size}px">?</span>`;
 }
@@ -290,9 +293,12 @@ const NAV=[
   {id:'estimate',label:'견적 작성',icon:'file'},
   {section:'공사 관리'},
   {id:'gantt',label:'공정표',icon:'activity'},
-  {id:'orders',label:'발주 관리',icon:'truck'},
+  {id:'orders',label:'발주 작성',icon:'truck'},
   {id:'collection',label:'수금 관리',icon:'dollar'},
   {id:'contracts',label:'계약서',icon:'book'},
+  {section:'비용 관리'},
+  {id:'labor',label:'인건비·노무비',icon:'users'},
+  {id:'expenses',label:'지출결의서',icon:'file'},
   {section:'영업 관리'},
   {id:'meetings',label:'미팅 캘린더',icon:'calendar'},
   {id:'crm',label:'고객 CRM',icon:'users'},
@@ -360,6 +366,8 @@ function nav(page,sub=null,pid=null){
     case 'tax':renderTax();break;
     case 'as':renderAS();break;
     case 'team':renderTeam();break;
+    case 'labor':renderLabor();break;
+    case 'expenses':sub==='detail'?renderExpenseDetail():renderExpenses();break;
     case 'reports':renderReports();break;
     case 'admin':renderAdmin();break;
     default:content.innerHTML=`<div class="card"><p>${page} 페이지</p></div>`;
@@ -392,16 +400,22 @@ function closeModal(){
 
 // ===== COMMON FILTER BAR =====
 function filterBar(opts={}){
-  const {searchId='search',statusId='statusFilter',statuses=[],extra='',placeholder='검색...'}=opts;
+  const {searchId='search',statusId='statusFilter',statuses=[],extra='',placeholder='검색...',showDate=false,showMonthGroup=false,dateId='dateFrom',dateToId='dateTo',onFilter='filterTable()'}=opts;
   const statusOpts=statuses.map(s=>`<option value="${s}">${s}</option>`).join('');
-  return `<div class="filter-bar">
+  return `<div class="filter-bar" style="flex-wrap:wrap;gap:8px">
     <div class="filter-search">
       ${svgIcon('search',14)}
-      <input class="inp" id="${searchId}" placeholder="${placeholder}" oninput="filterTable()" style="padding-left:30px">
+      <input class="inp" id="${searchId}" placeholder="${placeholder}" oninput="${onFilter}" style="padding-left:30px">
     </div>
-    ${statuses.length?`<select class="sel" id="${statusId}" style="width:auto;min-width:100px" onchange="filterTable()">
+    ${statuses.length?`<select class="sel" id="${statusId}" style="width:auto;min-width:100px" onchange="${onFilter}">
       <option value="">전체 상태</option>${statusOpts}
     </select>`:''}
+    ${showDate?`<input class="inp" id="${dateId}" type="date" style="width:130px" onchange="${onFilter}" placeholder="시작일">
+    <span style="color:var(--g400)">~</span>
+    <input class="inp" id="${dateToId}" type="date" style="width:130px" onchange="${onFilter}" placeholder="종료일">`:''}
+    ${showMonthGroup?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap">
+      <input type="checkbox" id="month-group-toggle" onchange="${onFilter}"> 월별 그룹
+    </label>`:''}
     ${extra}
   </div>`;
 }
@@ -478,16 +492,6 @@ function renderDash(){
       <div class="kpi-sub">진행중 ${ps.filter(p=>['계약완료','시공중'].includes(p.status)).length}건</div>
     </div>
   </div>
-  
-  ${risks.length?`<div style="background:var(--red-l);border:1px solid #fca5a5;border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px">
-    <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:8px">${svgIcon('alert',12)} 위험 알림 ${risks.length}건</div>
-    <div style="display:flex;flex-direction:column;gap:4px">
-      ${risks.slice(0,4).map(r=>`<div style="font-size:12px;color:${r.lv==='high'?'var(--red)':'var(--orange)'};display:flex;align-items:center;gap:6px">
-        <span>${r.lv==='high'?'🔴':'🟡'}</span>${r.msg}
-      </div>`).join('')}
-      ${risks.length>4?`<div style="font-size:11px;color:var(--g500)">+ ${risks.length-4}건 더 있음</div>`:''}
-    </div>
-  </div>`:''}
   
   <div class="dash-3col">
     <!-- Left -->
@@ -599,22 +603,24 @@ function renderDash(){
         </div>`).join('')||`<div style="text-align:center;padding:16px;color:var(--g400);font-size:12px">공지사항 없음</div>`}
       </div>
       
-      <!-- Notifications -->
-      <div class="card">
-        <div class="card-title">알림</div>
-        <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
-          ${risks.slice(0,3).map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:${r.lv==='high'?'var(--red-l)':'var(--orange-l)'};border-radius:var(--radius)">
-            <span>${r.lv==='high'?'🔴':'🟡'}</span>
-            <span style="color:${r.lv==='high'?'var(--red)':'var(--orange)'}">${r.msg}</span>
-          </div>`).join('')}
-          ${totalUnpaid>0?`<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--purple-l);border-radius:var(--radius)">
-            <span>💜</span><span style="color:var(--purple)">미수금 총 ${fmtShort(totalUnpaid)}원</span>
-          </div>`:''}
-          ${!risks.length&&!totalUnpaid?`<div style="text-align:center;padding:16px;color:var(--g400)">알림 없음</div>`:''}
-        </div>
-      </div>
     </div>
-  </div>`;
+  </div>
+  
+  <!-- 통합 알림 (최하단) -->
+  ${risks.length||totalUnpaid?`<div class="card" style="margin-top:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div class="card-title" style="margin-bottom:0">${svgIcon('alert',14)} 통합 알림 <span style="font-size:11px;color:var(--g500);font-weight:400">${risks.length+(totalUnpaid>0?1:0)}건</span></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+      ${risks.map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:${r.lv==='high'?'var(--red-l)':'var(--orange-l)'};border-radius:var(--radius)">
+        <span>${r.lv==='high'?'🔴':'🟡'}</span>
+        <span style="color:${r.lv==='high'?'var(--red)':'var(--orange)'}">${r.msg}</span>
+      </div>`).join('')}
+      ${totalUnpaid>0?`<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--purple-l);border-radius:var(--radius)">
+        <span>💜</span><span style="color:var(--purple)">미수금 총 ${fmtShort(totalUnpaid)}원</span>
+      </div>`:''}
+    </div>
+  </div>`:''}`;
   
   // Load weather
   loadWeather();
@@ -708,28 +714,85 @@ function renderProjects(){
   
   const ps=getProjects();
   document.getElementById('content').innerHTML=`
-  ${filterBar({statuses:Object.keys(STATUS_LABELS),placeholder:'프로젝트명, 고객사 검색...'})}
-  <div class="tbl-wrap">
-    <table class="tbl" id="projects-tbl">
-      <thead><tr>
-        <th onclick="sortTbl('proj','nm')">프로젝트명 <span class="sort-icon">↕</span></th>
-        <th onclick="sortTbl('proj','client')">고객사 <span class="sort-icon">↕</span></th>
-        <th onclick="sortTbl('proj','area')">면적 <span class="sort-icon">↕</span></th>
-        <th onclick="sortTbl('proj','total')">도급금액 <span class="sort-icon">↕</span></th>
-        <th onclick="sortTbl('proj','mr')">마진율 <span class="sort-icon">↕</span></th>
-        <th>공정%</th><th>수금%</th>
-        <th onclick="sortTbl('proj','status')">상태 <span class="sort-icon">↕</span></th>
-        <th onclick="sortTbl('proj','date')">날짜 <span class="sort-icon">↕</span></th>
-        <th>작업</th>
-      </tr></thead>
-      <tbody id="projects-body">
-        ${renderProjectRows(ps)}
-      </tbody>
-    </table>
+  ${filterBar({statuses:Object.keys(STATUS_LABELS),placeholder:'프로젝트명, 고객사 검색...',showDate:true,showMonthGroup:true,onFilter:'filterProjects()'})}
+  <div id="projects-list-wrap">
+    <div class="tbl-wrap">
+      <table class="tbl" id="projects-tbl">
+        <thead><tr>
+          <th onclick="sortTbl('proj','nm')">프로젝트명 <span class="sort-icon">↕</span></th>
+          <th onclick="sortTbl('proj','client')">고객사 <span class="sort-icon">↕</span></th>
+          <th onclick="sortTbl('proj','area')">면적 <span class="sort-icon">↕</span></th>
+          <th onclick="sortTbl('proj','total')">도급금액 <span class="sort-icon">↕</span></th>
+          <th onclick="sortTbl('proj','mr')">마진율 <span class="sort-icon">↕</span></th>
+          <th>공정%</th><th>수금%</th>
+          <th onclick="sortTbl('proj','status')">상태 <span class="sort-icon">↕</span></th>
+          <th onclick="sortTbl('proj','date')">날짜 <span class="sort-icon">↕</span></th>
+          <th>작업</th>
+        </tr></thead>
+        <tbody id="projects-body">
+          ${renderProjectRows(ps)}
+        </tbody>
+      </table>
+    </div>
   </div>`;
+}
+function filterProjects(){
+  const q=(document.getElementById('search')?.value||'').toLowerCase();
+  const st=document.getElementById('statusFilter')?.value||'';
+  const df=document.getElementById('dateFrom')?.value||'';
+  const dt=document.getElementById('dateTo')?.value||'';
+  const mg=document.getElementById('month-group-toggle')?.checked;
+  let ps=getProjects().filter(p=>{
+    const text=!q||(p.nm+p.client+p.loc).toLowerCase().includes(q);
+    const status=!st||p.status===st;
+    const dateOk=(!df||p.date>=df)&&(!dt||p.date<=dt);
+    return text&&status&&dateOk;
+  });
+  const wrap=document.getElementById('projects-list-wrap');
+  if(mg&&wrap){
+    const groups=groupByMonth(ps,'date');
+    wrap.innerHTML=monthlyAccordion(groups, p=>renderProjectRowSingle(p),
+      `<tr><th>프로젝트명</th><th>고객사</th><th>면적</th><th>도급금액</th><th>마진율</th><th>공정%</th><th>수금%</th><th>상태</th><th>날짜</th><th>작업</th></tr>`);
+  } else {
+    const body=document.getElementById('projects-body');
+    if(body)body.innerHTML=renderProjectRows(ps);
+  }
+}
+function renderProjectRowSingle(p){
+  const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
+  const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
+  return`<tr>
+    <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="openEditProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
+    <td><div style="font-size:12.5px">${p.client}</div></td>
+    <td>${p.area||'-'}평</td>
+    <td style="font-weight:600">${tot>0?fmt(tot)+'원':'-'}</td>
+    <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
+    <td><div class="prog prog-blue" style="width:60px"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px">${prog}%</span></td>
+    <td><div class="prog prog-green" style="width:60px"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px">${paidPct}%</span></td>
+    <td>${statusBadge(p.status)}</td>
+    <td style="font-size:11px">${p.date||''}</td>
+    <td><div style="display:flex;gap:4px">
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditProject('${p.id}')">${svgIcon('edit',13)}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="navEstimate('${p.id}')">${svgIcon('file',13)}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteProject('${p.id}')">${svgIcon('trash',13)}</button>
+    </div></td>
+  </tr>`;
 }
 function renderProjectRows(ps){
   if(!ps.length)return`<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--g400)">프로젝트가 없습니다</td></tr>`;
+  // Apply sort
+  const sc=S.sortCol['proj'], sd=S.sortDir['proj'];
+  if(sc){
+    ps=[...ps].sort((a,b)=>{
+      let va,vb;
+      if(sc==='total'){va=getTotal(a);vb=getTotal(b);}
+      else if(sc==='mr'){va=getMR(a);vb=getMR(b);}
+      else if(sc==='area'){va=a.area||0;vb=b.area||0;}
+      else{va=a[sc]||'';vb=b[sc]||'';}
+      if(typeof va==='number')return sd===sc?(va-vb):(vb-va);
+      return sd===sc?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va));
+    });
+  }
   return ps.map(p=>{
     const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
     const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
@@ -754,17 +817,8 @@ function renderProjectRows(ps){
     </tr>`;
   }).join('');
 }
-function filterTable(){
-  const q=(document.getElementById('search')?.value||'').toLowerCase();
-  const st=document.getElementById('statusFilter')?.value||'';
-  let ps=getProjects().filter(p=>{
-    const textMatch=!q||(p.nm+p.client+p.loc).toLowerCase().includes(q);
-    const statusMatch=!st||p.status===st;
-    return textMatch&&statusMatch;
-  });
-  const body=document.getElementById('projects-body');
-  if(body)body.innerHTML=renderProjectRows(ps);
-}
+function filterTable(){filterProjects();}
+function sortTblProj(){filterProjects();}
 function navEstimate(pid){S.editingEstPid=pid;nav('estimate');}
 function openAddProject(){
   openModal(`<div class="modal-bg"><div class="modal">
@@ -814,7 +868,6 @@ async function saveNewProject(){
   await saveProject(p);closeModal();toast('프로젝트가 추가되었습니다','success');
   renderProjects();
 }
-function v(id){return document.getElementById(id)?.value||''}
 function openEditProject(pid){
   S.selPid=pid;const p=getProject(pid);if(!p)return;
   openModal(`<div class="modal-bg"><div class="modal modal-xl">
@@ -872,7 +925,8 @@ function renderEstimate(){
   document.getElementById('tb-title').textContent='견적 작성';
   document.getElementById('tb-actions').innerHTML=`
     <button class="btn btn-outline btn-sm" onclick="nav('pricedb')">${svgIcon('tool',12)} 단가DB</button>
-    <button class="btn btn-outline btn-sm" onclick="${pid?`previewEst('${pid}')`:'toast(\"먼저 저장하세요\")'}">${svgIcon('eye',12)} 미리보기</button>
+    <button class="btn btn-outline btn-sm" onclick="previewEstCurrent()">${svgIcon('eye',12)} 미리보기</button>
+    <button class="btn btn-outline btn-sm" onclick="sendEstMailCurrent()">${svgIcon('mail',12)} 이메일</button>
     <button class="btn btn-outline btn-sm" onclick="printPage()">${svgIcon('print',12)} 인쇄</button>
     <button class="btn btn-primary btn-sm" onclick="saveEstimate()">저장</button>`;
   
@@ -922,11 +976,29 @@ function renderEstimate(){
       </div>
     </div>
     
+    <!-- 기본공사 프리셋 -->
+    ${pid?`<div style="background:var(--blue-l);border:1px solid var(--blue);border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:12px">
+      <div style="font-size:11px;font-weight:600;color:var(--blue);margin-bottom:8px">📋 기본공사 프리셋 (클릭 시 자동 입력)</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">
+        ${(_d.presets||[]).map(pr=>`<button class="btn btn-outline btn-sm" style="border-color:var(--blue);color:var(--blue)" onclick="applyPreset('${pr.cid}','${pid}')">${CATS.find(c=>c.id===pr.cid)?.icon||'📦'} ${pr.name}</button>`).join('')}
+      </div>
+    </div>`:''}
+    
     <!-- Summary -->
     <div id="est-summary-wrap">
       ${renderEstSummary(p)}
     </div>
   </div>`;
+}
+function previewEstCurrent(){
+  const pid=S.editingEstPid;
+  if(!pid||!getProject(pid)){toast('먼저 견적을 저장하세요','warning');return;}
+  openPreviewModal(pid);
+}
+function sendEstMailCurrent(){
+  const pid=S.editingEstPid;
+  if(!pid||!getProject(pid)){toast('먼저 견적을 저장하세요','warning');return;}
+  sendEstMail(pid);
 }
 function renderEstCat(cid,p){
   const cat=CATS.find(c=>c.id===cid);if(!cat)return'';
@@ -994,13 +1066,14 @@ function renderEstRow(it,cid){
     <td><input class="inp est-inp num" style="width:85px" type="number" value="${it.ep||0}" onchange="updateEstItem('${it.id}','ep',this.value)"></td>
     <td class="num" id="eitot_${it.id}" style="font-weight:700">${fmt(tot)}</td>
     <td><input class="inp est-inp" style="width:70px;font-size:11px" value="${escHtml(it.rm||'')}" onchange="updateEstItem('${it.id}','rm',this.value)"></td>
-    <td style="display:flex;gap:2px">
+    <td style="display:flex;gap:2px;align-items:center">
+      ${it.photo?`<img src="${it.photo}" style="width:22px;height:22px;border-radius:3px;object-fit:cover;cursor:pointer" onclick="viewEstPhoto('${it.id}')" title="사진 보기">`:''}
+      <button class="btn btn-ghost btn-icon btn-sm" onclick="uploadEstPhoto('${it.id}')" title="사진">${svgIcon('camera',11)}</button>
       <button class="btn btn-ghost btn-icon btn-sm" onclick="copyEstItem('${it.id}')" title="복사">${svgIcon('copy',11)}</button>
       <button class="btn btn-ghost btn-icon btn-sm" style="color:var(--red)" onclick="removeEstItem('${it.id}','${cid}')" title="삭제">${svgIcon('x',11)}</button>
     </td>
   </tr>`;
 }
-function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function toggleEstSec(cid){
   const body=document.getElementById('estbody_'+cid);
   const tgl=document.getElementById('esttgl_'+cid);
@@ -1699,38 +1772,143 @@ function autoSortGantt(pid){
   saveProject(p);renderGanttDetail();toast('자동정렬 완료','success');
 }
 
-// ===== ORDERS =====
+// ===== ORDERS (발주 작성) =====
 function renderOrderList(){
   const orders=getOrders();
-  document.getElementById('tb-actions').innerHTML=`<button class="btn btn-outline btn-sm" onclick="exportXLSX('orders')">${svgIcon('download',12)} 엑셀</button>`;
+  document.getElementById('tb-title').textContent='발주 작성';
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="exportXLSX('orders')">${svgIcon('download',12)} 엑셀</button>
+    <button class="btn btn-primary btn-sm" onclick="openNewOrder()">+ 발주서 제작</button>`;
   document.getElementById('content').innerHTML=`
-  ${filterBar({statuses:['대기','발주중','완료'],placeholder:'프로젝트, 공종 검색...'})}
+  ${filterBar({statuses:['대기','발주중','완료'],placeholder:'프로젝트, 공종 검색...',showDate:true,showMonthGroup:true,onFilter:'filterOrders()'})}
+  <div id="orders-list-wrap">
   <div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
-        <th>현장(프로젝트)</th><th>공종</th><th>거래처</th>
-        <th>발주금액</th><th>상태</th><th>발주일</th><th>납품예정</th>
+        <th onclick="sortTbl('orders','nm')">현장(프로젝트) ↕</th><th>공종</th><th>거래처</th>
+        <th>발주금액</th><th>상태</th><th onclick="sortTbl('orders','date')">발주일 ↕</th><th>납품예정</th>
         <th>세금계산서</th><th>지급완료</th><th></th>
       </tr></thead>
       <tbody>
-        ${orders.map(o=>{
-          const p=getProject(o.pid);
-          return`<tr>
-            <td><span style="cursor:pointer;font-weight:600;color:var(--blue)" onclick="openOrderDetail('${o.id}')">${p?.nm||'-'}</span></td>
-            <td>${catIcon(o.cid)} ${catNm(o.cid)}</td>
-            <td>${o.vendor||'<span style="color:var(--g400)">미지정</span>'}</td>
-            <td style="font-weight:600">${fmt(o.amount)}원</td>
-            <td>${statusBadge(o.status)}</td>
-            <td style="font-size:11px">${o.orderDate||'-'}</td>
-            <td style="font-size:11px">${o.delivDate||'-'}</td>
-            <td>${o.taxInvoice?'<span class="badge badge-green">완료</span>':'<span class="badge badge-gray">미완료</span>'}</td>
-            <td>${o.paid?'<span class="badge badge-green">완료</span>':'<span class="badge badge-red">미지급</span>'}</td>
-            <td><button class="btn btn-outline btn-sm" onclick="openOrderDetail('${o.id}')">상세</button></td>
-          </tr>`;
-        }).join('')}
+        ${orders.map(o=>renderOrderRow(o)).join('')}
       </tbody>
     </table>
+  </div>
   </div>`;
+}
+function renderOrderRow(o){
+  const p=getProject(o.pid);
+  return`<tr>
+    <td><span style="cursor:pointer;font-weight:600;color:var(--blue)" onclick="openOrderDetail('${o.id}')">${p?.nm||'-'}</span></td>
+    <td>${catIcon(o.cid)} ${catNm(o.cid)}</td>
+    <td>${o.vendor||'<span style="color:var(--g400)">미지정</span>'}</td>
+    <td style="font-weight:600">${fmt(o.amount)}원</td>
+    <td>${statusBadge(o.status)}</td>
+    <td style="font-size:11px">${o.orderDate||o.order_date||'-'}</td>
+    <td style="font-size:11px">${o.delivDate||o.deliv_date||'-'}</td>
+    <td>${o.taxInvoice||o.tax_invoice?'<span class="badge badge-green">완료</span>':'<span class="badge badge-gray">미완료</span>'}</td>
+    <td>${o.paid?'<span class="badge badge-green">완료</span>':'<span class="badge badge-red">미지급</span>'}</td>
+    <td><button class="btn btn-outline btn-sm" onclick="openOrderDetail('${o.id}')">편집</button></td>
+  </tr>`;
+}
+function filterOrders(){
+  const q=(document.getElementById('search')?.value||'').toLowerCase();
+  const st=document.getElementById('statusFilter')?.value||'';
+  const df=document.getElementById('dateFrom')?.value||'';
+  const dt=document.getElementById('dateTo')?.value||'';
+  const mg=document.getElementById('month-group-toggle')?.checked;
+  let orders=getOrders().filter(o=>{
+    const p=getProject(o.pid);
+    const text=!q||((p?.nm||'')+catNm(o.cid)+(o.vendor||'')).toLowerCase().includes(q);
+    const status=!st||o.status===st;
+    const d=o.order_date||o.orderDate||'';
+    const dateOk=(!df||d>=df)&&(!dt||d<=dt);
+    return text&&status&&dateOk;
+  });
+  const wrap=document.getElementById('orders-list-wrap');
+  if(mg&&wrap){
+    const groups=groupByMonth(orders,'order_date');
+    wrap.innerHTML=monthlyAccordion(groups,o=>renderOrderRow(o),
+      `<tr><th>프로젝트</th><th>공종</th><th>거래처</th><th>발주금액</th><th>상태</th><th>발주일</th><th>납품예정</th><th>세금계산서</th><th>지급완료</th><th></th></tr>`);
+  } else {
+    wrap.innerHTML=`<div class="tbl-wrap"><table class="tbl"><thead><tr>
+      <th>현장(프로젝트)</th><th>공종</th><th>거래처</th><th>발주금액</th><th>상태</th><th>발주일</th><th>납품예정</th><th>세금계산서</th><th>지급완료</th><th></th>
+    </tr></thead><tbody>${orders.map(o=>renderOrderRow(o)).join('')}</tbody></table></div>`;
+  }
+}
+function openNewOrder(){
+  const ps=getProjects();
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">📋 발주서 제작</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트 *</label><select class="sel" id="no_pid">${ps.map(p=>`<option value="${p.id}">${p.nm}</option>`).join('')}</select></div>
+        <div><label class="lbl">공종 *</label><select class="sel" id="no_cid">${CATS.map(c=>`<option value="${c.id}">${c.icon} ${c.nm}</option>`).join('')}</select></div>
+        <div><label class="lbl">거래처</label><input class="inp" id="no_vendor" placeholder="거래처명"></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">발주일</label><input class="inp" id="no_date" type="date" value="${today()}"></div>
+        <div><label class="lbl">납품예정일</label><input class="inp" id="no_deliv" type="date"></div>
+        <div><label class="lbl">담당자</label><select class="sel" id="no_mgr">${TEAM_MEMBERS.map(m=>`<option>${m}</option>`).join('')}</select></div>
+      </div>
+      <div style="margin-bottom:8px;font-size:12px;font-weight:700;color:var(--g600)">품목 입력</div>
+      <div id="no_items_wrap">
+        <div class="form-row form-row-4" style="margin-bottom:6px" data-row="0">
+          <div><input class="inp inp-sm" placeholder="품명" data-f="nm"></div>
+          <div><input class="inp inp-sm" placeholder="규격" data-f="spec"></div>
+          <div><input class="inp inp-sm" type="number" placeholder="수량" value="1" data-f="qty"></div>
+          <div><input class="inp inp-sm" type="number" placeholder="단가" data-f="price"></div>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="addNewOrderRow()" style="margin-bottom:12px">+ 품목 추가</button>
+      <div><label class="lbl">비고</label><textarea class="inp" id="no_memo" rows="2"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveNewOrder()">발주서 저장</button>
+    </div>
+  </div></div>`);
+}
+let _newOrderRowIdx=1;
+function addNewOrderRow(){
+  const wrap=document.getElementById('no_items_wrap');
+  if(!wrap)return;
+  wrap.insertAdjacentHTML('beforeend',`<div class="form-row form-row-4" style="margin-bottom:6px" data-row="${_newOrderRowIdx++}">
+    <div><input class="inp inp-sm" placeholder="품명" data-f="nm"></div>
+    <div><input class="inp inp-sm" placeholder="규격" data-f="spec"></div>
+    <div><input class="inp inp-sm" type="number" placeholder="수량" value="1" data-f="qty"></div>
+    <div><input class="inp inp-sm" type="number" placeholder="단가" data-f="price"></div>
+  </div>`);
+}
+async function saveNewOrder(){
+  const pid=document.getElementById('no_pid')?.value;
+  const cid=document.getElementById('no_cid')?.value;
+  if(!pid){toast('프로젝트를 선택하세요','error');return;}
+  // Collect items
+  const rows=document.querySelectorAll('#no_items_wrap [data-row]');
+  const items=[];let totalAmt=0;
+  rows.forEach(row=>{
+    const nm=row.querySelector('[data-f="nm"]')?.value||'';
+    if(!nm)return;
+    const qty=Number(row.querySelector('[data-f="qty"]')?.value)||1;
+    const price=Number(row.querySelector('[data-f="price"]')?.value)||0;
+    const amount=qty*price;
+    items.push({nm,spec:row.querySelector('[data-f="spec"]')?.value||'',unit:'식',qty,price,amount});
+    totalAmt+=amount;
+  });
+  const data={
+    id:uid(),pid,cid,status:'대기',
+    order_date:document.getElementById('no_date')?.value||today(),
+    deliv_date:document.getElementById('no_deliv')?.value||'',
+    vendor:document.getElementById('no_vendor')?.value||'',
+    assignee:document.getElementById('no_mgr')?.value||'',
+    memo:document.getElementById('no_memo')?.value||'',
+    amount:totalAmt,items:JSON.stringify(items),
+    tax_invoice:0,paid:0
+  };
+  await api('orders','POST',data);
+  _d.orders=await api('orders');
+  closeModal();renderOrderList();toast('발주서가 저장되었습니다','success');
 }
 function openOrderDetail(oid){
   S.selOid=oid;nav('orders','detail');
@@ -1741,9 +1919,10 @@ function renderOrderDetail(){
   if(!o){nav('orders');return;}
   const p=getProject(o.pid);
   const co=getCompany();
-  document.getElementById('tb-title').textContent='발주서 상세';
+  document.getElementById('tb-title').textContent='발주 작성';
   document.getElementById('tb-actions').innerHTML=`
     <button class="btn btn-outline btn-sm" onclick="nav('orders')">${svgIcon('arrow_left',12)} 목록</button>
+    <button class="btn btn-outline btn-sm" onclick="sendOrderMail('${S.selOid}')">${svgIcon('mail',12)} 이메일</button>
     <button class="btn btn-outline btn-sm" onclick="printPage()">${svgIcon('print',12)} 인쇄</button>`;
   document.getElementById('content').innerHTML=`
   <div style="margin-bottom:8px"><button class="btn btn-ghost btn-sm" onclick="nav('orders')">${svgIcon('arrow_left',12)} 발주 목록으로</button></div>
@@ -1787,14 +1966,20 @@ function renderOrderDetail(){
           <div style="font-weight:700">품목 목록 <span style="font-size:11px;color:var(--g500)">${o.items?.length||0}개 품목</span></div>
         </div>
         <table class="tbl">
-          <thead><tr><th>품명</th><th>규격</th><th>단위</th><th>수량</th><th>단가</th><th>금액</th></tr></thead>
-          <tbody>
-            ${(o.items||[]).map(it=>`<tr>
-              <td>${it.nm||'-'}</td><td>${it.spec||'-'}</td><td>${it.unit||'식'}</td>
-              <td>${it.qty||1}</td><td class="num">${fmt(it.price||0)}</td><td class="num">${fmt(it.amount||0)}</td>
-            </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;padding:24px;color:var(--g400)">품목 없음</td></tr>`}
+          <thead><tr><th>품명</th><th>규격</th><th>단위</th><th>수량</th><th>단가</th><th>금액</th><th></th></tr></thead>
+          <tbody id="od-items-body">
+            ${(o.items||[]).map((it,idx)=>`<tr>
+              <td><input class="inp est-inp" style="min-width:80px" value="${escHtml(it.nm||'')}" onchange="updateOrderItem(${idx},'nm',this.value)"></td>
+              <td><input class="inp est-inp" style="width:70px" value="${escHtml(it.spec||'')}" onchange="updateOrderItem(${idx},'spec',this.value)"></td>
+              <td><input class="inp est-inp" style="width:50px" value="${escHtml(it.unit||'식')}" onchange="updateOrderItem(${idx},'unit',this.value)"></td>
+              <td><input class="inp est-inp num" style="width:60px" type="number" value="${it.qty||1}" onchange="updateOrderItem(${idx},'qty',this.value)"></td>
+              <td><input class="inp est-inp num" style="width:80px" type="number" value="${it.price||0}" onchange="updateOrderItem(${idx},'price',this.value)"></td>
+              <td class="num" style="font-weight:700">${fmt(it.amount||0)}</td>
+              <td><button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="removeOrderItem(${idx})">${svgIcon('x',11)}</button></td>
+            </tr>`).join('')||`<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--g400)">품목 없음</td></tr>`}
           </tbody>
         </table>
+        <button class="btn btn-ghost btn-sm" onclick="addOrderItem()" style="margin-top:8px">+ 품목 추가</button>
         <div style="background:var(--dark);color:#fff;padding:12px 16px;border-radius:0 0 var(--radius) var(--radius);display:flex;justify-content:space-between;align-items:center;margin-top:0">
           <span style="font-weight:700">합계</span>
           <span style="font-size:16px;font-weight:800">₩${fmt(o.amount)}</span>
@@ -1927,7 +2112,8 @@ function renderCollection(){
     <div class="kpi-card"><div class="kpi-label">미수금</div><div class="kpi-value" style="color:var(--red)">${fmtShort(totalUnpaid)}<span style="font-size:12px">원</span></div></div>
     <div class="kpi-card"><div class="kpi-label">수금률</div><div class="kpi-value" style="color:var(--blue)">${totalContract>0?Math.round(totalPaid/totalContract*100):0}%</div></div>
   </div>
-  ${filterBar({statuses:Object.keys(STATUS_LABELS),placeholder:'프로젝트명 검색...'})}
+  ${filterBar({statuses:Object.keys(STATUS_LABELS),placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterCollection()'})}
+  <div id="collection-list-wrap">
   <div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
@@ -1962,8 +2148,10 @@ function renderCollection(){
         }).join('')}
       </tbody>
     </table>
+  </div>
   </div>`;
 }
+function filterCollection(){renderCollection();}
 function markPaid(pid,idx){
   const p=getProject(pid);if(!p||!p.payments[idx])return;
   p.payments[idx].paid=true;p.payments[idx].paidDate=today();
@@ -2475,19 +2663,58 @@ function renderPriceDB(){
       <option value="">전체 공종</option>
       ${CATS.map(c=>`<option value="${c.id}">${c.nm}</option>`).join('')}
     </select>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+      <input type="checkbox" id="pdb-group" onchange="filterPriceDB()" checked> 공종별 그룹
+    </label>
   </div>
-  <div class="tbl-wrap">
-    <table class="tbl" id="pdb-tbl">
-      <thead><tr>
-        <th>공종</th><th>품명</th><th>규격</th><th>단위</th>
-        <th>자재단가</th><th>노무단가</th><th>경비단가</th>
-        <th>원가 자재</th><th>원가 노무</th><th></th>
-      </tr></thead>
-      <tbody id="pdb-body">
-        ${renderPriceDBRows(db)}
-      </tbody>
-    </table>
-  </div>`;
+  <div id="pdb-content">${renderPriceDBGrouped(db)}</div>`;
+}
+function renderPriceDBGrouped(db){
+  if(!db.length) return '<div style="text-align:center;padding:40px;color:var(--g400)">단가 데이터 없음</div>';
+  const grouped=document.getElementById('pdb-group')?.checked!==false;
+  if(!grouped){
+    return `<div class="tbl-wrap"><table class="tbl" id="pdb-tbl"><thead><tr>
+      <th>공종</th><th>품명</th><th>규격</th><th>단위</th>
+      <th>자재단가</th><th>노무단가</th><th>경비단가</th>
+      <th>원가 자재</th><th>원가 노무</th><th></th>
+    </tr></thead><tbody id="pdb-body">${renderPriceDBRows(db)}</tbody></table></div>`;
+  }
+  // Group by category
+  const groups={};
+  db.forEach(d=>{ const cid=d.cid||'기타'; if(!groups[cid])groups[cid]=[]; groups[cid].push(d); });
+  return Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0])).map(([cid,items])=>{
+    const cat=CATS.find(c=>c.id===cid);
+    const totalM=items.reduce((a,d)=>a+(Number(d.mp)||0),0);
+    return `<div class="est-section" style="margin-bottom:8px">
+      <div class="est-sec-hdr" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.est-sec-toggle').classList.toggle('open')">
+        <span class="est-sec-icon">${cat?.icon||'📦'}</span>
+        <span class="est-sec-title">${cat?.nm||cid}</span>
+        <span class="est-sec-count">${items.length}개</span>
+        <span style="flex:1"></span>
+        <span class="est-sec-toggle open">${svgIcon('chevron_down',14)}</span>
+      </div>
+      <div class="est-sec-body open">
+        <table class="tbl"><thead><tr>
+          <th>품명</th><th>규격</th><th>단위</th>
+          <th>자재단가</th><th>노무단가</th><th>경비단가</th>
+          <th>원가 자재</th><th>원가 노무</th><th></th>
+        </tr></thead><tbody>${items.map(d=>`<tr>
+          <td style="font-weight:500">${d.nm}</td>
+          <td style="font-size:11px">${d.spec||'-'}</td>
+          <td>${d.unit||'-'}</td>
+          <td class="num">${fmt(d.mp||0)}</td>
+          <td class="num">${fmt(d.lp||0)}</td>
+          <td class="num">${fmt(d.ep||0)}</td>
+          <td class="num" style="color:var(--g500)">${fmt(d.cmp||0)}</td>
+          <td class="num" style="color:var(--g500)">${fmt(d.clp||0)}</td>
+          <td style="display:flex;gap:4px">
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditPriceItem('${d.id}')">${svgIcon('edit',12)}</button>
+            <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deletePriceItem('${d.id}')">${svgIcon('trash',12)}</button>
+          </td>
+        </tr>`).join('')}</tbody></table>
+      </div>
+    </div>`;
+  }).join('');
 }
 function renderPriceDBRows(db){
   if(!db.length)return`<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--g400)">단가 데이터 없음</td></tr>`;
@@ -2511,7 +2738,8 @@ function filterPriceDB(){
   const q=(document.getElementById('pdb-search')?.value||'').toLowerCase();
   const cat=document.getElementById('pdb-cat')?.value||'';
   let db=getPriceDB().filter(d=>(!q||(d.nm+d.spec).toLowerCase().includes(q))&&(!cat||d.cid===cat));
-  const body=document.getElementById('pdb-body');if(body)body.innerHTML=renderPriceDBRows(db);
+  const content=document.getElementById('pdb-content');
+  if(content)content.innerHTML=renderPriceDBGrouped(db);
 }
 function openAddPriceItem(){
   openModal(`<div class="modal-bg"><div class="modal">
@@ -2540,11 +2768,11 @@ function openAddPriceItem(){
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">취소</button>
-      <button class="btn btn-primary" onclick="savePriceItem()">추가</button>
+      <button class="btn btn-primary" onclick="savePriceItemForm()">추가</button>
     </div>
   </div></div>`);
 }
-function savePriceItem(){
+function savePriceItemForm(){
   const nm=v('pi_nm');if(!nm){toast('품명을 입력하세요','error');return;}
   const db=getPriceDB();
   db.push({id:uid(),cid:v('pi_cid'),nm,spec:v('pi_spec'),unit:v('pi_unit')||'m²',
@@ -2695,7 +2923,7 @@ function renderTax(){
   const ps=getProjects();
   document.getElementById('tb-actions').innerHTML=`<button class="btn btn-primary btn-sm" onclick="openAddTax()">+ 세금계산서 발행</button>`;
   document.getElementById('content').innerHTML=`
-  ${filterBar({statuses:['발행완료','발행예정','미발행'],placeholder:'프로젝트명 검색...'})}
+  ${filterBar({statuses:['발행완료','발행예정','미발행'],placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterTax()'})}
   <div style="background:var(--blue-l);border:1px solid var(--blue);border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--blue)">
     ℹ️ 전자세금계산서 발행은 국세청 홈택스(hometax.go.kr) 또는 연동된 세무 솔루션에서 진행하세요. 
     <a href="https://www.hometax.go.kr" target="_blank" style="font-weight:700;color:var(--blue);text-decoration:underline">홈택스 바로가기</a>
@@ -2704,7 +2932,7 @@ function renderTax(){
     <table class="tbl">
       <thead><tr>
         <th>프로젝트</th><th>고객사</th><th>공급가액</th><th>세액</th>
-        <th>합계금액</th><th>작성일</th><th>상태</th><th></th>
+        <th>합계금액</th><th onclick="sortTbl('tax','date')">작성일 ↕</th><th>상태</th><th></th>
       </tr></thead>
       <tbody>
         ${taxes.map(t=>{const p=getProject(t.pid);return`<tr>
@@ -2781,6 +3009,7 @@ function deleteTax(id){
   saveTaxInvoices(getTaxInvoices().filter(t=>t.id!==id));renderTax();
 }
 function printTax(id){window.print();}
+function filterTax(){renderTax();}
 
 // ===== AS =====
 function renderAS(){
@@ -2788,11 +3017,11 @@ function renderAS(){
   const ps=getProjects();
   document.getElementById('tb-actions').innerHTML=`<button class="btn btn-primary btn-sm" onclick="openAddAS()">+ AS 접수</button>`;
   document.getElementById('content').innerHTML=`
-  ${filterBar({statuses:['접수','처리중','완료'],placeholder:'프로젝트명 검색...'})}
+  ${filterBar({statuses:['접수','처리중','완료'],placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterAS()'})}
   <div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
-        <th>프로젝트</th><th>고객</th><th>접수일</th><th>내용</th>
+        <th>프로젝트</th><th>고객</th><th onclick="sortTbl('as','date')" style="cursor:pointer">접수일 ↕</th><th>내용</th>
         <th>우선순위</th><th>담당자</th><th>상태</th><th>완료일</th><th></th>
       </tr></thead>
       <tbody>
@@ -2871,6 +3100,7 @@ function saveEditAS(aid){
   saveASList(list);closeModal();toast('저장되었습니다','success');renderAS();
 }
 function deleteAS(aid){if(!confirm('삭제?'))return;saveASList(getASList().filter(a=>a.id!==aid));renderAS();}
+function filterAS(){renderAS();}
 
 // ===== TEAM =====
 function renderTeam(){
@@ -2895,6 +3125,7 @@ function renderTeam(){
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-outline btn-sm" style="flex:1" onclick="openEditTeam('${m.id}')">${svgIcon('edit',12)} 편집</button>
+          <button class="btn btn-red btn-sm" onclick="deleteTeamMember('${m.id}')">${svgIcon('trash',12)} 삭제</button>
         </div>
       </div>`;
     }).join('')}
@@ -2960,6 +3191,10 @@ function renderReports(){
   const totalCost=ps.reduce((a,p)=>a+calcP(p).costDirect,0);
   const totalPaid=ps.reduce((a,p)=>a+getPaid(p),0);
   const avgMR=ps.length?ps.reduce((a,p)=>a+getMR(p),0)/ps.length:0;
+  const labor=getLabor();
+  const expenses=getExpenses();
+  const totalLabor=labor.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+  const totalExpense=expenses.reduce((a,e)=>a+(Number(e.amount)||0),0);
   
   document.getElementById('content').innerHTML=`
   <div class="dash-grid" style="margin-bottom:14px">
@@ -2969,42 +3204,130 @@ function renderReports(){
     <div class="kpi-card"><div class="kpi-label">수금완료</div><div class="kpi-value" style="color:var(--blue)">${fmtShort(totalPaid)}<span style="font-size:12px">원</span></div></div>
   </div>
   
-  <div class="dash-2col" style="margin-bottom:14px">
+  <!-- Tabs -->
+  <div class="tab-list" style="margin-bottom:16px">
+    <button class="tab-btn active" onclick="showReportTab(this,'rpt-profit')">수익성 분석</button>
+    <button class="tab-btn" onclick="showReportTab(this,'rpt-labor')">인건비 현황</button>
+    <button class="tab-btn" onclick="showReportTab(this,'rpt-expense')">지출 현황</button>
+    <button class="tab-btn" onclick="showReportTab(this,'rpt-chart')">차트</button>
+  </div>
+  
+  <!-- Profit tab -->
+  <div class="tab-pane active" id="rpt-profit">
     <div class="card">
-      <div class="card-title">상태별 프로젝트 분포</div>
-      <div class="chart-wrap"><canvas id="statusChart"></canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-title">공종별 매출 비중</div>
-      <div class="chart-wrap"><canvas id="catChart"></canvas></div>
+      <div class="card-title">프로젝트 수익성 분석</div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>프로젝트</th><th>도급금액</th><th>예상원가</th>
+            <th>인건비</th><th>지출비</th>
+            <th>마진금액</th><th>마진율</th><th>수금률</th><th>상태</th>
+          </tr></thead>
+          <tbody>
+            ${ps.map(p=>{
+              const calc=calcP(p);const mr=getMR(p);
+              const paid=getPaid(p);const tot=getTotal(p);
+              const paidPct=tot>0?Math.round(paid/tot*100):0;
+              const pLabor=labor.filter(l=>l.pid===p.id).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+              const pExp=expenses.filter(e=>e.pid===p.id).reduce((a,e)=>a+(Number(e.amount)||0),0);
+              return`<tr>
+                <td style="font-weight:600">${p.nm}</td>
+                <td class="num">${tot>0?fmt(tot):'-'}</td>
+                <td class="num">${calc.costDirect>0?fmt(calc.costDirect):'-'}</td>
+                <td class="num" style="color:var(--orange)">${pLabor>0?fmt(pLabor):'-'}</td>
+                <td class="num" style="color:var(--purple)">${pExp>0?fmt(pExp):'-'}</td>
+                <td class="num" style="color:var(--green)">${tot>0?fmt(tot-calc.costDirect):'-'}</td>
+                <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
+                <td>${paidPct}%</td>
+                <td>${statusBadge(p.status)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
   
-  <div class="card">
-    <div class="card-title">프로젝트 수익성 분석</div>
-    <div class="tbl-wrap">
-      <table class="tbl">
-        <thead><tr>
-          <th>프로젝트</th><th>도급금액</th><th>예상원가</th>
-          <th>마진금액</th><th>마진율</th><th>수금률</th><th>상태</th>
-        </tr></thead>
-        <tbody>
-          ${ps.map(p=>{
-            const calc=calcP(p);const mr=getMR(p);
-            const paid=getPaid(p);const tot=getTotal(p);
-            const paidPct=tot>0?Math.round(paid/tot*100):0;
-            return`<tr>
-              <td style="font-weight:600">${p.nm}</td>
-              <td class="num">${tot>0?fmt(tot):'-'}</td>
-              <td class="num">${calc.costDirect>0?fmt(calc.costDirect):'-'}</td>
-              <td class="num" style="color:var(--green)">${tot>0?fmt(tot-calc.costDirect):'-'}</td>
-              <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
-              <td>${paidPct}%</td>
-              <td>${statusBadge(p.status)}</td>
-            </tr>`;
-          }).join('')}
-        </tbody>
-      </table>
+  <!-- Labor tab -->
+  <div class="tab-pane" id="rpt-labor">
+    <div class="dash-grid dash-grid-3" style="margin-bottom:14px">
+      <div class="kpi-card" style="border-left:3px solid var(--orange)"><div class="kpi-label">총 인건비</div><div class="kpi-value" style="color:var(--orange)">${fmtShort(totalLabor)}<span style="font-size:12px">원</span></div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">등록 인원</div><div class="kpi-value" style="color:var(--blue)">${[...new Set(labor.map(l=>l.worker_name))].length}<span style="font-size:12px">명</span></div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미지급</div><div class="kpi-value" style="color:var(--red)">${fmtShort(labor.filter(l=>!l.paid).reduce((a,l)=>a+(Number(l.net_amount)||0),0))}<span style="font-size:12px">원</span></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">프로젝트별 인건비 지급명세서</div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>프로젝트</th><th>작업자수</th><th>총 공수(일)</th><th>총 인건비</th><th>지급완료</th><th>미지급</th><th></th></tr></thead>
+          <tbody>
+            ${ps.map(p=>{
+              const pl=labor.filter(l=>l.pid===p.id);
+              if(!pl.length)return '';
+              const workers=[...new Set(pl.map(l=>l.worker_name))].length;
+              const totalDays=pl.reduce((a,l)=>a+(Number(l.days)||0),0);
+              const totalAmt=pl.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+              const paidAmt=pl.filter(l=>l.paid).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+              return`<tr>
+                <td style="font-weight:600">${p.nm}</td>
+                <td>${workers}명</td>
+                <td>${totalDays}일</td>
+                <td class="num" style="font-weight:700">${fmt(totalAmt)}</td>
+                <td class="num" style="color:var(--green)">${fmt(paidAmt)}</td>
+                <td class="num" style="color:var(--red)">${fmt(totalAmt-paidAmt)}</td>
+                <td><button class="btn btn-outline btn-sm" onclick="openLaborStatement('${p.id}')">명세서</button></td>
+              </tr>`;
+            }).join('')||'<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--g400)">인건비 데이터 없음</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Expense tab -->
+  <div class="tab-pane" id="rpt-expense">
+    <div class="dash-grid dash-grid-3" style="margin-bottom:14px">
+      <div class="kpi-card" style="border-left:3px solid var(--purple)"><div class="kpi-label">총 지출</div><div class="kpi-value" style="color:var(--purple)">${fmtShort(totalExpense)}<span style="font-size:12px">원</span></div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--green)"><div class="kpi-label">승인 건수</div><div class="kpi-value" style="color:var(--green)">${expenses.filter(e=>e.status==='승인').length}<span style="font-size:12px">건</span></div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--orange)"><div class="kpi-label">대기 건수</div><div class="kpi-value" style="color:var(--orange)">${expenses.filter(e=>e.status==='대기').length}<span style="font-size:12px">건</span></div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">프로젝트별 지출 현황</div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>프로젝트</th><th>지출건수</th><th>총 지출</th><th>인건비</th><th>비용합계</th></tr></thead>
+          <tbody>
+            ${ps.map(p=>{
+              const pe=expenses.filter(e=>e.pid===p.id);
+              const pl=labor.filter(l=>l.pid===p.id);
+              if(!pe.length&&!pl.length)return '';
+              const expAmt=pe.reduce((a,e)=>a+(Number(e.amount)||0),0);
+              const labAmt=pl.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+              return`<tr>
+                <td style="font-weight:600">${p.nm}</td>
+                <td>${pe.length}건</td>
+                <td class="num">${fmt(expAmt)}</td>
+                <td class="num">${fmt(labAmt)}</td>
+                <td class="num" style="font-weight:700;color:var(--red)">${fmt(expAmt+labAmt)}</td>
+              </tr>`;
+            }).join('')||'<tr><td colspan="5" style="text-align:center;padding:24px;color:var(--g400)">지출 데이터 없음</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Chart tab -->
+  <div class="tab-pane" id="rpt-chart">
+    <div class="dash-2col" style="margin-bottom:14px">
+      <div class="card">
+        <div class="card-title">상태별 프로젝트 분포</div>
+        <div class="chart-wrap"><canvas id="statusChart"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">공종별 매출 비중</div>
+        <div class="chart-wrap"><canvas id="catChart"></canvas></div>
+      </div>
     </div>
   </div>`;
   
@@ -3098,53 +3421,6 @@ function saveCompanyInfo(){
   });
   toast('회사 정보가 저장되었습니다','success');
 }
-function getStorageSize(){return 'D1 Database (Cloud Sync)';
-  let total=0;
-  for(let k in localStorage){if(k.startsWith('fp4_'))total+=localStorage[k].length;}
-  return`LocalStorage: ${(total/1024).toFixed(1)}KB 사용`;
-}
-function backupData(){
-  const data={};
-  const keys=['projects','vendors','meetings','pricedb','orders_manual','as_list','notices','tax_invoices','msg_templates','team','company'];
-  keys.forEach(k=>{const v=localStorage.getItem('fp4_'+k);if(v)data[k]=JSON.parse(v);});
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download=`frameplus_backup_${today()}.json`;a.click();
-  toast('백업 완료','success');
-}
-function restoreData(input){
-  const file=input.files[0];if(!file)return;
-  const reader=new FileReader();
-  reader.onload=e=>{
-    try{
-      const data=JSON.parse(e.target.result);
-      Object.entries(data).forEach(([k,v])=>localStorage.setItem('fp4_'+k,JSON.stringify(v)));
-      toast('복구 완료. 새로고침합니다.','success');
-      setTimeout(()=>location.reload(),1500);
-    }catch{toast('파일 형식 오류','error');}
-  };
-  reader.readAsText(file);
-}
-function exportAllCSV(){
-  const ps=getProjects();
-  const rows=[['프로젝트명','고객사','담당자','도급금액','마진율','공정%','수금%','상태','날짜']];
-  ps.forEach(p=>{
-    rows.push([p.nm,p.client,p.mgr,getTotal(p),getMR(p).toFixed(1),getProg(p),
-      Math.round(getPaid(p)/Math.max(1,getTotal(p))*100),p.status,p.date]);
-  });
-  const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
-  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download=`frameplus_projects_${today()}.csv`;a.click();
-  toast('CSV 내보내기 완료','success');
-}
-function confirmReset(){
-  if(!confirm('모든 데이터가 삭제됩니다. 계속하시겠습니까?'))return;
-  if(!confirm('정말로 초기화하시겠습니까?'))return;
-  Object.keys(localStorage).filter(k=>k.startsWith('fp4_')).forEach(k=>localStorage.removeItem(k));
-  toast('초기화 완료. 새로고침합니다.','success');
-  setTimeout(()=>location.reload(),1500);
-}
 function openAddNotice(){
   openModal(`<div class="modal-bg"><div class="modal modal-sm">
     <div class="modal-hdr"><span class="modal-title">공지 추가</span><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -3179,13 +3455,9 @@ function sortTbl(tblId,col){
   nav(S.page,S.subPage);
 }
 function printPage(){window.print();}
-function exportXLSX(type){
-  toast(`엑셀 내보내기는 SheetJS 연동 후 사용 가능합니다. CSV를 사용하거나 관리자 > CSV 내보내기를 이용하세요.`,'warning');
-}
 function importXLSX(type){
   toast(`엑셀 업로드는 SheetJS 연동 후 사용 가능합니다.`,'warning');
 }
-function exportProjectsXLSX(){exportAllCSV();}
 
 // ===== INIT =====
 // ===== ASYNC INIT =====
@@ -3278,7 +3550,6 @@ function exportXLSX(type){
   XLSX.writeFile(wb,filename+'.xlsx');
   toast('엑셀 파일이 다운로드되었습니다','success');
 }
-function importXLSX(type){toast('엑셀 업로드 기능은 관리자 > 데이터 관리에서 JSON 복구를 사용하세요.','warning')}
 function exportProjectsXLSX(){exportXLSX('projects')}
 
 // ===== PDF EXPORT (html2pdf.js) =====
@@ -3343,45 +3614,6 @@ function exportAllCSV(){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download='frameplus_projects_'+today()+'.csv';a.click();
   toast('CSV 내보내기 완료','success');
-}
-
-// Make async save functions work with sync callers
-async function saveNewVendor(){
-  const nm=v('vd_nm');if(!nm){toast('업체명을 입력하세요','error');return;}
-  const vd={id:uid(),nm,cid:v('vd_cid'),contact:v('vd_contact'),phone:v('vd_phone'),
-    email:v('vd_email'),addr:v('vd_addr'),rating:Number(v('vd_rating')||3),memo:v('vd_memo')};
-  await saveVendor(vd);closeModal();toast('추가되었습니다','success');renderVendors();
-}
-
-async function saveEditVendor(vid){
-  const vs=getVendors();const i=vs.findIndex(x=>x.id===vid);if(i<0)return;
-  const vd={...vs[i],nm:v('evd_nm'),cid:v('evd_cid'),contact:v('evd_contact'),phone:v('evd_phone'),email:v('evd_email'),addr:v('evd_addr'),rating:Number(v('evd_rating')||3)};
-  await saveVendor(vd);closeModal();toast('저장되었습니다','success');renderVendors();
-}
-
-async function deleteVendor(vid){
-  if(!confirm('삭제?'))return;
-  await deleteVendorRemote(vid);toast('삭제됨');renderVendors();
-}
-
-async function saveNewMeeting(){
-  const title=v('mt_title');if(!title){toast('제목을 입력하세요','error');return;}
-  const m={id:uid(),title,client:v('mt_client'),date:v('mt_date'),time:v('mt_time'),
-    loc:v('mt_loc'),assignee:v('mt_assignee'),status:v('mt_status')||'예정',
-    pid:v('mt_pid'),memo:v('mt_memo')};
-  await saveMeeting(m);closeModal();toast('미팅이 추가되었습니다','success');renderMeetings();
-}
-
-async function saveEditMeeting(mid){
-  const meetings=getMeetings();const i=meetings.findIndex(x=>x.id===mid);if(i<0)return;
-  const m={...meetings[i],title:v('emt_title'),client:v('emt_client'),date:v('emt_date'),
-    time:v('emt_time'),loc:v('emt_loc'),assignee:v('emt_assignee'),status:v('emt_status'),pid:v('emt_pid')};
-  await saveMeeting(m);closeModal();toast('저장되었습니다','success');renderMeetings();
-}
-
-async function deleteMeeting(mid){
-  if(!confirm('삭제하시겠습니까?'))return;
-  await deleteMeetingRemote(mid);toast('삭제되었습니다');renderMeetings();
 }
 
 // Override nav to close mobile menu
@@ -3493,3 +3725,734 @@ function renderContractDetail(){
   '</div>'+
   '</div>';
 }
+
+// ===== DATA ACCESSORS FOR NEW TABLES =====
+function getLabor(){ return _d.labor||[]; }
+function getExpenses(){ return _d.expenses||[]; }
+function getPresets(){ return _d.presets||[]; }
+
+// ===== MONTHLY GROUPING UTILITY =====
+function groupByMonth(items, dateField='date'){
+  const groups={};
+  items.forEach(item=>{
+    const d=item[dateField]||item.created_at||'';
+    const ym=d.slice(0,7)||'날짜없음';
+    if(!groups[ym])groups[ym]=[];
+    groups[ym].push(item);
+  });
+  return Object.entries(groups).sort((a,b)=>b[0].localeCompare(a[0]));
+}
+
+function monthlyAccordion(groups, renderRow, extraHeader=''){
+  if(!groups.length) return '<div style="text-align:center;padding:40px;color:var(--g400)">데이터 없음</div>';
+  return groups.map(([ym, items])=>{
+    const [y,m]=ym.split('-');
+    const label=y&&m?`${y}년 ${parseInt(m)}월`:'날짜없음';
+    return `<div class="card" style="margin-bottom:8px">
+      <div style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:4px 0" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.acc-arrow').classList.toggle('open')">
+        <div style="font-weight:700;font-size:13px">${label} <span style="font-weight:400;color:var(--g500);font-size:12px">(${items.length}건)</span></div>
+        <span class="acc-arrow est-sec-toggle">▼</span>
+      </div>
+      <div class="est-sec-body${groups.indexOf(arguments[0])===0||groups[0][0]===ym?' open':''}">
+        <div class="tbl-wrap" style="margin-top:8px">
+          <table class="tbl">${extraHeader}<tbody>${items.map(renderRow).join('')}</tbody></table>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ===== SORT FIX =====
+let _sortState={};
+function sortTable(tableId, field, items, renderFn){
+  const key=tableId+'_'+field;
+  _sortState[key]=_sortState[key]==='asc'?'desc':'asc';
+  const dir=_sortState[key];
+  items.sort((a,b)=>{
+    let va=a[field]||'', vb=b[field]||'';
+    if(typeof va==='number'&&typeof vb==='number') return dir==='asc'?va-vb:vb-va;
+    va=String(va); vb=String(vb);
+    return dir==='asc'?va.localeCompare(vb):vb.localeCompare(va);
+  });
+  renderFn(items);
+}
+
+// ===== LABOR COSTS (인건비·노무비) =====
+function renderLabor(){
+  document.getElementById('tb-title').textContent='인건비·노무비';
+  const ps=getProjects();
+  const labor=getLabor();
+  
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="exportXLSX('labor')">${svgIcon('download',12)} 엑셀</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddLabor()">+ 노무비 등록</button>`;
+  
+  // 프로젝트별 탭
+  const allPids=[...new Set(labor.map(l=>l.pid))];
+  const totalLabor=labor.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+  const unpaidLabor=labor.filter(l=>!l.paid).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+  
+  const groups=groupByMonth(labor);
+  
+  document.getElementById('content').innerHTML=`
+  <div class="dash-grid" style="margin-bottom:16px">
+    <div class="kpi-card" style="border-left:3px solid var(--blue)">
+      <div class="kpi-label">총 노무비</div>
+      <div class="kpi-value" style="color:var(--blue)">${fmtShort(totalLabor)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid var(--red)">
+      <div class="kpi-label">미지급</div>
+      <div class="kpi-value" style="color:var(--red)">${fmtShort(unpaidLabor)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid var(--green)">
+      <div class="kpi-label">지급완료</div>
+      <div class="kpi-value" style="color:var(--green)">${fmtShort(totalLabor-unpaidLabor)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid var(--purple)">
+      <div class="kpi-label">등록 인원</div>
+      <div class="kpi-value" style="color:var(--purple)">${[...new Set(labor.map(l=>l.worker_name))].length}<span style="font-size:12px">명</span></div>
+    </div>
+  </div>
+  
+  ${filterBar({statuses:['미지급','지급완료'],placeholder:'작업자명 검색...'})}
+  
+  <div class="tbl-wrap">
+    <table class="tbl" id="labor-tbl">
+      <thead><tr>
+        <th>날짜</th><th>프로젝트</th><th>작업자</th><th>직종</th>
+        <th style="text-align:right">일당</th><th style="text-align:right">일수</th>
+        <th style="text-align:right">식대</th><th style="text-align:right">교통비</th>
+        <th style="text-align:right">공제</th><th style="text-align:right">지급액</th>
+        <th>상태</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${labor.map(l=>{
+          const p=ps.find(x=>x.id===l.pid);
+          return `<tr>
+            <td>${l.date||''}</td>
+            <td>${p?.nm||l.pid||'-'}</td>
+            <td style="font-weight:600">${l.worker_name||''}</td>
+            <td>${l.worker_type||''}</td>
+            <td class="num">${fmt(l.daily_rate)}</td>
+            <td class="num">${l.days||0}</td>
+            <td class="num">${fmt(l.meal_cost)}</td>
+            <td class="num">${fmt(l.transport_cost)}</td>
+            <td class="num" style="color:var(--red)">${fmt(l.deduction)}</td>
+            <td class="num" style="font-weight:700">${fmt(l.net_amount)}</td>
+            <td>${l.paid?'<span class="badge badge-green">지급완료</span>':'<span class="badge badge-red">미지급</span>'}</td>
+            <td>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditLabor('${l.id}')" title="수정">${svgIcon('edit',12)}</button>
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteLabor('${l.id}')" title="삭제" style="color:var(--red)">${svgIcon('trash',12)}</button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="12" style="text-align:center;padding:40px;color:var(--g400)">등록된 노무비가 없습니다</td></tr>'}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function openAddLabor(){
+  const ps=getProjects();
+  const workerTypes=['목공','전기','도장','설비','타일','철거','잡공','미장','방수','기타'];
+  openModal(`<div class="modal-bg"><div class="modal">
+    <div class="modal-hdr"><span class="modal-title">노무비 등록</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트 *</label><select class="sel" id="lb_pid">${ps.map(p=>`<option value="${p.id}">${p.nm}</option>`).join('')}</select></div>
+        <div><label class="lbl">날짜 *</label><input class="inp" id="lb_date" type="date" value="${today()}"></div>
+        <div><label class="lbl">지급방법</label><select class="sel" id="lb_method"><option>계좌이체</option><option>현금</option><option>카드</option></select></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">작업자명 *</label><input class="inp" id="lb_name" placeholder="홍길동"></div>
+        <div><label class="lbl">직종 *</label><select class="sel" id="lb_type">${workerTypes.map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">일당 *</label><input class="inp" id="lb_rate" type="number" placeholder="250000"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">일수 *</label><input class="inp" id="lb_days" type="number" value="1" step="0.5"></div>
+        <div><label class="lbl">식대</label><input class="inp" id="lb_meal" type="number" value="10000"></div>
+        <div><label class="lbl">교통비</label><input class="inp" id="lb_trans" type="number" value="0"></div>
+        <div><label class="lbl">공제액</label><input class="inp" id="lb_ded" type="number" value="0"></div>
+      </div>
+      <div class="form-row" style="margin-bottom:12px">
+        <div><label class="lbl">메모</label><textarea class="inp" id="lb_memo" rows="2"></textarea></div>
+      </div>
+      <div style="background:var(--g50);border-radius:8px;padding:12px;font-size:13px">
+        <strong>예상 지급액:</strong> <span id="lb_preview" style="font-size:16px;font-weight:700;color:var(--blue)">₩0</span>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveLabor()">등록</button>
+    </div>
+  </div></div>`);
+  // 실시간 계산
+  ['lb_rate','lb_days','lb_meal','lb_trans','lb_ded'].forEach(id=>{
+    document.getElementById(id)?.addEventListener('input',()=>{
+      const rate=Number(document.getElementById('lb_rate').value)||0;
+      const days=Number(document.getElementById('lb_days').value)||0;
+      const meal=Number(document.getElementById('lb_meal').value)||0;
+      const trans=Number(document.getElementById('lb_trans').value)||0;
+      const ded=Number(document.getElementById('lb_ded').value)||0;
+      const net=rate*days+meal*days+trans-ded;
+      document.getElementById('lb_preview').textContent='₩'+fmt(net);
+    });
+  });
+  document.getElementById('lb_rate').dispatchEvent(new Event('input'));
+}
+
+async function saveLabor(){
+  const rate=Number(document.getElementById('lb_rate').value)||0;
+  const days=Number(document.getElementById('lb_days').value)||0;
+  const meal=Number(document.getElementById('lb_meal').value)||0;
+  const trans=Number(document.getElementById('lb_trans').value)||0;
+  const ded=Number(document.getElementById('lb_ded').value)||0;
+  const total=rate*days;
+  const net=total+meal*days+trans-ded;
+  const data={
+    id:'lb'+Date.now(),
+    pid:document.getElementById('lb_pid').value,
+    date:document.getElementById('lb_date').value,
+    worker_name:document.getElementById('lb_name').value,
+    worker_type:document.getElementById('lb_type').value,
+    daily_rate:rate, days:days, total:total,
+    meal_cost:meal*days, transport_cost:trans,
+    overtime_cost:0, deduction:ded, net_amount:net,
+    paid:0, paid_date:'',
+    payment_method:document.getElementById('lb_method').value,
+    memo:document.getElementById('lb_memo').value
+  };
+  if(!data.worker_name){toast('작업자명을 입력하세요','error');return;}
+  await api('labor','POST',data);
+  _d.labor=await api('labor');
+  closeModal();renderLabor();toast('노무비가 등록되었습니다','success');
+}
+
+function openEditLabor(id){
+  const l=getLabor().find(x=>x.id===id);if(!l)return;
+  const ps=getProjects();
+  const workerTypes=['목공','전기','도장','설비','타일','철거','잡공','미장','방수','기타'];
+  openModal(`<div class="modal-bg"><div class="modal">
+    <div class="modal-hdr"><span class="modal-title">노무비 수정</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트</label><select class="sel" id="lb_pid">${ps.map(p=>`<option value="${p.id}" ${p.id===l.pid?'selected':''}>${p.nm}</option>`).join('')}</select></div>
+        <div><label class="lbl">날짜</label><input class="inp" id="lb_date" type="date" value="${l.date||''}"></div>
+        <div><label class="lbl">지급상태</label><select class="sel" id="lb_paid"><option value="0" ${!l.paid?'selected':''}>미지급</option><option value="1" ${l.paid?'selected':''}>지급완료</option></select></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">작업자명</label><input class="inp" id="lb_name" value="${l.worker_name||''}"></div>
+        <div><label class="lbl">직종</label><select class="sel" id="lb_type">${workerTypes.map(t=>`<option ${t===l.worker_type?'selected':''}>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">일당</label><input class="inp" id="lb_rate" type="number" value="${l.daily_rate||0}"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">일수</label><input class="inp" id="lb_days" type="number" value="${l.days||0}" step="0.5"></div>
+        <div><label class="lbl">식대</label><input class="inp" id="lb_meal" type="number" value="${l.meal_cost||0}"></div>
+        <div><label class="lbl">교통비</label><input class="inp" id="lb_trans" type="number" value="${l.transport_cost||0}"></div>
+        <div><label class="lbl">공제액</label><input class="inp" id="lb_ded" type="number" value="${l.deduction||0}"></div>
+      </div>
+      <div><label class="lbl">메모</label><textarea class="inp" id="lb_memo" rows="2">${l.memo||''}</textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="updateLabor('${id}')">저장</button>
+    </div>
+  </div></div>`);
+}
+
+async function updateLabor(id){
+  const rate=Number(document.getElementById('lb_rate').value)||0;
+  const days=Number(document.getElementById('lb_days').value)||0;
+  const meal=Number(document.getElementById('lb_meal').value)||0;
+  const trans=Number(document.getElementById('lb_trans').value)||0;
+  const ded=Number(document.getElementById('lb_ded').value)||0;
+  const net=rate*days+meal+trans-ded;
+  await api('labor/'+id,'PUT',{
+    pid:document.getElementById('lb_pid').value,
+    date:document.getElementById('lb_date').value,
+    worker_name:document.getElementById('lb_name').value,
+    worker_type:document.getElementById('lb_type').value,
+    daily_rate:rate, days:days, total:rate*days,
+    meal_cost:meal, transport_cost:trans, deduction:ded, net_amount:net,
+    paid:Number(document.getElementById('lb_paid').value),
+    payment_method:'', memo:document.getElementById('lb_memo').value
+  });
+  _d.labor=await api('labor');
+  closeModal();renderLabor();toast('수정되었습니다','success');
+}
+
+async function deleteLabor(id){
+  if(!confirm('삭제하시겠습니까?'))return;
+  await api('labor/'+id,'DELETE');
+  _d.labor=await api('labor');
+  renderLabor();toast('삭제되었습니다');
+}
+
+// ===== EXPENSES (지출결의서) =====
+function renderExpenses(){
+  document.getElementById('tb-title').textContent='지출결의서';
+  const ps=getProjects();
+  const exps=getExpenses();
+  const totalAmt=exps.reduce((a,e)=>a+(Number(e.amount)||0),0);
+  const pending=exps.filter(e=>e.status==='대기');
+  const approved=exps.filter(e=>e.status==='승인');
+  
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="exportXLSX('expenses')">${svgIcon('download',12)} 엑셀</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddExpense()">+ 지출결의서 작성</button>`;
+  
+  document.getElementById('content').innerHTML=`
+  <div class="dash-grid" style="margin-bottom:16px">
+    <div class="kpi-card" style="border-left:3px solid var(--blue)">
+      <div class="kpi-label">총 지출</div>
+      <div class="kpi-value" style="color:var(--blue)">${fmtShort(totalAmt)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid var(--orange)">
+      <div class="kpi-label">결재 대기</div>
+      <div class="kpi-value" style="color:var(--orange)">${pending.length}<span style="font-size:12px">건</span></div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid var(--green)">
+      <div class="kpi-label">승인 완료</div>
+      <div class="kpi-value" style="color:var(--green)">${approved.length}<span style="font-size:12px">건</span></div>
+    </div>
+    <div class="kpi-card" style="border-left:3px solid var(--red)">
+      <div class="kpi-label">반려</div>
+      <div class="kpi-value" style="color:var(--red)">${exps.filter(e=>e.status==='반려').length}<span style="font-size:12px">건</span></div>
+    </div>
+  </div>
+  
+  ${filterBar({statuses:['대기','승인','반려','지급완료'],placeholder:'제목, 업체명 검색...'})}
+  
+  <div class="tbl-wrap">
+    <table class="tbl" id="expenses-tbl">
+      <thead><tr>
+        <th>날짜</th><th>프로젝트</th><th>분류</th><th>제목</th>
+        <th>업체/거래처</th><th style="text-align:right">금액</th>
+        <th>결제방법</th><th>요청자</th><th>상태</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${exps.map(e=>{
+          const p=ps.find(x=>x.id===e.pid);
+          const stColor={'대기':'orange','승인':'green','반려':'red','지급완료':'blue'}[e.status]||'gray';
+          return `<tr>
+            <td>${e.date||''}</td>
+            <td>${p?.nm||'-'}</td>
+            <td><span class="badge badge-gray">${e.category||'기타'}</span></td>
+            <td style="font-weight:600">${e.title||''}</td>
+            <td>${e.vendor||'-'}</td>
+            <td class="num" style="font-weight:700">₩${fmt(e.amount)}</td>
+            <td>${e.payment_method||'-'}</td>
+            <td>${e.requester||'-'}</td>
+            <td><span class="badge badge-${stColor}">${e.status}</span></td>
+            <td>
+              <div style="display:flex;gap:4px">
+                ${e.status==='대기'?`<button class="btn btn-green btn-sm" onclick="approveExpense('${e.id}')" style="padding:3px 8px;font-size:11px">승인</button>
+                <button class="btn btn-red btn-sm" onclick="rejectExpense('${e.id}')" style="padding:3px 8px;font-size:11px">반려</button>`:''}
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditExpense('${e.id}')" title="수정">${svgIcon('edit',12)}</button>
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteExpense('${e.id}')" title="삭제" style="color:var(--red)">${svgIcon('trash',12)}</button>
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="sendExpenseApproval('${e.id}')" title="결재요청 이메일">${svgIcon('mail',12)}</button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('')||'<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--g400)">등록된 지출결의서가 없습니다</td></tr>'}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function openAddExpense(){
+  const ps=getProjects();
+  const cats=['자재비','외주비','장비임대','교통비','식대','소모품','기타'];
+  const co=getCompany();
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">지출결의서 작성</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트</label><select class="sel" id="exp_pid"><option value="">공통</option>${ps.map(p=>`<option value="${p.id}">${p.nm}</option>`).join('')}</select></div>
+        <div><label class="lbl">날짜 *</label><input class="inp" id="exp_date" type="date" value="${today()}"></div>
+        <div><label class="lbl">분류 *</label><select class="sel" id="exp_cat">${cats.map(c=>`<option>${c}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">제목 *</label><input class="inp" id="exp_title" placeholder="자재 구매 - 타일"></div>
+        <div><label class="lbl">업체/거래처</label><input class="inp" id="exp_vendor" placeholder="업체명"></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">금액 (VAT포함) *</label><input class="inp" id="exp_amt" type="number" placeholder="1100000"></div>
+        <div><label class="lbl">결제방법</label><select class="sel" id="exp_method"><option>법인카드</option><option>계좌이체</option><option>현금</option><option>개인카드</option></select></div>
+        <div><label class="lbl">증빙유형</label><select class="sel" id="exp_receipt"><option>세금계산서</option><option>카드영수증</option><option>간이영수증</option><option>현금영수증</option><option>없음</option></select></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">요청자</label><input class="inp" id="exp_req" value="${co.ceo||''}"></div>
+        <div><label class="lbl">결재자</label><input class="inp" id="exp_appr" value="${co.ceo||''}"></div>
+      </div>
+      <div><label class="lbl">메모/사유</label><textarea class="inp" id="exp_memo" rows="3" placeholder="지출 사유를 상세히 기재하세요..."></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveExpense()">결의서 제출</button>
+    </div>
+  </div></div>`);
+}
+
+async function saveExpense(){
+  const title=document.getElementById('exp_title').value;
+  const amt=Number(document.getElementById('exp_amt').value)||0;
+  if(!title){toast('제목을 입력하세요','error');return;}
+  if(!amt){toast('금액을 입력하세요','error');return;}
+  const data={
+    id:'exp'+Date.now(),
+    pid:document.getElementById('exp_pid').value,
+    date:document.getElementById('exp_date').value,
+    category:document.getElementById('exp_cat').value,
+    title:title, amount:amt,
+    tax_amount:Math.round(amt/11),
+    vendor:document.getElementById('exp_vendor').value,
+    payment_method:document.getElementById('exp_method').value,
+    receipt_type:document.getElementById('exp_receipt').value,
+    requester:document.getElementById('exp_req').value,
+    approver:document.getElementById('exp_appr').value,
+    status:'대기',
+    memo:document.getElementById('exp_memo').value
+  };
+  await api('expenses','POST',data);
+  _d.expenses=await api('expenses');
+  closeModal();renderExpenses();toast('지출결의서가 제출되었습니다','success');
+}
+
+function openEditExpense(id){
+  const e=getExpenses().find(x=>x.id===id);if(!e)return;
+  const ps=getProjects();
+  const cats=['자재비','외주비','장비임대','교통비','식대','소모품','기타'];
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">지출결의서 수정</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트</label><select class="sel" id="exp_pid"><option value="">공통</option>${ps.map(p=>`<option value="${p.id}" ${p.id===e.pid?'selected':''}>${p.nm}</option>`).join('')}</select></div>
+        <div><label class="lbl">날짜</label><input class="inp" id="exp_date" type="date" value="${e.date||''}"></div>
+        <div><label class="lbl">분류</label><select class="sel" id="exp_cat">${cats.map(c=>`<option ${c===e.category?'selected':''}>${c}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">제목</label><input class="inp" id="exp_title" value="${e.title||''}"></div>
+        <div><label class="lbl">금액</label><input class="inp" id="exp_amt" type="number" value="${e.amount||0}"></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">업체</label><input class="inp" id="exp_vendor" value="${e.vendor||''}"></div>
+        <div><label class="lbl">상태</label><select class="sel" id="exp_status"><option ${e.status==='대기'?'selected':''}>대기</option><option ${e.status==='승인'?'selected':''}>승인</option><option ${e.status==='반려'?'selected':''}>반려</option><option ${e.status==='지급완료'?'selected':''}>지급완료</option></select></div>
+      </div>
+      <div><label class="lbl">메모</label><textarea class="inp" id="exp_memo" rows="2">${e.memo||''}</textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="updateExpense('${id}')">저장</button>
+    </div>
+  </div></div>`);
+}
+
+async function updateExpense(id){
+  await api('expenses/'+id,'PUT',{
+    pid:document.getElementById('exp_pid').value,
+    date:document.getElementById('exp_date').value,
+    category:document.getElementById('exp_cat').value,
+    title:document.getElementById('exp_title').value,
+    amount:Number(document.getElementById('exp_amt').value)||0,
+    vendor:document.getElementById('exp_vendor').value,
+    status:document.getElementById('exp_status').value,
+    memo:document.getElementById('exp_memo').value
+  });
+  _d.expenses=await api('expenses');
+  closeModal();renderExpenses();toast('수정되었습니다','success');
+}
+
+async function approveExpense(id){
+  if(!confirm('승인하시겠습니까?'))return;
+  await api('expenses/'+id,'PUT',{status:'승인',approved_date:today()});
+  _d.expenses=await api('expenses');
+  renderExpenses();toast('✅ 승인 완료','success');
+}
+async function rejectExpense(id){
+  const reason=prompt('반려 사유를 입력하세요:');
+  if(reason===null)return;
+  await api('expenses/'+id,'PUT',{status:'반려',reject_reason:reason});
+  _d.expenses=await api('expenses');
+  renderExpenses();toast('반려되었습니다','warning');
+}
+async function deleteExpense(id){
+  if(!confirm('삭제하시겠습니까?'))return;
+  await api('expenses/'+id,'DELETE');
+  _d.expenses=await api('expenses');
+  renderExpenses();toast('삭제되었습니다');
+}
+
+async function sendExpenseApproval(id){
+  const e=getExpenses().find(x=>x.id===id);if(!e)return;
+  const co=getCompany();
+  const p=getProjects().find(x=>x.id===e.pid);
+  openModal(`<div class="modal-bg"><div class="modal modal-sm">
+    <div class="modal-hdr"><span class="modal-title">${svgIcon('mail',16)} 결재 요청 이메일</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px"><label class="lbl">결재자 이메일 *</label><input class="inp" id="appr-email" placeholder="ceo@company.com" value="${co.email||''}"></div>
+      <div style="background:var(--g50);border-radius:8px;padding:12px;font-size:12px">
+        <div style="font-weight:600;margin-bottom:6px">📋 결의서 내용</div>
+        <div>• 제목: ${e.title}</div>
+        <div>• 금액: ₩${fmt(e.amount)}</div>
+        <div>• 프로젝트: ${p?.nm||'공통'}</div>
+        <div>• 요청자: ${e.requester||'-'}</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-blue" onclick="doSendExpenseApproval('${id}')">📧 결재요청 발송</button>
+    </div>
+  </div></div>`);
+}
+
+async function doSendExpenseApproval(id){
+  const e=getExpenses().find(x=>x.id===id);if(!e)return;
+  const to=document.getElementById('appr-email').value.trim();
+  if(!to||!to.includes('@')){toast('이메일을 입력하세요','error');return;}
+  const co=getCompany();
+  const p=getProjects().find(x=>x.id===e.pid);
+  const html=`<div style="font-family:sans-serif;max-width:600px;margin:0 auto">
+    <div style="background:#0a0a0a;color:#fff;padding:24px;text-align:center;border-radius:8px 8px 0 0"><h2 style="margin:0">지출결의서 결재 요청</h2><p style="margin:4px 0 0;opacity:.6;font-size:12px">${co.name||'Frame Plus'}</p></div>
+    <div style="padding:24px;background:#fff;border:1px solid #eee;border-radius:0 0 8px 8px">
+      <p style="margin:0 0 16px;color:#333">아래 지출결의서의 결재를 요청드립니다.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5;width:100px">제목</td><td style="padding:8px;border:1px solid #e5e5e5">${e.title}</td></tr>
+        <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5">금액</td><td style="padding:8px;border:1px solid #e5e5e5;font-weight:700">₩${fmt(e.amount)}</td></tr>
+        <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5">프로젝트</td><td style="padding:8px;border:1px solid #e5e5e5">${p?.nm||'공통'}</td></tr>
+        <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5">분류</td><td style="padding:8px;border:1px solid #e5e5e5">${e.category||'-'}</td></tr>
+        <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5">요청자</td><td style="padding:8px;border:1px solid #e5e5e5">${e.requester||'-'}</td></tr>
+        <tr><td style="padding:8px;background:#f8f8f8;font-weight:600;border:1px solid #e5e5e5">사유</td><td style="padding:8px;border:1px solid #e5e5e5">${e.memo||'-'}</td></tr>
+      </table>
+      <p style="margin:16px 0 0;font-size:11px;color:#999">Frame Plus ERP에서 자동 발송되었습니다.</p>
+    </div></div>`;
+  try{
+    const res=await api('email/send','POST',{to,subject:`[결재요청] 지출결의서 - ${e.title} (₩${fmt(e.amount)})`,html,from_name:co.name});
+    if(res?.success){closeModal();toast('✉️ 결재요청 이메일이 발송되었습니다!','success');}
+    else toast('발송 실패: '+(res?.error||''),'error');
+  }catch(err){toast('오류: '+err.message,'error');}
+}
+
+// ===== TEAM DELETE (팀원 삭제) =====
+async function deleteTeamMember(tid){
+  if(!confirm('팀원을 삭제하시겠습니까?'))return;
+  await api('team/'+tid,'DELETE');
+  _d.team=await api('team');
+  renderTeam();toast('삭제되었습니다');
+}
+
+// ===== REPORT TAB HELPERS =====
+function showReportTab(btn, tabId){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.tab-pane').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');
+  const pane=document.getElementById(tabId);
+  if(pane)pane.classList.add('active');
+  // Render charts if chart tab
+  if(tabId==='rpt-chart'){
+    setTimeout(()=>{
+      const ps=getProjects();
+      const sctx=document.getElementById('statusChart');
+      if(sctx&&!sctx._rendered){
+        const labels=Object.keys(STATUS_LABELS);
+        const vals=labels.map(l=>ps.filter(p=>p.status===l).length);
+        new Chart(sctx,{type:'doughnut',data:{labels,datasets:[{data:vals,backgroundColor:['#9ca3af','#3b82f6','#8b5cf6','#f59e0b','#22c55e','#ef4444']}]},options:{responsive:true,maintainAspectRatio:false}});
+        sctx._rendered=true;
+      }
+      const cctx=document.getElementById('catChart');
+      if(cctx&&!cctx._rendered){
+        const catTotals={};
+        ps.forEach(p=>{const calc=calcP(p);Object.entries(calc.cs).forEach(([cid,cs])=>{catTotals[cid]=(catTotals[cid]||0)+cs.t;});});
+        const sorted=Object.entries(catTotals).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).slice(0,8);
+        new Chart(cctx,{type:'bar',data:{labels:sorted.map(([cid])=>catNm(cid)),datasets:[{data:sorted.map(([,v])=>Math.round(v/10000)),backgroundColor:'rgba(37,99,235,.8)',borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`}}},responsive:true,maintainAspectRatio:false}});
+        cctx._rendered=true;
+      }
+    },100);
+  }
+}
+
+function openLaborStatement(pid){
+  const p=getProject(pid);if(!p)return;
+  const labor=getLabor().filter(l=>l.pid===pid);
+  const co=getCompany();
+  const totalNet=labor.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
+  const workers=[...new Set(labor.map(l=>l.worker_name))];
+  openModal(`<div class="modal-bg"><div class="modal modal-xl" style="max-height:92vh">
+    <div class="modal-hdr">
+      <span class="modal-title">📋 인건비 지급명세서 — ${p.nm}</span>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline btn-sm" onclick="window.print()">${svgIcon('print',12)} 인쇄</button>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--dark);color:#fff;border-radius:8px;padding:16px 20px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:16px;font-weight:700">${p.nm} 인건비 명세</div>
+          <div style="font-size:12px;opacity:.6">${co.name||'Frame Plus'} · ${today()}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:12px;opacity:.6">총 인건비</div>
+          <div style="font-size:24px;font-weight:800">₩${fmt(totalNet)}</div>
+        </div>
+      </div>
+      <div class="dash-grid dash-grid-3" style="margin-bottom:16px">
+        <div class="kpi-card"><div class="kpi-label">투입 인원</div><div class="kpi-value">${workers.length}명</div></div>
+        <div class="kpi-card"><div class="kpi-label">총 공수</div><div class="kpi-value">${labor.reduce((a,l)=>a+(Number(l.days)||0),0)}일</div></div>
+        <div class="kpi-card"><div class="kpi-label">평균 일당</div><div class="kpi-value" style="font-size:16px">${fmt(labor.length?totalNet/labor.reduce((a,l)=>a+(Number(l.days)||0),0):0)}원</div></div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>날짜</th><th>작업자</th><th>직종</th><th>일당</th><th>일수</th><th>식대</th><th>교통비</th><th>공제</th><th>지급액</th><th>상태</th></tr></thead>
+          <tbody>
+            ${labor.map(l=>`<tr>
+              <td>${l.date||''}</td><td style="font-weight:600">${l.worker_name}</td><td>${l.worker_type||''}</td>
+              <td class="num">${fmt(l.daily_rate)}</td><td class="num">${l.days}</td>
+              <td class="num">${fmt(l.meal_cost)}</td><td class="num">${fmt(l.transport_cost)}</td>
+              <td class="num" style="color:var(--red)">${fmt(l.deduction)}</td>
+              <td class="num" style="font-weight:700">${fmt(l.net_amount)}</td>
+              <td>${l.paid?'<span class="badge badge-green">지급</span>':'<span class="badge badge-red">미지급</span>'}</td>
+            </tr>`).join('')}
+            <tr style="background:var(--g50)">
+              <td colspan="8" style="font-weight:700;text-align:right">합계</td>
+              <td class="num" style="font-weight:800;font-size:14px">${fmt(totalNet)}</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div></div>`);
+}
+
+// ===== WORK PRESET (공종 프리셋) =====
+function applyPreset(cid, pid){
+  const presets=getPresets();
+  const preset=presets.find(p=>p.cid===cid);
+  if(!preset){toast('해당 공종의 프리셋이 없습니다','warning');return;}
+  let items=[];
+  try{items=JSON.parse(preset.items||'[]');}catch{}
+  if(!items.length){toast('프리셋 항목이 없습니다','warning');return;}
+  
+  const p=getProject(pid);if(!p)return;
+  const existing=p.items||[];
+  items.forEach(item=>{
+    existing.push({
+      id:'i'+Math.random().toString(36).slice(2,6),
+      cid:cid, nm:item.nm, spec:item.spec||'', unit:item.unit||'식',
+      qty:item.qty||1, mp:item.mp||0, lp:item.lp||0, ep:item.ep||0,
+      sp:1, cmp:0, clp:0, cep:0, rm:''
+    });
+  });
+  p.items=existing;
+  toast(`✅ ${preset.name} 프리셋 ${items.length}개 항목이 추가되었습니다`,'success');
+  renderEstimate();
+}
+
+// ===== ESTIMATE PHOTO UPLOAD (Base64) =====
+function uploadEstPhoto(iid){
+  const inp=document.createElement('input');
+  inp.type='file';inp.accept='image/*';
+  inp.onchange=function(e){
+    const file=e.target.files[0];if(!file)return;
+    if(file.size>2*1024*1024){toast('파일 크기가 2MB를 초과합니다','error');return;}
+    const reader=new FileReader();
+    reader.onload=function(ev){
+      const base64=ev.target.result;
+      const p=getProject(S.editingEstPid);if(!p)return;
+      const it=p.items.find(i=>i.id===iid);if(!it)return;
+      it.photo=base64;saveProject(p);
+      toast('사진이 등록되었습니다','success');
+      renderEstimate();
+    };
+    reader.readAsDataURL(file);
+  };
+  inp.click();
+}
+function viewEstPhoto(iid){
+  const p=getProject(S.editingEstPid);if(!p)return;
+  const it=p.items.find(i=>i.id===iid);if(!it||!it.photo)return;
+  openModal(`<div class="modal-bg"><div class="modal" style="max-width:600px">
+    <div class="modal-hdr"><span class="modal-title">품목 사진 — ${it.nm||'항목'}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body" style="text-align:center">
+      <img src="${it.photo}" style="max-width:100%;border-radius:8px;margin-bottom:12px">
+      <div style="display:flex;gap:8px;justify-content:center">
+        <button class="btn btn-outline btn-sm" onclick="uploadEstPhoto('${iid}')">사진 변경</button>
+        <button class="btn btn-red btn-sm" onclick="removeEstPhoto('${iid}')">사진 삭제</button>
+      </div>
+    </div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">닫기</button></div>
+  </div></div>`);
+}
+function removeEstPhoto(iid){
+  const p=getProject(S.editingEstPid);if(!p)return;
+  const it=p.items.find(i=>i.id===iid);if(!it)return;
+  delete it.photo;saveProject(p);closeModal();toast('사진이 삭제되었습니다');renderEstimate();
+}
+
+// ===== ORDER ITEM EDITING =====
+function updateOrderItem(idx,field,val){
+  const orders=getOrders();
+  const o=orders.find(x=>x.id===S.selOid);if(!o||!o.items)return;
+  const it=o.items[idx];if(!it)return;
+  if(field==='qty'||field==='price'){
+    it[field]=Number(val)||0;
+    it.amount=(it.qty||1)*(it.price||0);
+  } else {
+    it[field]=val;
+  }
+  o.amount=o.items.reduce((a,i)=>a+(i.amount||0),0);
+  api('orders_manual/'+o.id,'PUT',{...o,items:JSON.stringify(o.items),amount:o.amount});
+  renderOrderDetail();
+}
+function removeOrderItem(idx){
+  const orders=getOrders();
+  const o=orders.find(x=>x.id===S.selOid);if(!o||!o.items)return;
+  o.items.splice(idx,1);
+  o.amount=o.items.reduce((a,i)=>a+(i.amount||0),0);
+  api('orders_manual/'+o.id,'PUT',{...o,items:JSON.stringify(o.items),amount:o.amount});
+  renderOrderDetail();
+}
+function addOrderItem(){
+  const orders=getOrders();
+  const o=orders.find(x=>x.id===S.selOid);if(!o)return;
+  if(!o.items)o.items=[];
+  o.items.push({nm:'',spec:'',unit:'식',qty:1,price:0,amount:0});
+  o.amount=o.items.reduce((a,i)=>a+(i.amount||0),0);
+  api('orders_manual/'+o.id,'PUT',{...o,items:JSON.stringify(o.items),amount:o.amount});
+  renderOrderDetail();
+}
+function updateOrder(field,val){
+  const orders=getOrders();
+  const o=orders.find(x=>x.id===S.selOid);if(!o)return;
+  if(field==='date'){o.orderDate=val;o.order_date=val;}
+  else if(field==='taxInvoice'||field==='paid'){o[field]=val;}
+  else o[field]=val;
+  api('orders_manual/'+o.id,'PUT',o);
+}
+
+// ===== MONTHLY ACCORDION (enhanced) =====
+function monthlyAccordion(groups, renderRowFn, headerHtml){
+  if(!groups.length) return '<div style="text-align:center;padding:40px;color:var(--g400)">데이터 없음</div>';
+  return groups.map(([ym, items],idx)=>{
+    const [y,m]=ym.split('-');
+    const label=y&&m?`${y}년 ${parseInt(m)}월`:'날짜없음';
+    const isOpen=idx===0;
+    return `<div class="card" style="margin-bottom:8px">
+      <div style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:4px 0" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.est-sec-toggle').classList.toggle('open')">
+        <div style="font-weight:700;font-size:13px">${label} <span style="font-weight:400;color:var(--g500);font-size:12px">(${items.length}건)</span></div>
+        <span class="est-sec-toggle ${isOpen?'open':''}">▼</span>
+      </div>
+      <div class="est-sec-body${isOpen?' open':''}">
+        <div class="tbl-wrap" style="margin-top:8px">
+          <table class="tbl"><thead>${headerHtml}</thead><tbody>${items.map(renderRowFn).join('')}</tbody></table>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ===== CAMERA SVG ICON ADDITION =====
+// (svgIcon 'camera' is used for photo upload button)
+
