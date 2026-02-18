@@ -634,18 +634,70 @@ function renderDash(){
 }
 
 function loadWeather(){
-  // Using wttr.in public API
-  fetch('https://wttr.in/Seoul?format=j1')
+  // OpenWeatherMap API via server proxy
+  fetch('/api/weather?city=Seoul')
     .then(r=>r.json())
     .then(d=>{
-      const c=d.current_condition[0];
-      const temp=c.temp_C;
-      const desc=c.weatherDesc[0].value;
-      const icons={'Sunny':'☀️','Clear':'🌙','Partly cloudy':'⛅','Cloudy':'☁️','Overcast':'☁️','Rain':'🌧️','Snow':'❄️','Fog':'🌫️','Thunder':'⛈️'};
-      const icon=Object.entries(icons).find(([k])=>desc.includes(k))?.[1]||'🌤️';
+      if(d.error){console.warn('Weather error:',d.error);return;}
+      const iconMap={'01d':'☀️','01n':'🌙','02d':'⛅','02n':'⛅','03d':'☁️','03n':'☁️','04d':'☁️','04n':'☁️','09d':'🌧️','09n':'🌧️','10d':'🌦️','10n':'🌧️','11d':'⛈️','11n':'⛈️','13d':'❄️','13n':'❄️','50d':'🌫️','50n':'🌫️'};
+      const icon=iconMap[d.icon]||'🌤️';
+      const warnings=[];
+      if(d.rain_warning)warnings.push('<span style="color:var(--blue)">🌧 비</span>');
+      if(d.snow_warning)warnings.push('<span style="color:var(--blue)">❄️ 눈</span>');
+      if(!d.outdoor_ok)warnings.push('<span style="color:var(--red)">⚠️ 외부작업주의</span>');
       const el=document.getElementById('weather-widget');
-      if(el)el.innerHTML=`<span style="font-size:24px">${icon}</span><div><div style="font-weight:600;color:var(--dark)">서울 · ${temp}°C</div><div style="font-size:11px">${desc}</div></div>`;
-    }).catch(()=>{});
+      if(el)el.innerHTML=`
+        <img src="${d.icon_url}" width="40" height="40" style="margin:-8px" alt="weather">
+        <div style="flex:1">
+          <div style="font-weight:600;color:var(--dark)">${d.city} · ${d.temp}°C <span style="font-weight:400;font-size:11px;color:var(--g500)">(체감 ${d.feels_like}°C)</span></div>
+          <div style="font-size:11px">${d.description} · 습도 ${d.humidity}% · 풍속 ${d.wind_speed}m/s</div>
+          ${warnings.length?`<div style="font-size:10px;margin-top:2px;display:flex;gap:6px">${warnings.join('')}</div>`:''}
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="openWeatherForecast()" style="font-size:11px">5일예보 →</button>`;
+    }).catch(()=>{
+      const el=document.getElementById('weather-widget');
+      if(el)el.innerHTML='<span>🌤️</span><div style="color:var(--g400)">날씨 정보 로딩중...</div>';
+    });
+}
+
+function openWeatherForecast(){
+  fetch('/api/weather/forecast?city=Seoul')
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.error||!d.forecast){toast('예보 데이터를 가져올 수 없습니다','error');return;}
+      const days=['일','월','화','수','목','금','토'];
+      const rows=d.forecast.map(f=>{
+        const dt=new Date(f.date);
+        const day=days[dt.getDay()];
+        const iconMap={'01d':'☀️','02d':'⛅','03d':'☁️','04d':'☁️','09d':'🌧️','10d':'🌦️','11d':'⛈️','13d':'❄️','50d':'🌫️'};
+        const icon=iconMap[f.icon]||'🌤️';
+        return `<tr style="${f.rain?'background:var(--blue-l)':''}">
+          <td style="font-weight:600">${f.date} (${day})</td>
+          <td style="font-size:20px">${icon}</td>
+          <td>${f.description}</td>
+          <td style="text-align:right;color:var(--blue)">${f.temp_min}°</td>
+          <td style="text-align:right;color:var(--red)">${f.temp_max}°</td>
+          <td>${f.rain?'<span class="badge badge-blue">🌧 강수</span>':'<span class="badge badge-green">☀ 맑음</span>'}</td>
+        </tr>`;
+      }).join('');
+      openModal(`<div class="modal-bg"><div class="modal">
+        <div class="modal-hdr">
+          <span class="modal-title">🌤️ ${d.city} 5일 날씨 예보</span>
+          <button class="modal-close" onclick="closeModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="background:var(--orange-l);border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--orange)">
+            💡 <strong>시공 참고:</strong> 비/눈 예보일에는 외부 작업 일정 조정을 권장합니다.
+          </div>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>날짜</th><th></th><th>날씨</th><th style="text-align:right">최저</th><th style="text-align:right">최고</th><th>강수</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>
+      </div></div>`);
+    }).catch(e=>toast('예보 조회 실패: '+e.message,'error'));
 }
 
 // ===== PROJECTS =====
@@ -1983,7 +2035,90 @@ function aiReviewContract(){
     </div>
   </div>`;
 }
-function checkSpelling(){toast('맞춤법 검사는 외부 API 연동이 필요합니다. 네이버 맞춤법 검사기를 활용하세요.','warning');}
+function checkSpelling(){
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr">
+      <span class="modal-title">📝 AI 맞춤법 검사 (GPT-4o)</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <label class="lbl">검사할 텍스트를 입력하세요</label>
+        <textarea class="inp" id="spell-input" rows="6" placeholder="견적서, 계약서, 이메일 등 검사할 텍스트를 붙여넣기 하세요...&#10;&#10;예: 강남구 역삼동에 위치한 카페 인테리어 공사를 진행합니다. 공사 기간은 약 2개월이며, 하자보수 기간은 2년 입니다."></textarea>
+        <div style="text-align:right;font-size:11px;color:var(--g400);margin-top:4px"><span id="spell-count">0</span>/5,000자</div>
+      </div>
+      <div id="spell-result" style="display:none"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">닫기</button>
+      <button class="btn btn-blue" id="spell-btn" onclick="doSpellCheck()">🔍 맞춤법 검사</button>
+    </div>
+  </div></div>`);
+  const inp=document.getElementById('spell-input');
+  if(inp)inp.addEventListener('input',()=>{
+    const cnt=document.getElementById('spell-count');
+    if(cnt)cnt.textContent=inp.value.length;
+  });
+}
+async function doSpellCheck(){
+  const text=document.getElementById('spell-input')?.value?.trim();
+  if(!text){toast('텍스트를 입력해주세요','warning');return;}
+  if(text.length>5000){toast('최대 5,000자까지 검사 가능합니다','error');return;}
+  const btn=document.getElementById('spell-btn');
+  const result=document.getElementById('spell-result');
+  if(btn){btn.disabled=true;btn.innerHTML='🔄 검사중...';}
+  if(result){result.style.display='block';result.innerHTML='<div class="loading">AI가 맞춤법을 검사하고 있습니다</div>';}
+  try{
+    const res=await api('spellcheck','POST',{text});
+    if(res&&!res.error){
+      const score=res.score||0;
+      const scoreColor=score>=90?'var(--green)':score>=70?'var(--orange)':'var(--red)';
+      const scoreEmoji=score>=90?'🎉':score>=70?'📝':'⚠️';
+      let html=`
+        <div style="display:flex;gap:16px;margin-bottom:16px">
+          <div style="background:var(--g50);border-radius:12px;padding:16px;text-align:center;min-width:100px">
+            <div style="font-size:32px;font-weight:800;color:${scoreColor}">${score}</div>
+            <div style="font-size:11px;color:var(--g500)">맞춤법 점수</div>
+            <div style="font-size:16px;margin-top:4px">${scoreEmoji}</div>
+          </div>
+          <div style="flex:1">
+            <div style="font-weight:600;margin-bottom:8px">교정 결과</div>
+            <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px;line-height:1.8;white-space:pre-wrap">${res.corrected||text}</div>
+          </div>
+        </div>`;
+      if(res.errors&&res.errors.length>0){
+        html+=`<div style="font-weight:600;margin-bottom:8px">🔍 발견된 오류 (${res.errors.length}건)</div>`;
+        html+=`<div style="display:flex;flex-direction:column;gap:6px">`;
+        res.errors.forEach((e,i)=>{
+          html+=`<div style="background:var(--orange-l);border-radius:8px;padding:10px 14px;font-size:12px">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+              <span style="font-weight:700;color:var(--red);text-decoration:line-through">${e.original}</span>
+              <span style="color:var(--g400)">→</span>
+              <span style="font-weight:700;color:var(--green)">${e.corrected}</span>
+            </div>
+            <div style="color:var(--g600)">${e.reason||''}</div>
+          </div>`;
+        });
+        html+=`</div>`;
+      }else{
+        html+=`<div style="background:var(--green-l);border-radius:8px;padding:14px;text-align:center;color:var(--green);font-weight:600">✅ 맞춤법 오류가 없습니다! 완벽합니다.</div>`;
+      }
+      html+=`<div style="margin-top:12px;text-align:right"><button class="btn btn-outline btn-sm" onclick="copySpellResult()">📋 교정문 복사</button></div>`;
+      if(result)result.innerHTML=html;
+    }else{
+      if(result)result.innerHTML=`<div style="background:var(--red-l);color:var(--red);padding:12px;border-radius:8px">❌ 검사 실패: ${res?.error||'알 수 없는 오류'}</div>`;
+    }
+  }catch(e){
+    if(result)result.innerHTML=`<div style="background:var(--red-l);color:var(--red);padding:12px;border-radius:8px">❌ 오류: ${e.message}</div>`;
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML='🔍 맞춤법 검사';}
+  }
+}
+function copySpellResult(){
+  const el=document.querySelector('#spell-result .corrected-text')||document.querySelector('#spell-result div[style*="white-space:pre-wrap"]');
+  if(el){navigator.clipboard.writeText(el.textContent).then(()=>toast('교정된 텍스트가 복사되었습니다','success')).catch(()=>toast('복사 실패','error'));}
+  else{toast('복사할 내용이 없습니다','warning');}
+}
 
 // ===== MEETINGS =====
 function renderMeetings(){

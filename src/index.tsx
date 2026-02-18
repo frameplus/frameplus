@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string }
 type App = { Bindings: Bindings }
 
 const app = new Hono<App>()
@@ -128,6 +128,217 @@ app.post('/api/init', async (c) => {
 
 // Health check
 app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v5.0' }))
+
+// ===== WEATHER API (OpenWeatherMap Proxy) =====
+app.get('/api/weather', async (c) => {
+  const apiKey = c.env.OPENWEATHER_API_KEY
+  if (!apiKey) return c.json({ error: 'OPENWEATHER_API_KEY not configured' }, 500)
+
+  const lat = c.req.query('lat') || '37.5665'  // Seoul default
+  const lon = c.req.query('lon') || '126.9780'
+  const city = c.req.query('city')
+
+  try {
+    let url: string
+    if (city) {
+      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=kr`
+    } else {
+      url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric&lang=kr`
+    }
+
+    const res = await fetch(url)
+    const data = await res.json() as Record<string, unknown>
+    if (!res.ok) return c.json({ error: 'Weather API error', detail: data }, res.status)
+
+    // 간결한 응답 포맷
+    const main = data.main as Record<string, number>
+    const weather = (data.weather as Array<Record<string, string>>)?.[0]
+    const wind = data.wind as Record<string, number>
+    const clouds = data.clouds as Record<string, number>
+
+    return c.json({
+      city: (data.name as string) || city || 'Seoul',
+      temp: Math.round(main?.temp || 0),
+      feels_like: Math.round(main?.feels_like || 0),
+      temp_min: Math.round(main?.temp_min || 0),
+      temp_max: Math.round(main?.temp_max || 0),
+      humidity: main?.humidity || 0,
+      description: weather?.description || '',
+      icon: weather?.icon || '01d',
+      icon_url: `https://openweathermap.org/img/wn/${weather?.icon || '01d'}@2x.png`,
+      wind_speed: wind?.speed || 0,
+      clouds: clouds?.all || 0,
+      // 시공 현장 날씨 판단
+      outdoor_ok: (main?.temp > 0 && main?.temp < 38 && (wind?.speed || 0) < 10),
+      rain_warning: !!(data.rain || (weather?.main === 'Rain')),
+      snow_warning: !!(data.snow || (weather?.main === 'Snow'))
+    })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return c.json({ error: msg }, 500)
+  }
+})
+
+// 5일 예보 (시공 일정 참고용)
+app.get('/api/weather/forecast', async (c) => {
+  const apiKey = c.env.OPENWEATHER_API_KEY
+  if (!apiKey) return c.json({ error: 'OPENWEATHER_API_KEY not configured' }, 500)
+
+  const lat = c.req.query('lat') || '37.5665'
+  const lon = c.req.query('lon') || '126.9780'
+  const city = c.req.query('city')
+
+  try {
+    let url: string
+    if (city) {
+      url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=kr&cnt=40`
+    } else {
+      url = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric&lang=kr&cnt=40`
+    }
+
+    const res = await fetch(url)
+    const data = await res.json() as Record<string, unknown>
+    if (!res.ok) return c.json({ error: 'Forecast API error', detail: data }, res.status)
+
+    const list = (data.list as Array<Record<string, unknown>>) || []
+    // 일별 그룹핑 (3시간 간격 → 일 단위)
+    const daily: Record<string, { temps: number[]; desc: string; icon: string; rain: boolean }> = {}
+    list.forEach((item) => {
+      const dt = (item.dt_txt as string)?.split(' ')[0] || ''
+      if (!daily[dt]) daily[dt] = { temps: [], desc: '', icon: '', rain: false }
+      const main = item.main as Record<string, number>
+      const weather = (item.weather as Array<Record<string, string>>)?.[0]
+      daily[dt].temps.push(main?.temp || 0)
+      if (weather?.icon?.includes('d')) { daily[dt].desc = weather?.description || ''; daily[dt].icon = weather?.icon || '' }
+      if (weather?.main === 'Rain' || weather?.main === 'Snow' || item.rain || item.snow) daily[dt].rain = true
+    })
+
+    const forecast = Object.entries(daily).slice(0, 5).map(([date, d]) => ({
+      date,
+      temp_min: Math.round(Math.min(...d.temps)),
+      temp_max: Math.round(Math.max(...d.temps)),
+      description: d.desc,
+      icon: d.icon,
+      icon_url: `https://openweathermap.org/img/wn/${d.icon || '01d'}@2x.png`,
+      rain: d.rain
+    }))
+
+    return c.json({ city: (data.city as Record<string, string>)?.name || 'Seoul', forecast })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return c.json({ error: msg }, 500)
+  }
+})
+
+// ===== SPELLCHECK API (OpenAI) =====
+app.post('/api/spellcheck', async (c) => {
+  const apiKey = c.env.OPENAI_API_KEY
+  if (!apiKey) return c.json({ error: 'OPENAI_API_KEY not configured' }, 500)
+
+  const body = await c.req.json()
+  const { text } = body
+  if (!text || typeof text !== 'string') return c.json({ error: 'text is required' }, 400)
+  if (text.length > 5000) return c.json({ error: 'Text too long (max 5000 chars)' }, 400)
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.1,
+        messages: [
+          {
+            role: 'system',
+            content: `당신은 한국어 맞춤법 검사 전문가입니다. 사용자가 보낸 텍스트의 맞춤법, 띄어쓰기, 문법 오류를 검사하세요.
+
+반드시 아래 JSON 형식으로만 응답하세요:
+{
+  "corrected": "교정된 전체 텍스트",
+  "errors": [
+    {"original": "틀린 부분", "corrected": "올바른 표현", "reason": "간단한 설명"}
+  ],
+  "score": 0-100 (맞춤법 점수)
+}
+
+오류가 없으면 errors를 빈 배열로, score를 100으로 반환하세요.`
+          },
+          { role: 'user', content: text }
+        ]
+      })
+    })
+
+    const data = await res.json() as Record<string, unknown>
+    if (!res.ok) return c.json({ error: 'OpenAI API error', detail: data }, res.status)
+
+    const choices = data.choices as Array<Record<string, unknown>>
+    const content = (choices?.[0]?.message as Record<string, string>)?.content || '{}'
+
+    // JSON 파싱 시도
+    try {
+      const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+      const result = JSON.parse(cleaned)
+      return c.json(result)
+    } catch {
+      return c.json({ corrected: content, errors: [], score: 0, raw: true })
+    }
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return c.json({ error: msg }, 500)
+  }
+})
+
+// ===== AI 문서 작성 도우미 (OpenAI) =====
+app.post('/api/ai/assist', async (c) => {
+  const apiKey = c.env.OPENAI_API_KEY
+  if (!apiKey) return c.json({ error: 'OPENAI_API_KEY not configured' }, 500)
+
+  const body = await c.req.json()
+  const { type, context } = body
+
+  if (!type) return c.json({ error: 'type is required' }, 400)
+
+  const prompts: Record<string, string> = {
+    'estimate_memo': `인테리어 견적서에 들어갈 전문적인 메모/비고를 작성하세요. 현장 정보: ${context}. 3줄 이내로 간결하게 작성하세요.`,
+    'meeting_summary': `미팅 내용을 요약하세요: ${context}. 핵심 사항, 결정 사항, 후속 조치를 구분하여 작성하세요.`,
+    'contract_clause': `인테리어 공사 계약서에 포함할 특약 조항을 제안하세요. 공사 정보: ${context}. 법적으로 유효한 문구로 3가지 제안하세요.`,
+    'email_draft': `인테리어 공사 관련 이메일을 작성하세요. 상황: ${context}. 전문적이고 정중한 톤으로 작성하세요.`
+  }
+
+  const prompt = prompts[type] || `${context}`
+
+  try {
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.7,
+        max_tokens: 1000,
+        messages: [
+          { role: 'system', content: '당신은 인테리어/건설 업계 전문 비서입니다. 한국어로 전문적이고 실용적인 문서를 작성합니다.' },
+          { role: 'user', content: prompt }
+        ]
+      })
+    })
+
+    const data = await res.json() as Record<string, unknown>
+    if (!res.ok) return c.json({ error: 'OpenAI API error', detail: data }, res.status)
+
+    const choices = data.choices as Array<Record<string, unknown>>
+    const content = (choices?.[0]?.message as Record<string, string>)?.content || ''
+    return c.json({ result: content })
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    return c.json({ error: msg }, 500)
+  }
+})
 
 // ===== EMAIL API (Resend) =====
 // 견적서/계약서 이메일 발송
