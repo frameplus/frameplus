@@ -1,7 +1,8 @@
-// ===== Frame Plus ERP v6 - Full-Stack Frontend =====
+// ===== Frame Plus ERP v7 - Pluuug-Inspired SaaS Design =====
 // D1 Database backend with in-memory cache for UI performance
-// v6: Dark mode, Notifications, Approval workflow, Cost flow dashboard,
-//     Browser routing, Optimistic UI, Enhanced templates, Price DB hierarchy
+// v7: Complete UI redesign inspired by Pluuug.com SaaS platform
+//     Modern card-based dashboard, purple accent, clean typography,
+//     Cost flow visualization, enhanced KPI cards, professional tables
 
 // ===== API LAYER (with Optimistic UI support) =====
 async function api(path, method, body) {
@@ -451,11 +452,11 @@ function nav(page,sub=null,pid=null,pushHistory=true){
   document.getElementById('tb-sub').textContent='';
   // Add dark mode toggle + notification bell to topbar
   document.getElementById('tb-actions').innerHTML=`
-    <button class="btn btn-ghost btn-icon" onclick="toggleDarkMode()" title="다크모드">
+    <button class="btn btn-ghost btn-icon" onclick="toggleDarkMode()" title="다크모드" style="font-size:16px">
       ${S.darkMode?'☀️':'🌙'}
     </button>
-    <button class="btn btn-ghost btn-icon" style="position:relative" onclick="toggleNotifPanel()" title="알림">
-      🔔<span id="notif-badge" class="sb-badge" style="position:absolute;top:2px;right:2px;font-size:8px;${getUnreadCount()>0?'':'display:none'}">${getUnreadCount()}</span>
+    <button class="btn btn-ghost btn-icon" style="position:relative;font-size:16px" onclick="toggleNotifPanel()" title="알림">
+      🔔<span id="notif-badge" style="position:absolute;top:3px;right:3px;background:var(--danger);color:#fff;font-size:8px;font-weight:700;border-radius:10px;padding:1px 4px;min-width:14px;text-align:center;line-height:1.3;${getUnreadCount()>0?'':'display:none'}">${getUnreadCount()}</span>
     </button>
   `;
   const content=document.getElementById('content');
@@ -504,9 +505,9 @@ function toggleNotifPanel() {
   const existing = document.getElementById('notif-panel');
   if(existing) { existing.remove(); return; }
   const notifs = (_d.notifications||[]).slice(0,20);
-  const h = `<div id="notif-panel" style="position:fixed;top:52px;right:16px;width:360px;max-height:480px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-md);z-index:500;overflow:hidden;display:flex;flex-direction:column">
-    <div style="padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:14px;font-weight:700">알림</span>
+  const h = `<div id="notif-panel" style="position:fixed;top:56px;right:16px;width:380px;max-height:480px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow-lg);z-index:500;overflow:hidden;display:flex;flex-direction:column;animation:slideUp .2s ease">
+    <div style="padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:15px;font-weight:700;color:var(--text)">알림</span>
       <div style="display:flex;gap:6px">
         <button class="btn btn-ghost btn-sm" onclick="markAllNotifsRead();document.getElementById('notif-panel')?.remove()">모두 읽음</button>
         <button class="btn btn-ghost btn-sm" onclick="document.getElementById('notif-panel')?.remove();nav('notifications')">전체보기</button>
@@ -517,19 +518,20 @@ function toggleNotifPanel() {
         const isUnread = n.status==='unread';
         const typeIcon = {'approval':'📋','alert':'⚠️','expense':'💰','payment':'💳','system':'⚙️'}[n.type]||'🔔';
         const timeAgo = getTimeAgo(n.created_at);
-        return `<div style="padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;background:${isUnread?'var(--blue-l)':'transparent'}" 
+        return `<div style="padding:12px 18px;border-bottom:1px solid var(--border-light);cursor:pointer;transition:background .15s;${isUnread?'background:var(--primary-light);border-left:3px solid var(--primary)':''}" 
+          onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background='${isUnread?'var(--primary-light)':''}'"
           onclick="markNotifRead('${n.id}');${n.action_url?`nav('${n.action_url}');`:''}document.getElementById('notif-panel')?.remove()">
-          <div style="display:flex;align-items:flex-start;gap:8px">
-            <span style="font-size:16px;flex-shrink:0">${typeIcon}</span>
+          <div style="display:flex;align-items:flex-start;gap:10px">
+            <span style="font-size:16px;flex-shrink:0;margin-top:1px">${typeIcon}</span>
             <div style="flex:1;min-width:0">
-              <div style="font-size:12.5px;font-weight:${isUnread?'600':'400'};color:var(--dark)">${n.title||''}</div>
-              <div style="font-size:11px;color:var(--g500);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.message||''}</div>
-              <div style="font-size:10px;color:var(--g400);margin-top:3px">${timeAgo}</div>
+              <div style="font-size:13px;font-weight:${isUnread?'600':'400'};color:var(--text)">${n.title||''}</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.message||''}</div>
+              <div style="font-size:10px;color:var(--text-muted);margin-top:3px">${timeAgo}</div>
             </div>
-            ${isUnread?'<span style="width:6px;height:6px;border-radius:50%;background:var(--blue);flex-shrink:0;margin-top:5px"></span>':''}
+            ${isUnread?'<span style="width:7px;height:7px;border-radius:50%;background:var(--primary);flex-shrink:0;margin-top:6px"></span>':''}
           </div>
         </div>`;
-      }).join(''):`<div style="padding:32px;text-align:center;color:var(--g400);font-size:12px">알림이 없습니다</div>`}
+      }).join(''):`<div style="padding:40px;text-align:center;color:var(--text-muted);font-size:13px">알림이 없습니다</div>`}
     </div>
   </div>`;
   document.body.insertAdjacentHTML('beforeend', h);
@@ -687,7 +689,7 @@ function tableActions(opts={}){
   </div>`;
 }
 
-// ===== DASHBOARD =====
+// ===== DASHBOARD (Pluuug-inspired) =====
 function renderDash(){
   const ps=getProjects();
   const meetings=getMeetings();
@@ -720,6 +722,7 @@ function renderDash(){
   const totalProfit = totalContract - totalCosts;
   const profitRate = totalContract > 0 ? (totalProfit/totalContract*100) : 0;
   const pendingApprovalsCnt = getPendingApprovals().length;
+  const collectionRate = totalContract > 0 ? Math.round(totalPaid/totalContract*100) : 0;
   
   // Date display
   const now=new Date();
@@ -731,218 +734,221 @@ function renderDash(){
   ps.forEach(p=>{if(estStatus[p.status]!==undefined)estStatus[p.status]++;});
   
   const co=getCompany();
+  const activeProjects = ps.filter(p=>['계약완료','시공중'].includes(p.status));
+  
   document.getElementById('content').innerHTML=`
-  <div style="margin-bottom:16px;display:flex;align-items:center;justify-content:space-between">
+  <div style="animation:fadeIn .4s ease">
+  <!-- Welcome Header -->
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
     <div>
-      <div style="font-size:11px;color:var(--g500);margin-bottom:2px">${dateStr}</div>
-      <div style="font-size:18px;font-weight:700;font-family:var(--serif)">안녕하세요, ${co.ceo||'김승환'}님 👋</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${dateStr}</div>
+      <div style="font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--text)">안녕하세요, ${co.ceo||'김승환'}님</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-top:4px">오늘의 비즈니스 현황을 확인하세요</div>
     </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      ${pendingApprovalsCnt>0?`<button class="btn btn-outline btn-sm" onclick="nav('approvals')" style="color:var(--orange)">📋 결재 대기 <span class="sb-badge">${pendingApprovalsCnt}</span></button>`:''}
-      <div id="weather-widget" style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);padding:10px 16px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--g600)">
-        <span style="font-size:24px">⛅</span>
-        <div><div style="font-weight:600;color:var(--dark)">서울 · 맑음</div><div>기온 정보 로딩중...</div></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      ${pendingApprovalsCnt>0?`<button class="btn btn-outline btn-sm" onclick="nav('approvals')" style="border-color:var(--warning);color:var(--warning)">
+        ${svgIcon('check',12)} 결재 대기 <span style="background:var(--warning);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px">${pendingApprovalsCnt}</span>
+      </button>`:''}
+      <div id="weather-widget" style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:8px 14px;display:flex;align-items:center;gap:10px;font-size:12px;min-width:200px">
+        <span style="font-size:22px">⛅</span>
+        <div><div style="font-weight:600;color:var(--text)">서울</div><div style="color:var(--text-muted)">로딩중...</div></div>
       </div>
     </div>
   </div>
   
-  <!-- 비용 흐름 요약 (Cost Flow Summary) -->
-  <div class="card" style="margin-bottom:14px;background:linear-gradient(135deg,var(--dark) 0%,var(--charcoal) 100%);color:#fff;border:none">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div style="font-size:14px;font-weight:700;letter-spacing:.03em">💰 비용 흐름 요약</div>
-      <div style="font-size:11px;opacity:.6">견적→계약→비용→수금→수익</div>
+  <!-- Cost Flow Pipeline (Pluuug-inspired) -->
+  <div class="cost-flow">
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">총 견적액</div>
+      <div class="cost-flow-value">${fmtShort(totalEstimate)}</div>
+      <div class="cost-flow-sub">${ps.length}건 진행</div>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
-      <div style="text-align:center">
-        <div style="font-size:10px;opacity:.5;margin-bottom:4px">총 견적액</div>
-        <div style="font-size:18px;font-weight:800">${fmtShort(totalEstimate)}</div>
-        <div style="font-size:10px;opacity:.4">${ps.length}건</div>
-      </div>
-      <div style="text-align:center;position:relative">
-        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
-        <div style="font-size:10px;opacity:.5;margin-bottom:4px">계약액</div>
-        <div style="font-size:18px;font-weight:800;color:#60a5fa">${fmtShort(totalContract)}</div>
-        <div style="font-size:10px;opacity:.4">${ps.filter(p=>['계약완료','시공중','완료'].includes(p.status)).length}건</div>
-      </div>
-      <div style="text-align:center;position:relative">
-        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
-        <div style="font-size:10px;opacity:.5;margin-bottom:4px">총 비용</div>
-        <div style="font-size:18px;font-weight:800;color:#f87171">${fmtShort(totalCosts)}</div>
-        <div style="font-size:10px;opacity:.4">인건${fmtShort(totalLaborCost)} · 자재${fmtShort(totalOrderCost)}</div>
-      </div>
-      <div style="text-align:center;position:relative">
-        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
-        <div style="font-size:10px;opacity:.5;margin-bottom:4px">수금액</div>
-        <div style="font-size:18px;font-weight:800;color:#4ade80">${fmtShort(totalPaid)}</div>
-        <div style="font-size:10px;opacity:.4">미수금 ${fmtShort(totalUnpaid)}</div>
-      </div>
-      <div style="text-align:center;position:relative">
-        <div style="position:absolute;left:-8px;top:50%;transform:translateY(-50%);opacity:.3">→</div>
-        <div style="font-size:10px;opacity:.5;margin-bottom:4px">수익</div>
-        <div style="font-size:18px;font-weight:800;color:${profitRate>=10?'#4ade80':profitRate>=0?'#fbbf24':'#f87171'}">${fmtShort(totalProfit)}</div>
-        <div style="font-size:10px;opacity:.4">마진율 ${profitRate.toFixed(1)}%</div>
-      </div>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">계약 총액</div>
+      <div class="cost-flow-value" style="color:var(--primary)">${fmtShort(totalContract)}</div>
+      <div class="cost-flow-sub">${ps.filter(p=>['계약완료','시공중','완료'].includes(p.status)).length}건 계약</div>
     </div>
-    <div style="margin-top:12px;height:4px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden;display:flex">
-      <div style="height:100%;background:#60a5fa;width:${totalContract>0?Math.min(totalPaid/totalContract*100,100):0}%"></div>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">투입 비용</div>
+      <div class="cost-flow-value" style="color:var(--danger)">${fmtShort(totalCosts)}</div>
+      <div class="cost-flow-sub">인건 ${fmtShort(totalLaborCost)} + 자재 ${fmtShort(totalOrderCost)}</div>
     </div>
-    <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;opacity:.4">
-      <span>수금 진행률</span><span>${totalContract>0?Math.round(totalPaid/totalContract*100):0}%</span>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">수금 현황</div>
+      <div class="cost-flow-value" style="color:var(--success)">${fmtShort(totalPaid)}</div>
+      <div class="cost-flow-sub">수금률 ${collectionRate}%</div>
+    </div>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">예상 수익</div>
+      <div class="cost-flow-value" style="color:${profitRate>=10?'var(--success)':profitRate>=0?'var(--warning)':'var(--danger)'}">${fmtShort(totalProfit)}</div>
+      <div class="cost-flow-sub">마진율 ${profitRate.toFixed(1)}%</div>
     </div>
   </div>
-
-  <!-- KPI -->
-  <div class="dash-grid" style="margin-bottom:14px">
-    <div class="kpi-card" style="border-left:3px solid var(--blue)">
-      <div class="kpi-label">오늘 미팅</div>
-      <div class="kpi-value" style="color:var(--blue)">${todayMeetings.length}<span style="font-size:14px;font-weight:400">건</span></div>
-      <div class="kpi-sub">${todayMeetings.slice(0,2).map(m=>m.title).join(' · ')||'일정 없음'}</div>
+  
+  <!-- KPI Cards -->
+  <div class="dash-grid" style="margin-bottom:20px">
+    <div class="kpi-card kpi-primary">
+      <div class="kpi-label">${svgIcon('clipboard',12)} 활성 프로젝트</div>
+      <div class="kpi-value">${activeProjects.length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
+      <div class="kpi-sub">${ps.filter(p=>p.status==='시공중').length} 시공중 · ${ps.filter(p=>p.status==='계약완료').length} 계약완료</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid var(--orange)">
-      <div class="kpi-label">이번주 착공 예정</div>
-      <div class="kpi-value" style="color:var(--orange)">${weekStarting.length}<span style="font-size:14px;font-weight:400">건</span></div>
-      <div class="kpi-sub">${weekStarting.slice(0,2).map(p=>p.nm).join(' · ')||'-'}</div>
+    <div class="kpi-card kpi-info">
+      <div class="kpi-label">${svgIcon('calendar',12)} 오늘 미팅</div>
+      <div class="kpi-value">${todayMeetings.length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
+      <div class="kpi-sub">${todayMeetings.slice(0,2).map(m=>m.title).join(', ')||'일정 없음'}</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid var(--red)">
-      <div class="kpi-label">이번주 수금 예정</div>
-      <div class="kpi-value" style="color:var(--red)">${fmtShort(weekCollection)}<span style="font-size:12px;font-weight:400">원</span></div>
-      <div class="kpi-sub">VAT 별도</div>
+    <div class="kpi-card kpi-danger">
+      <div class="kpi-label">${svgIcon('dollar',12)} 총 미수금</div>
+      <div class="kpi-value">${fmtShort(totalUnpaid)}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">원</span></div>
+      <div class="kpi-sub">이번주 수금예정 ${fmtShort(weekCollection)}원</div>
     </div>
-    <div class="kpi-card" style="border-left:3px solid var(--purple)">
-      <div class="kpi-label">총 미수금</div>
-      <div class="kpi-value" style="color:var(--purple)">${fmtShort(totalUnpaid)}<span style="font-size:12px;font-weight:400">원</span></div>
-      <div class="kpi-sub">진행중 ${ps.filter(p=>['계약완료','시공중'].includes(p.status)).length}건</div>
+    <div class="kpi-card kpi-warning">
+      <div class="kpi-label">${svgIcon('alert',12)} 리스크 알림</div>
+      <div class="kpi-value">${risks.length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
+      <div class="kpi-sub">${risks.filter(r=>r.lv==='high').length} 긴급 · ${risks.filter(r=>r.lv==='mid').length} 주의</div>
     </div>
   </div>
   
   <div class="dash-3col">
-    <!-- Left -->
-    <div style="display:flex;flex-direction:column;gap:14px">
-      <!-- Weekly schedule -->
+    <!-- Left Column -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <!-- Active Projects Table -->
       <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="card-title" style="margin-bottom:0">이번주 일정</div>
-          <button class="btn btn-ghost btn-sm" onclick="nav('meetings')">전체 보기</button>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div class="card-title" style="margin-bottom:0">${svgIcon('activity',14)} 진행중 프로젝트</div>
+          <button class="btn btn-ghost btn-sm" onclick="nav('projects')">전체 보기 →</button>
         </div>
-        ${weekMeetings.length?`<div style="display:flex;flex-direction:column;gap:8px">
-          ${weekMeetings.map(m=>`<div style="display:flex;align-items:center;gap:10px;padding:8px;background:var(--g50);border-radius:var(--radius)">
-            <div style="text-align:center;min-width:36px;background:var(--blue);color:#fff;border-radius:6px;padding:4px">
-              <div style="font-size:10px;font-weight:600">${new Date(m.date).getMonth()+1}/${new Date(m.date).getDate()}</div>
-              <div style="font-size:11px">${m.time||''}</div>
-            </div>
-            <div style="flex:1">
-              <div style="font-size:12.5px;font-weight:600">${m.title}</div>
-              <div style="font-size:11px;color:var(--g500)">${m.client} · ${m.loc||''}</div>
-            </div>
-            ${statusBadge(m.status)}
-          </div>`).join('')}
-        </div>`:
-        `<div style="text-align:center;padding:24px;color:var(--g400);font-size:12px">이번주 일정이 없습니다</div>`}
-      </div>
-      
-      <!-- Project status -->
-      <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="card-title" style="margin-bottom:0">프로젝트 현황</div>
-          <button class="btn btn-ghost btn-sm" onclick="nav('projects')">전체 보기</button>
-        </div>
-        <div class="tbl-wrap">
+        ${activeProjects.length?`<div class="tbl-wrap" style="border:none">
           <table class="tbl">
             <thead><tr>
-              <th>프로젝트</th><th>공정%</th><th>수금%</th><th>마진율</th><th>상태</th>
+              <th>프로젝트</th><th>공정률</th><th>수금률</th><th>마진율</th><th>상태</th>
             </tr></thead>
             <tbody>
-              ${ps.filter(p=>['계약완료','시공중'].includes(p.status)).map(p=>{
+              ${activeProjects.slice(0,6).map(p=>{
                 const prog=getProg(p);const paid=getPaid(p);const tot=getTotal(p);
                 const paidPct=tot>0?Math.round(paid/tot*100):0;
                 const mr=getMR(p);
-                return `<tr>
-                  <td><div style="font-weight:500;font-size:12.5px">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.client}</div></td>
-                  <td><div class="prog prog-blue" style="width:80px"><div class="prog-bar" style="width:${prog}%"></div></div><div style="font-size:10px;color:var(--blue)">${prog}%</div></td>
-                  <td><div class="prog prog-green" style="width:80px"><div class="prog-bar" style="width:${paidPct}%"></div></div><div style="font-size:10px;color:var(--green)">${paidPct}%</div></td>
-                  <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${mr.toFixed(1)}%</td>
+                return `<tr style="cursor:pointer" onclick="S.selPid='${p.id}';nav('estimate')">
+                  <td><div style="font-weight:600;font-size:13px">${p.nm}</div><div style="font-size:11px;color:var(--text-muted)">${p.client||''}</div></td>
+                  <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-primary" style="width:60px;flex-shrink:0"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px;font-weight:600;color:var(--primary)">${prog}%</span></div></td>
+                  <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-green" style="width:60px;flex-shrink:0"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px;font-weight:600;color:var(--success)">${paidPct}%</span></div></td>
+                  <td><span style="font-weight:700;font-size:13px;color:${mr<5?'var(--danger)':mr<15?'var(--warning)':'var(--success)'}">${mr.toFixed(1)}%</span></td>
                   <td>${statusBadge(p.status)}</td>
                 </tr>`;
-              }).join('')||`<tr><td colspan="5" style="text-align:center;color:var(--g400);padding:24px">진행중인 프로젝트 없음</td></tr>`}
+              }).join('')}
             </tbody>
           </table>
-        </div>
+        </div>`:
+        `<div class="empty-state"><div class="empty-state-icon">📋</div><div class="empty-state-title">진행중인 프로젝트가 없습니다</div><div class="empty-state-desc">새 프로젝트를 추가해보세요</div><button class="btn btn-primary btn-sm" onclick="openAddProject()">+ 프로젝트 추가</button></div>`}
       </div>
       
-      <!-- Monthly chart -->
+      <!-- Weekly Schedule -->
       <div class="card">
-        <div class="card-title">월별 매출 현황</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+          <div class="card-title" style="margin-bottom:0">${svgIcon('calendar',14)} 이번주 일정</div>
+          <button class="btn btn-ghost btn-sm" onclick="nav('meetings')">전체 보기 →</button>
+        </div>
+        ${weekMeetings.length?`<div style="display:flex;flex-direction:column;gap:8px">
+          ${weekMeetings.slice(0,5).map(m=>{
+            const dt=new Date(m.date);
+            return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:var(--gray-50);border-radius:var(--radius);transition:background .15s;cursor:pointer" onmouseover="this.style.background='var(--primary-light)'" onmouseout="this.style.background='var(--gray-50)'">
+            <div style="text-align:center;min-width:42px;background:var(--primary);color:#fff;border-radius:var(--radius-sm);padding:6px 4px">
+              <div style="font-size:10px;font-weight:600">${dt.getMonth()+1}/${dt.getDate()}</div>
+              <div style="font-size:10px">${m.time||''}</div>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${m.title}</div>
+              <div style="font-size:11px;color:var(--text-muted)">${m.client||''} ${m.loc?'· '+m.loc:''}</div>
+            </div>
+            ${statusBadge(m.status)}
+          </div>`;
+          }).join('')}
+        </div>`:
+        `<div class="empty-state" style="padding:30px"><div class="empty-state-icon">📅</div><div class="empty-state-title">이번주 일정 없음</div></div>`}
+      </div>
+      
+      <!-- Monthly Sales Chart -->
+      <div class="card">
+        <div class="card-title">${svgIcon('chart',14)} 월별 매출 현황</div>
         <div class="chart-wrap"><canvas id="monthChart"></canvas></div>
       </div>
     </div>
     
-    <!-- Right -->
-    <div style="display:flex;flex-direction:column;gap:14px">
-      <!-- Quick actions -->
+    <!-- Right Column -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+      <!-- Quick Actions -->
       <div class="card">
         <div class="card-title">빠른 실행</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           ${[
-            {icon:'file',label:'견적서 작성',page:'estimate',fn:'newEstimate()'},
-            {icon:'calendar',label:'미팅 추가',fn:'openAddMeeting()'},
-            {icon:'truck',label:'발주서 생성',page:'orders'},
-            {icon:'users',label:'거래처 추가',fn:'openAddVendor()'},
-            {icon:'tool',label:'단가DB 조회',page:'pricedb'},
-            {icon:'book',label:'계약서 작성',page:'contracts'},
-          ].map(a=>`<button class="btn btn-outline" style="flex-direction:column;height:56px;gap:4px;font-size:11px" 
+            {icon:'file',label:'견적서 작성',fn:'newEstimate()',color:'var(--primary-light)'},
+            {icon:'calendar',label:'미팅 추가',fn:'openAddMeeting()',color:'var(--info-light)'},
+            {icon:'truck',label:'발주서 생성',page:'orders',color:'var(--warning-light)'},
+            {icon:'users',label:'거래처 추가',fn:'openAddVendor()',color:'var(--success-light)'},
+            {icon:'tool',label:'단가DB 조회',page:'pricedb',color:'var(--purple-light)'},
+            {icon:'book',label:'계약서 작성',page:'contracts',color:'var(--teal-light)'},
+          ].map(a=>`<button class="btn btn-outline" style="flex-direction:column;height:60px;gap:5px;font-size:11.5px;border-color:var(--border-light);transition:var(--transition)" 
+            onmouseover="this.style.background='${a.color}';this.style.borderColor='${a.color}'" 
+            onmouseout="this.style.background='';this.style.borderColor='var(--border-light)'"
             onclick="${a.fn||`nav('${a.page}')`}">
             ${svgIcon(a.icon,16)}${a.label}
           </button>`).join('')}
         </div>
       </div>
       
-      <!-- Estimate status -->
+      <!-- Project Pipeline -->
       <div class="card">
-        <div class="card-title">견적 현황</div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          ${Object.entries(estStatus).map(([st,cnt])=>`
-            <div style="display:flex;align-items:center;gap:8px">
-              ${statusBadge(st)}
-              <div class="prog prog-${STATUS_COLORS[st]||'gray'}" style="flex:1"><div class="prog-bar" style="width:${cnt?100:0}%"></div></div>
-              <span style="font-size:12px;font-weight:600;min-width:24px;text-align:right">${cnt}</span>
-            </div>
-          `).join('')}
+        <div class="card-title">프로젝트 파이프라인</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${Object.entries(estStatus).map(([st,cnt])=>{
+            const total=ps.length||1;
+            const pct=Math.round(cnt/total*100);
+            const colors={
+              '작성중':'var(--gray-400)','견적완료':'var(--info)','계약완료':'var(--purple)',
+              '시공중':'var(--warning)','완료':'var(--success)'
+            };
+            return `<div style="display:flex;align-items:center;gap:10px">
+              <div style="width:60px;text-align:right">${statusBadge(st)}</div>
+              <div class="prog" style="flex:1"><div class="prog-bar" style="width:${pct}%;background:${colors[st]||'var(--gray-400)'}"></div></div>
+              <span style="font-size:12px;font-weight:700;min-width:28px;text-align:right;color:var(--text)">${cnt}</span>
+            </div>`;
+          }).join('')}
         </div>
       </div>
+      
+      <!-- Risk Alerts -->
+      ${risks.length?`<div class="card" style="border-color:var(--danger);border-color:rgba(239,68,68,.2)">
+        <div class="card-title" style="color:var(--danger)">${svgIcon('alert',14)} 리스크 알림</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${risks.slice(0,5).map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:${r.lv==='high'?'var(--danger-light)':'var(--warning-light)'};border-radius:var(--radius-sm);font-size:12px;cursor:pointer" onclick="S.selPid='${r.pid}';nav('estimate')">
+            <span style="flex-shrink:0">${r.lv==='high'?'🔴':'🟡'}</span>
+            <span style="color:var(--text-secondary)">${r.msg}</span>
+          </div>`).join('')}
+          ${risks.length>5?`<div style="text-align:center;font-size:11px;color:var(--text-muted);padding:4px">+${risks.length-5}건 더보기</div>`:''}
+        </div>
+      </div>`:
+      `<div class="card">
+        <div class="card-title" style="color:var(--success)">${svgIcon('check',14)} 리스크 현황</div>
+        <div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px">✅ 모든 프로젝트가 정상입니다</div>
+      </div>`}
       
       <!-- Notices -->
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
           <div class="card-title" style="margin-bottom:0">공지사항</div>
-          ${S.isAdmin?`<button class="btn btn-ghost btn-sm" onclick="openAddNotice()">${svgIcon('plus',12)} 추가</button>`:''}
+          ${S.isAdmin?`<button class="btn btn-ghost btn-sm" onclick="openAddNotice()">${svgIcon('plus',12)}</button>`:''}
         </div>
-        ${notices.slice(0,3).map(n=>`<div style="padding:8px 0;border-bottom:1px solid var(--border)">
-          <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-            ${n.pinned?`<span style="color:var(--red);font-size:10px">📌</span>`:''}
-            <span style="font-size:12.5px;font-weight:500">${n.title}</span>
+        ${notices.slice(0,3).map(n=>`<div style="padding:10px 0;border-bottom:1px solid var(--border-light)">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+            ${n.pinned?'<span style="color:var(--danger);font-size:10px">📌</span>':''}
+            <span style="font-size:13px;font-weight:600;color:var(--text)">${n.title}</span>
           </div>
-          <div style="font-size:11px;color:var(--g500)">${n.date}</div>
-        </div>`).join('')||`<div style="text-align:center;padding:16px;color:var(--g400);font-size:12px">공지사항 없음</div>`}
+          <div style="font-size:11px;color:var(--text-muted)">${n.date}</div>
+        </div>`).join('')||`<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px">공지사항 없음</div>`}
       </div>
-      
     </div>
   </div>
-  
-  <!-- 통합 알림 (최하단) -->
-  ${risks.length||totalUnpaid?`<div class="card" style="margin-top:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-      <div class="card-title" style="margin-bottom:0">${svgIcon('alert',14)} 통합 알림 <span style="font-size:11px;color:var(--g500);font-weight:400">${risks.length+(totalUnpaid>0?1:0)}건</span></div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
-      ${risks.map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px;background:${r.lv==='high'?'var(--red-l)':'var(--orange-l)'};border-radius:var(--radius)">
-        <span>${r.lv==='high'?'🔴':'🟡'}</span>
-        <span style="color:${r.lv==='high'?'var(--red)':'var(--orange)'}">${r.msg}</span>
-      </div>`).join('')}
-      ${totalUnpaid>0?`<div style="display:flex;align-items:center;gap:8px;padding:8px;background:var(--purple-l);border-radius:var(--radius)">
-        <span>💜</span><span style="color:var(--purple)">미수금 총 ${fmtShort(totalUnpaid)}원</span>
-      </div>`:''}
-    </div>
-  </div>`:''}`;
+  </div>`;
   
   // Load weather
   loadWeather();
@@ -956,8 +962,8 @@ function renderDash(){
       const m=String(i+1).padStart(2,'0');
       return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).reduce((a,p)=>a+getTotal(p),0)/10000;
     });
-    new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(37,99,235,.8)',borderRadius:4}]},
-      options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`}}},responsive:true,maintainAspectRatio:true}});
+    new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)'}]},
+      options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`,color:'#94A3B8'},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
   },100);
 }
 
@@ -975,13 +981,13 @@ function loadWeather(){
       if(!d.outdoor_ok)warnings.push('<span style="color:var(--red)">⚠️ 외부작업주의</span>');
       const el=document.getElementById('weather-widget');
       if(el)el.innerHTML=`
-        <img src="${d.icon_url}" width="40" height="40" style="margin:-8px" alt="weather">
+        <img src="${d.icon_url}" width="36" height="36" style="margin:-6px" alt="weather">
         <div style="flex:1">
-          <div style="font-weight:600;color:var(--dark)">${d.city} · ${d.temp}°C <span style="font-weight:400;font-size:11px;color:var(--g500)">(체감 ${d.feels_like}°C)</span></div>
-          <div style="font-size:11px">${d.description} · 습도 ${d.humidity}% · 풍속 ${d.wind_speed}m/s</div>
+          <div style="font-weight:600;color:var(--text);font-size:12px">${d.city} · ${d.temp}°C <span style="font-weight:400;color:var(--text-muted)">(체감 ${d.feels_like}°C)</span></div>
+          <div style="font-size:11px;color:var(--text-muted)">${d.description} · 습도 ${d.humidity}%</div>
           ${warnings.length?`<div style="font-size:10px;margin-top:2px;display:flex;gap:6px">${warnings.join('')}</div>`:''}
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="openWeatherForecast()" style="font-size:11px">5일예보 →</button>`;
+        <button class="btn btn-ghost btn-sm" onclick="openWeatherForecast()" style="font-size:10px;padding:4px 8px">5일예보</button>`;
     }).catch(()=>{
       const el=document.getElementById('weather-widget');
       if(el)el.innerHTML='<span>🌤️</span><div style="color:var(--g400)">날씨 정보 로딩중...</div>';
@@ -3784,22 +3790,34 @@ function importXLSX(type){
 // ===== INIT =====
 // ===== ASYNC INIT =====
 async function boot() {
-  // Show skeleton loading
+  // Show skeleton loading with Pluuug-style shimmer
   document.getElementById('content').innerHTML = `
-    <div style="padding:20px;display:flex;flex-direction:column;gap:16px">
-      <div style="height:80px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite"></div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px">
-        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite"></div>
-        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.2s"></div>
-        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.4s"></div>
-        <div style="height:90px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.6s"></div>
+    <div style="padding:20px;display:flex;flex-direction:column;gap:16px;animation:fadeIn .3s ease">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div style="height:14px;width:120px;background:var(--gray-200);border-radius:6px;animation:shimmer 1.5s infinite;margin-bottom:8px"></div>
+        <div style="height:24px;width:240px;background:var(--gray-200);border-radius:6px;animation:shimmer 1.5s infinite"></div></div>
+        <div style="height:36px;width:200px;background:var(--gray-200);border-radius:var(--radius);animation:shimmer 1.5s infinite"></div>
       </div>
-      <div style="height:200px;background:var(--g100);border-radius:12px;animation:shimmer 1.5s infinite;animation-delay:.3s"></div>
+      <div style="height:80px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite"></div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px">
+        <div style="height:100px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite"></div>
+        <div style="height:100px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite;animation-delay:.15s"></div>
+        <div style="height:100px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite;animation-delay:.3s"></div>
+        <div style="height:100px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite;animation-delay:.45s"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px">
+        <div style="height:260px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite;animation-delay:.2s"></div>
+        <div style="height:260px;background:var(--gray-100);border-radius:var(--radius-lg);animation:shimmer 1.5s infinite;animation-delay:.35s"></div>
+      </div>
     </div>`;
   
   await initData();
   // Convert company from DB format
   if(_d.company && _d.company.name_ko) _d.company = getCompanyFromDb(_d.company);
+  // Update sidebar user display
+  const co = getCompany();
+  const nameEl = document.getElementById('sb-user-name');
+  if(nameEl) nameEl.textContent = co.nameKo || co.name || 'Frame Plus';
   renderNav();
   
   // Parse URL for initial route
