@@ -3189,89 +3189,288 @@ async function deleteOrder(oid){
 }
 
 // ===== COLLECTION =====
+let _collView='table'; // table|calendar|client
 function renderCollection(){
   const ps=getProjects();
   const totalUnpaid=ps.reduce((a,p)=>a+getUnpaid(p),0);
   const totalPaid=ps.reduce((a,p)=>a+getPaid(p),0);
   const totalContract=ps.reduce((a,p)=>a+getTotal(p),0);
-  document.getElementById('tb-actions').innerHTML=`<button class="btn btn-outline btn-sm" onclick="exportXLSX('collection')">${svgIcon('download',12)} 엑셀</button>`;
+  const collRate=totalContract>0?Math.round(totalPaid/totalContract*100):0;
+  // Overdue: unpaid payments past their due date
+  const overdueItems=[];const upcomingItems=[];
+  ps.forEach(p=>{const tot=getTotal(p);(p.payments||[]).forEach((pm,i)=>{
+    if(!pm.paid&&pm.due){
+      const dday=diffDays(today(),pm.due);const amt=Math.round(tot*Number(pm.pct||0)/100);
+      const item={pid:p.id,pnm:p.nm,client:p.client,label:pm.label,amt,due:pm.due,dday,idx:i};
+      if(dday<0)overdueItems.push(item);else if(dday<=30)upcomingItems.push(item);
+    }
+  });});
+  overdueItems.sort((a,b)=>a.dday-b.dday);upcomingItems.sort((a,b)=>a.dday-b.dday);
+  // Monthly trend (last 6 months)
+  const monthlyData=[];const now=new Date();
+  for(let m=5;m>=0;m--){
+    const d=new Date(now.getFullYear(),now.getMonth()-m,1);
+    const ym=d.toISOString().slice(0,7);
+    let paid=0;
+    ps.forEach(p=>{const tot=getTotal(p);(p.payments||[]).forEach(pm=>{
+      if(pm.paid&&pm.paidDate&&pm.paidDate.startsWith(ym))paid+=Math.round(tot*Number(pm.pct||0)/100);
+    });});
+    monthlyData.push({label:`${d.getMonth()+1}월`,amt:paid});
+  }
+  const maxMonth=Math.max(...monthlyData.map(m=>m.amt),1);
+  document.getElementById('tb-actions').innerHTML=`
+    <div style="display:flex;gap:4px">
+      <button class="btn ${_collView==='table'?'btn-primary':'btn-outline'} btn-sm" onclick="_collView='table';renderCollection()">📋 테이블</button>
+      <button class="btn ${_collView==='calendar'?'btn-primary':'btn-outline'} btn-sm" onclick="_collView='calendar';renderCollection()">📅 캘린더</button>
+      <button class="btn ${_collView==='client'?'btn-primary':'btn-outline'} btn-sm" onclick="_collView='client';renderCollection()">🏢 고객별</button>
+    </div>
+    <button class="btn btn-outline btn-sm" onclick="exportXLSX('collection')">${svgIcon('download',12)} 엑셀</button>`;
   document.getElementById('content').innerHTML=`
-  <div class="dash-grid" style="margin-bottom:14px">
-    <div class="kpi-card"><div class="kpi-label">계약금액 합계</div><div class="kpi-value">${fmtShort(totalContract)}<span style="font-size:12px">원</span></div></div>
-    <div class="kpi-card"><div class="kpi-label">수금완료</div><div class="kpi-value" style="color:var(--green)">${fmtShort(totalPaid)}<span style="font-size:12px">원</span></div></div>
-    <div class="kpi-card"><div class="kpi-label">미수금</div><div class="kpi-value" style="color:var(--red)">${fmtShort(totalUnpaid)}<span style="font-size:12px">원</span></div></div>
-    <div class="kpi-card"><div class="kpi-label">수금률</div><div class="kpi-value" style="color:var(--blue)">${totalContract>0?Math.round(totalPaid/totalContract*100):0}%</div></div>
+  <!-- KPI Cards -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+    <div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">계약금액 합계</div><div class="kpi-value">${fmtShort(totalContract)}<span style="font-size:12px">원</span></div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--green)"><div class="kpi-label">수금완료</div><div class="kpi-value" style="color:var(--green)">${fmtShort(totalPaid)}<span style="font-size:12px">원</span></div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미수금</div><div class="kpi-value" style="color:var(--red)">${fmtShort(totalUnpaid)}<span style="font-size:12px">원</span></div><div style="font-size:10px;color:var(--g500)">${overdueItems.length>0?`<span style="color:var(--red);font-weight:700">⚠️ ${overdueItems.length}건 연체</span>`:'연체 없음'}</div></div>
+    <div class="kpi-card" style="border-left:3px solid ${collRate>=80?'var(--green)':collRate>=50?'var(--orange)':'var(--red)'}"><div class="kpi-label">수금률</div><div class="kpi-value" style="color:var(--blue)">${collRate}%</div><div style="height:6px;background:var(--g200);border-radius:3px;margin-top:6px"><div style="height:100%;width:${collRate}%;background:${collRate>=80?'var(--green)':collRate>=50?'var(--orange)':'var(--red)'};border-radius:3px"></div></div></div>
   </div>
-  ${filterBar({statuses:Object.keys(STATUS_LABELS),placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterCollection()'})}
-  <div id="collection-list-wrap">
-  <div class="tbl-wrap">
-    <table class="tbl">
-      <thead><tr>
-        <th>프로젝트</th><th>고객</th><th>계약금액</th>
-        <th>계약금</th><th>중도금</th><th>잔금</th>
-        <th>수금합계</th><th>미수금</th><th>수금률</th><th></th>
-      </tr></thead>
-      <tbody>
-        ${ps.map(p=>{
-          const tot=getTotal(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
-          const paidPct=tot>0?Math.round(paid/tot*100):0;
-          const pmts=p.payments||[];
-          function pmtCell(idx){
-            const pm=pmts[idx];if(!pm)return`<td>-</td>`;
-            const amt=Math.round(tot*Number(pm.pct||0)/100);
-            return`<td>
-              <div style="font-size:12px;font-weight:600">${fmt(amt)}</div>
-              <div>${pm.paid?`<span class="badge badge-green">입금</span>`:pm.due?`<span class="badge badge-orange">${pm.due}</span>`:`<span class="badge badge-gray">미정</span>`}</div>
-              ${!pm.paid?`<button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="markPaid('${p.id}',${idx})">입금처리</button>`:''}
-            </td>`;
-          }
-          return`<tr>
-            <td><span style="font-weight:600;cursor:pointer;color:var(--blue)" onclick="openEditProject('${p.id}')">${p.nm}</span></td>
-            <td>${p.client}</td>
-            <td style="font-weight:700">${tot>0?fmt(tot)+'원':'-'}</td>
-            ${pmtCell(0)}${pmtCell(1)}${pmtCell(2)}
-            <td style="font-weight:700;color:var(--green)">${fmt(paid)}</td>
-            <td style="font-weight:700;color:var(--red)">${fmt(unpaid)}</td>
-            <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-green" style="width:60px"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px">${paidPct}%</span></div></td>
-            <td><button class="btn btn-ghost btn-sm btn-icon" onclick="openCollectionDetail('${p.id}')">${svgIcon('edit',13)}</button></td>
-          </tr>`;
+  <!-- Overdue Alerts -->
+  ${overdueItems.length?`<div style="background:var(--red-l);border:1px solid #fca5a5;border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px">
+    <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:8px">🚨 연체 미수금 (${overdueItems.length}건, ${fmtShort(overdueItems.reduce((a,x)=>a+x.amt,0))}원)</div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${overdueItems.slice(0,5).map(x=>`<div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border-radius:var(--radius);padding:8px 12px;font-size:12px">
+        <div><strong style="color:var(--red)">${x.pnm}</strong> <span style="color:var(--g500)">· ${x.client} · ${x.label}</span></div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span style="font-weight:700">${fmt(x.amt)}원</span>
+          <span style="color:var(--red);font-weight:700">D+${Math.abs(x.dday)}</span>
+          <button class="btn btn-sm" style="background:var(--red);color:#fff;padding:3px 10px;font-size:10px" onclick="markPaid('${x.pid}',${x.idx})">입금처리</button>
+        </div>
+      </div>`).join('')}
+      ${overdueItems.length>5?`<div style="font-size:11px;color:var(--g500);text-align:center">외 ${overdueItems.length-5}건...</div>`:''}
+    </div>
+  </div>`:''}
+  <!-- Upcoming Payments -->
+  ${upcomingItems.length?`<div style="background:var(--orange-l);border:1px solid #fdba74;border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px">
+    <div style="font-size:12px;font-weight:700;color:var(--orange);margin-bottom:8px">📅 향후 30일 수금 예정 (${upcomingItems.length}건, ${fmtShort(upcomingItems.reduce((a,x)=>a+x.amt,0))}원)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${upcomingItems.slice(0,6).map(x=>`<div style="background:#fff;border-radius:var(--radius);padding:8px 12px;font-size:11px;flex:1;min-width:200px;border:1px solid var(--g200)">
+        <div style="font-weight:600">${x.pnm} <span style="color:var(--g400)">· ${x.label}</span></div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px"><span style="font-weight:700">${fmt(x.amt)}원</span><span style="color:${x.dday<=7?'var(--orange)':'var(--blue)'};font-weight:600">D-${x.dday}</span></div>
+      </div>`).join('')}
+    </div>
+  </div>`:''}
+  <!-- Monthly Trend Mini Chart -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+    <div class="card" style="padding:14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:10px">📊 월별 수금 추이 (최근 6개월)</div>
+      <div style="display:flex;align-items:flex-end;gap:8px;height:80px">
+        ${monthlyData.map(m=>{const h=maxMonth>0?Math.max(4,m.amt/maxMonth*72):4;
+          return`<div style="flex:1;text-align:center">
+            <div style="font-size:9px;font-weight:600;color:var(--g500);margin-bottom:2px">${m.amt>0?fmtShort(m.amt):'-'}</div>
+            <div style="height:${h}px;background:var(--blue);border-radius:3px 3px 0 0;margin:0 auto;width:80%"></div>
+            <div style="font-size:10px;color:var(--g500);margin-top:3px">${m.label}</div>
+          </div>`;
         }).join('')}
-      </tbody>
-    </table>
+      </div>
+    </div>
+    <div class="card" style="padding:14px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:10px">💰 수금 현황 요약</div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px">
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--g600)">활성 프로젝트</span><span style="font-weight:700">${ps.filter(p=>getTotal(p)>0).length}건</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--g600)">미수금 프로젝트</span><span style="font-weight:700;color:var(--red)">${ps.filter(p=>getUnpaid(p)>0).length}건</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--g600)">완납 프로젝트</span><span style="font-weight:700;color:var(--green)">${ps.filter(p=>getTotal(p)>0&&getUnpaid(p)===0).length}건</span></div>
+        <div style="display:flex;justify-content:space-between"><span style="color:var(--g600)">연체 건수</span><span style="font-weight:700;color:${overdueItems.length?'var(--red)':'var(--g400)'}">${overdueItems.length}건</span></div>
+        <div style="display:flex;justify-content:space-between;border-top:1px solid var(--g200);padding-top:6px"><span style="font-weight:700">평균 수금률</span><span style="font-weight:800;color:var(--blue)">${collRate}%</span></div>
+      </div>
+    </div>
   </div>
+  <!-- Main Content (view-dependent) -->
+  <div id="coll-view-content">
+    ${_collView==='table'?_collTable(ps):_collView==='calendar'?_collCalendar(ps):_collClient(ps)}
+  </div>`;
+}
+function _collTable(ps){
+  return`${filterBar({statuses:Object.keys(STATUS_LABELS),placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterCollection()'})}
+  <div class="tbl-wrap"><table class="tbl"><thead><tr>
+    <th onclick="sortTbl('coll','nm')">프로젝트 ↕</th><th>고객</th><th onclick="sortTbl('coll','tot')">계약금액 ↕</th>
+    <th>계약금</th><th>중도금</th><th>잔금</th>
+    <th onclick="sortTbl('coll','paid')">수금합계 ↕</th><th>미수금</th><th onclick="sortTbl('coll','rate')">수금률 ↕</th><th></th>
+  </tr></thead><tbody>
+    ${ps.map(p=>{
+      const tot=getTotal(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
+      const paidPct=tot>0?Math.round(paid/tot*100):0;const pmts=p.payments||[];
+      function pmtCell(idx){
+        const pm=pmts[idx];if(!pm)return'<td style="text-align:center;color:var(--g300)">-</td>';
+        const amt=Math.round(tot*Number(pm.pct||0)/100);
+        const dday=pm.due&&!pm.paid?diffDays(today(),pm.due):null;
+        const isOverdue=dday!==null&&dday<0;
+        return`<td>
+          <div style="font-size:12px;font-weight:600">${fmt(amt)}</div>
+          <div>${pm.paid?'<span class="badge badge-green">✓ 입금</span>':pm.due?`<span class="badge ${isOverdue?'badge-red':'badge-orange'}">${pm.due.slice(5)}${dday!==null?(isOverdue?' D+'+Math.abs(dday):' D-'+dday):''}</span>`:'<span class="badge badge-gray">미정</span>'}</div>
+          ${!pm.paid?`<button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px" onclick="markPaid('${p.id}',${idx})">입금처리</button>`:''}
+        </td>`;
+      }
+      return`<tr style="${unpaid>0&&(pmts||[]).some(pm=>!pm.paid&&pm.due&&diffDays(today(),pm.due)<0)?'background:#fef2f2':''}">
+        <td><span style="font-weight:600;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</span></td>
+        <td>${p.client||''}</td>
+        <td style="font-weight:700">${tot>0?fmt(tot)+'원':'-'}</td>
+        ${pmtCell(0)}${pmtCell(1)}${pmtCell(2)}
+        <td style="font-weight:700;color:var(--green)">${paid>0?fmt(paid)+'원':'-'}</td>
+        <td style="font-weight:700;color:${unpaid>0?'var(--red)':'var(--g400)'}">${unpaid>0?fmt(unpaid)+'원':'-'}</td>
+        <td><div style="display:flex;align-items:center;gap:6px"><div class="prog ${paidPct>=100?'prog-green':paidPct>=50?'prog-blue':'prog-orange'}" style="width:60px"><div class="prog-bar" style="width:${Math.min(100,paidPct)}%"></div></div><span style="font-size:11px;font-weight:600">${paidPct}%</span></div></td>
+        <td><button class="btn btn-ghost btn-sm btn-icon" onclick="openCollectionDetail('${p.id}')">${svgIcon('edit',13)}</button></td>
+      </tr>`;
+    }).join('')}
+  </tbody></table></div>`;
+}
+function _collCalendar(ps){
+  const y=S.calYear||new Date().getFullYear();const m=S.calMonth||new Date().getMonth();
+  const firstDay=new Date(y,m,1).getDay();const daysInMonth=new Date(y,m+1,0).getDate();
+  // Collect payment events for this month
+  const events={};
+  ps.forEach(p=>{const tot=getTotal(p);(p.payments||[]).forEach((pm,idx)=>{
+    if(!pm.due)return;const d=new Date(pm.due);
+    if(d.getFullYear()===y&&d.getMonth()===m){
+      const day=d.getDate();if(!events[day])events[day]=[];
+      events[day].push({pid:p.id,pnm:p.nm,label:pm.label,amt:Math.round(tot*Number(pm.pct||0)/100),paid:pm.paid,idx});
+    }
+  });});
+  const todayDate=new Date();const isThisMonth=todayDate.getFullYear()===y&&todayDate.getMonth()===m;
+  const cells=[];
+  for(let i=0;i<firstDay;i++)cells.push('<div style="min-height:80px"></div>');
+  for(let d=1;d<=daysInMonth;d++){
+    const evts=events[d]||[];const isToday=isThisMonth&&todayDate.getDate()===d;
+    cells.push(`<div style="min-height:80px;border:1px solid var(--g200);border-radius:6px;padding:4px;${isToday?'background:var(--blue-l);border-color:var(--blue)':''}">
+      <div style="font-size:10px;font-weight:${isToday?'800':'600'};color:${isToday?'var(--blue)':'var(--g600)'};margin-bottom:2px">${d}</div>
+      ${evts.map(e=>`<div style="font-size:9px;padding:2px 4px;border-radius:3px;margin-bottom:1px;cursor:pointer;background:${e.paid?'var(--green)':'var(--orange)'}20;color:${e.paid?'var(--green)':'var(--orange)'};font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onclick="openCollectionDetail('${e.pid}')">
+        ${e.paid?'✓':'○'} ${e.pnm.slice(0,6)} ${fmtShort(e.amt)}
+      </div>`).join('')}
+    </div>`);
+  }
+  return`<div class="card" style="padding:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <button class="btn btn-ghost btn-sm" onclick="S.calMonth=${m-1<0?11:m-1};S.calYear=${m-1<0?y-1:y};renderCollection()">◀</button>
+      <div style="font-size:14px;font-weight:700">${y}년 ${m+1}월 수금 일정</div>
+      <button class="btn btn-ghost btn-sm" onclick="S.calMonth=${m+1>11?0:m+1};S.calYear=${m+1>11?y+1:y};renderCollection()">▶</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+      ${['일','월','화','수','목','금','토'].map(d=>`<div style="text-align:center;font-size:10px;font-weight:600;color:var(--g500);padding:4px">${d}</div>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">${cells.join('')}</div>
+    <div style="margin-top:12px;display:flex;gap:12px;font-size:11px;color:var(--g500)">
+      <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--green)20;border:1px solid var(--green);border-radius:2px;display:inline-block"></span>입금완료</span>
+      <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--orange)20;border:1px solid var(--orange);border-radius:2px;display:inline-block"></span>예정/미입금</span>
+    </div>
+  </div>`;
+}
+function _collClient(ps){
+  const clients={};
+  ps.forEach(p=>{
+    const c=p.client||'미지정';if(!clients[c])clients[c]={projects:[],total:0,paid:0,unpaid:0};
+    const tot=getTotal(p);const paid=getPaid(p);
+    clients[c].projects.push(p);clients[c].total+=tot;clients[c].paid+=paid;clients[c].unpaid+=getUnpaid(p);
+  });
+  const sorted=Object.entries(clients).sort((a,b)=>b[1].total-a[1].total);
+  return`<div style="display:flex;flex-direction:column;gap:12px">
+    ${sorted.map(([name,data])=>{
+      const rate=data.total>0?Math.round(data.paid/data.total*100):0;
+      return`<div class="card" style="padding:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div>
+            <div style="font-size:14px;font-weight:700">🏢 ${name}</div>
+            <div style="font-size:11px;color:var(--g500)">${data.projects.length}개 프로젝트</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--g500)">수금률</div>
+            <div style="font-size:20px;font-weight:800;color:${rate>=80?'var(--green)':rate>=50?'var(--orange)':'var(--red)'}">${rate}%</div>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+          <div style="background:var(--g50);border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:var(--g500)">계약</div><div style="font-size:13px;font-weight:700">${fmtShort(data.total)}</div>
+          </div>
+          <div style="background:var(--green)10;border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:var(--green)">수금</div><div style="font-size:13px;font-weight:700;color:var(--green)">${fmtShort(data.paid)}</div>
+          </div>
+          <div style="background:${data.unpaid>0?'var(--red)10':'var(--g50)'};border-radius:6px;padding:8px;text-align:center">
+            <div style="font-size:10px;color:${data.unpaid>0?'var(--red)':'var(--g500)'}">미수금</div><div style="font-size:13px;font-weight:700;color:${data.unpaid>0?'var(--red)':'var(--g400)'}">${fmtShort(data.unpaid)}</div>
+          </div>
+        </div>
+        <div style="height:8px;background:var(--g200);border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${rate}%;background:${rate>=80?'var(--green)':rate>=50?'var(--orange)':'var(--red)'};border-radius:4px;transition:width .5s"></div></div>
+        <div style="font-size:11px;color:var(--g500)">
+          ${data.projects.map(p=>{const u=getUnpaid(p);return`<span style="display:inline-flex;align-items:center;gap:3px;margin-right:10px;${u>0?'color:var(--red)':''}"><span style="width:6px;height:6px;border-radius:50%;background:${u>0?'var(--red)':'var(--green)'};display:inline-block"></span>${p.nm}</span>`;}).join('')}
+        </div>
+      </div>`;
+    }).join('')}
   </div>`;
 }
 function filterCollection(){renderCollection();}
 function markPaid(pid,idx){
   const p=getProject(pid);if(!p||!p.payments[idx])return;
   p.payments[idx].paid=true;p.payments[idx].paidDate=today();
-  saveProject(p);toast('입금 처리되었습니다','success');renderCollection();
+  saveProject(p);toast('✅ 입금 처리되었습니다','success');
+  createNotification({type:'collection',title:`${p.nm} ${p.payments[idx].label} 입금 완료`,body:`${fmt(Math.round(getTotal(p)*p.payments[idx].pct/100))}원`,priority:'normal',relPage:'collection'});
+  renderCollection();
 }
 function openCollectionDetail(pid){
   const p=getProject(pid);if(!p)return;
-  const tot=getTotal(p);
-  openModal(`<div class="modal-bg"><div class="modal">
-    <div class="modal-hdr"><span class="modal-title">${p.nm} — 수금 관리</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+  const tot=getTotal(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
+  const paidPct=tot>0?Math.round(paid/tot*100):0;
+  openModal(`<div class="modal-bg"><div class="modal" style="max-width:640px">
+    <div class="modal-hdr"><span class="modal-title">💰 ${p.nm} — 수금 관리</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
-      <div style="margin-bottom:12px;font-size:13px;font-weight:600">계약금액: ₩${fmt(tot)}</div>
-      ${(p.payments||[]).map((pm,i)=>`<div style="background:var(--g50);border-radius:var(--radius);padding:12px;margin-bottom:10px">
+      <!-- Summary bar -->
+      <div style="background:var(--dark);border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:14px;color:#fff;display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:11px;color:rgba(255,255,255,.5)">계약금액</div>
+          <div style="font-size:18px;font-weight:800">₩${fmt(tot)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px;color:rgba(255,255,255,.5)">수금</div>
+          <div style="font-size:16px;font-weight:700;color:#4ade80">${fmt(paid)}</div>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:11px;color:rgba(255,255,255,.5)">미수금</div>
+          <div style="font-size:16px;font-weight:700;color:#f87171">${fmt(unpaid)}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:rgba(255,255,255,.5)">수금률</div>
+          <div style="font-size:22px;font-weight:800;color:${paidPct>=80?'#4ade80':paidPct>=50?'#fbbf24':'#f87171'}">${paidPct}%</div>
+        </div>
+      </div>
+      <div style="height:8px;background:var(--g200);border-radius:4px;margin-bottom:16px;overflow:hidden"><div style="height:100%;width:${paidPct}%;background:${paidPct>=100?'var(--green)':'var(--blue)'};border-radius:4px"></div></div>
+      <!-- Payment items -->
+      ${(p.payments||[]).map((pm,i)=>{
+        const amt=Math.round(tot*Number(pm.pct||0)/100);
+        const dday=pm.due&&!pm.paid?diffDays(today(),pm.due):null;
+        const isOverdue=dday!==null&&dday<0;
+        return`<div style="background:${pm.paid?'var(--green)08':isOverdue?'#fef2f2':'var(--g50)'};border:1px solid ${pm.paid?'var(--green)30':isOverdue?'#fca5a5':'var(--g200)'};border-radius:var(--radius-lg);padding:12px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:18px">${pm.paid?'✅':isOverdue?'🚨':'⏳'}</span>
+            <span style="font-weight:700;font-size:13px">${pm.label}</span>
+            <span style="font-size:12px;font-weight:700;color:var(--blue)">${fmt(amt)}원</span>
+          </div>
+          ${dday!==null?`<span style="font-size:12px;font-weight:700;color:${isOverdue?'var(--red)':'var(--orange)'}">D${dday>=0?'-'+dday:'+'+Math.abs(dday)}</span>`:''}
+          ${pm.paid?'<span class="badge badge-green">입금완료</span>':''}
+        </div>
         <div class="form-row form-row-4">
           <div><label class="lbl">항목</label><input class="inp" value="${pm.label}" onchange="updatePayment('${pid}',${i},'label',this.value)"></div>
           <div><label class="lbl">비율(%)</label><input class="inp" type="number" value="${pm.pct}" onchange="updatePayment('${pid}',${i},'pct',this.value)"></div>
           <div><label class="lbl">예정일</label><input class="inp" type="date" value="${pm.due||''}" onchange="updatePayment('${pid}',${i},'due',this.value)"></div>
-          <div><label class="lbl">금액</label><div class="inp" style="background:var(--g100)">${fmt(Math.round(tot*pm.pct/100))}</div></div>
+          <div style="display:flex;align-items:flex-end;gap:6px">
+            <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;padding-bottom:8px">
+              <input type="checkbox" ${pm.paid?'checked':''} onchange="updatePaymentPaid('${pid}',${i},this.checked)"><span>${pm.paid?'입금완료':'미입금'}</span>
+            </label>
+          </div>
         </div>
-        <div style="margin-top:8px;display:flex;align-items:center;gap:12px">
-          <label style="display:flex;align-items:center;gap:6px;cursor:pointer">
-            <input type="checkbox" ${pm.paid?'checked':''} onchange="updatePayment('${pid}',${i},'paid',this.checked)">
-            <span>입금완료</span>
-          </label>
-          ${pm.paid?`<input class="inp" type="date" style="width:140px" value="${pm.paidDate||''}" onchange="updatePayment('${pid}',${i},'paidDate',this.value)">`:''}
-        </div>
-      </div>`).join('')}
-      <button class="btn btn-outline btn-sm" onclick="addPayment('${pid}')">+ 수금 항목 추가</button>
+        ${pm.paid?`<div style="margin-top:6px;font-size:11px;color:var(--g500)">입금일: <input class="inp" type="date" style="width:140px;display:inline" value="${pm.paidDate||''}" onchange="updatePayment('${pid}',${i},'paidDate',this.value)"></div>`:''}
+      </div>`;}).join('')}
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-outline btn-sm" onclick="addPayment('${pid}')">+ 수금 항목 추가</button>
+        <button class="btn btn-outline btn-sm" onclick="removeLastPayment('${pid}')">− 마지막 항목 제거</button>
+      </div>
     </div>
-    <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal()">닫기</button></div>
+    <div class="modal-footer"><button class="btn btn-primary" onclick="closeModal();renderCollection()">닫기</button></div>
   </div></div>`);
 }
 function updatePayment(pid,idx,field,val){
@@ -3279,11 +3478,23 @@ function updatePayment(pid,idx,field,val){
   p.payments[idx][field]=field==='pct'?Number(val):val;
   saveProject(p);
 }
+function updatePaymentPaid(pid,idx,checked){
+  const p=getProject(pid);if(!p||!p.payments[idx])return;
+  p.payments[idx].paid=checked;
+  if(checked)p.payments[idx].paidDate=today();
+  saveProject(p);openCollectionDetail(pid);
+  if(checked)toast('✅ 입금 처리되었습니다','success');
+}
 function addPayment(pid){
   const p=getProject(pid);if(!p)return;
   if(!p.payments)p.payments=[];
   p.payments.push({label:'추가금',pct:0,due:'',paid:false,paidDate:''});
   saveProject(p);openCollectionDetail(pid);
+}
+function removeLastPayment(pid){
+  const p=getProject(pid);if(!p||!p.payments||!p.payments.length)return;
+  if(!confirm(`"${p.payments[p.payments.length-1].label}" 항목을 삭제?`))return;
+  p.payments.pop();saveProject(p);openCollectionDetail(pid);
 }
 function saveContract(pid){
   const p=getProject(pid);if(!p)return;
@@ -4007,46 +4218,121 @@ function deleteVendor(vid){
   saveVendors(getVendors().filter(x=>x.id!==vid));toast('삭제됨');renderVendors();
 }
 
-// ===== TAX =====
+// ===== TAX (세금계산서·매입 관리 강화) =====
+let _taxView='sales'; // sales|purchase|monthly
 function renderTax(){
-  const taxes=getTaxInvoices();
-  const ps=getProjects();
-  document.getElementById('tb-actions').innerHTML=`<button class="btn btn-primary btn-sm" onclick="openAddTax()">+ 세금계산서 발행</button>`;
+  const taxes=getTaxInvoices();const ps=getProjects();
+  const salesTaxes=taxes.filter(t=>t.type!=='매입');
+  const purchaseTaxes=taxes.filter(t=>t.type==='매입');
+  const totalSalesSupply=salesTaxes.reduce((a,t)=>a+(t.supplyAmt||0),0);
+  const totalSalesTax=salesTaxes.reduce((a,t)=>a+(t.taxAmt||0),0);
+  const totalPurchaseSupply=purchaseTaxes.reduce((a,t)=>a+(t.supplyAmt||0),0);
+  const totalPurchaseTax=purchaseTaxes.reduce((a,t)=>a+(t.taxAmt||0),0);
+  const netVat=totalSalesTax-totalPurchaseTax;
+  document.getElementById('tb-actions').innerHTML=`
+    <div style="display:flex;gap:4px">
+      <button class="btn ${_taxView==='sales'?'btn-primary':'btn-outline'} btn-sm" onclick="_taxView='sales';renderTax()">📤 매출</button>
+      <button class="btn ${_taxView==='purchase'?'btn-primary':'btn-outline'} btn-sm" onclick="_taxView='purchase';renderTax()">📥 매입</button>
+      <button class="btn ${_taxView==='monthly'?'btn-primary':'btn-outline'} btn-sm" onclick="_taxView='monthly';renderTax()">📊 월별</button>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="openAddTax()">+ 세금계산서 ${_taxView==='purchase'?'매입':'발행'}</button>`;
   document.getElementById('content').innerHTML=`
-  ${filterBar({statuses:['발행완료','발행예정','미발행'],placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterTax()'})}
-  <div style="background:var(--blue-l);border:1px solid var(--blue);border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:14px;font-size:12px;color:var(--blue)">
-    ℹ️ 전자세금계산서 발행은 국세청 홈택스(hometax.go.kr) 또는 연동된 세무 솔루션에서 진행하세요. 
-    <a href="https://www.hometax.go.kr" target="_blank" style="font-weight:700;color:var(--blue);text-decoration:underline">홈택스 바로가기</a>
+  <!-- KPI -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px">
+    <div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">매출 공급가액</div><div class="kpi-value" style="font-size:16px">${fmtShort(totalSalesSupply)}</div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--green)"><div class="kpi-label">매출 세액</div><div class="kpi-value" style="font-size:16px;color:var(--green)">${fmtShort(totalSalesTax)}</div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--orange)"><div class="kpi-label">매입 공급가액</div><div class="kpi-value" style="font-size:16px">${fmtShort(totalPurchaseSupply)}</div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--purple)"><div class="kpi-label">매입 세액</div><div class="kpi-value" style="font-size:16px;color:var(--purple)">${fmtShort(totalPurchaseTax)}</div></div>
+    <div class="kpi-card" style="border-left:3px solid ${netVat>=0?'var(--red)':'var(--green)'}"><div class="kpi-label">부가세 예상 납부</div><div class="kpi-value" style="font-size:16px;color:${netVat>=0?'var(--red)':'var(--green)'}">${netVat>=0?'':'-'}${fmtShort(Math.abs(netVat))}</div></div>
   </div>
-  <div class="tbl-wrap">
-    <table class="tbl">
-      <thead><tr>
-        <th>프로젝트</th><th>고객사</th><th>공급가액</th><th>세액</th>
-        <th>합계금액</th><th onclick="sortTbl('tax','date')">작성일 ↕</th><th>상태</th><th></th>
-      </tr></thead>
-      <tbody>
-        ${taxes.map(t=>{const p=getProject(t.pid);return`<tr>
-          <td style="font-weight:600">${p?.nm||'-'}</td>
-          <td>${p?.client||'-'}</td>
-          <td class="num">${fmt(t.supplyAmt||0)}원</td>
-          <td class="num">${fmt(t.taxAmt||0)}원</td>
-          <td class="num" style="font-weight:700">${fmt((t.supplyAmt||0)+(t.taxAmt||0))}원</td>
-          <td style="font-size:11px">${t.date||'-'}</td>
-          <td>${statusBadge(t.status||'미발행')}</td>
-          <td style="display:flex;gap:4px">
-            <button class="btn btn-ghost btn-sm btn-icon" onclick="printTax('${t.id}')">${svgIcon('print',12)}</button>
-            <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteTax('${t.id}')">${svgIcon('trash',12)}</button>
-          </td>
-        </tr>`}).join('')||`<tr><td colspan="8" style="text-align:center;padding:40px;color:var(--g400)">세금계산서 없음</td></tr>`}
-      </tbody>
-    </table>
+  <div style="background:var(--blue-l);border:1px solid var(--blue);border-radius:var(--radius-lg);padding:10px 16px;margin-bottom:14px;font-size:12px;color:var(--blue);display:flex;justify-content:space-between;align-items:center">
+    <span>ℹ️ 전자세금계산서 발행은 국세청 홈택스에서 진행하세요.</span>
+    <a href="https://www.hometax.go.kr" target="_blank" style="font-weight:700;color:var(--blue);text-decoration:underline">홈택스 →</a>
+  </div>
+  <div id="tax-view-content">
+    ${_taxView==='sales'?_taxTable(salesTaxes,ps,'매출'):_taxView==='purchase'?_taxTable(purchaseTaxes,ps,'매입'):_taxMonthly(taxes,ps)}
+  </div>`;
+}
+function _taxTable(taxes,ps,type){
+  return`${filterBar({statuses:['발행완료','발행예정','미발행'],placeholder:'프로젝트명 검색...',showDate:true,showMonthGroup:true,onFilter:'filterTax()'})}
+  <div class="tbl-wrap"><table class="tbl"><thead><tr>
+    <th onclick="sortTbl('tax','nm')">프로젝트 ↕</th><th>고객사/거래처</th><th onclick="sortTbl('tax','supply')">공급가액 ↕</th><th>세액</th>
+    <th>합계금액</th><th onclick="sortTbl('tax','date')">작성일 ↕</th><th>상태</th><th>품목</th><th></th>
+  </tr></thead><tbody>
+    ${taxes.length?taxes.map(t=>{const p=getProject(t.pid);const total=(t.supplyAmt||0)+(t.taxAmt||0);
+      return`<tr>
+        <td style="font-weight:600">${p?.nm||t.vendorNm||'-'}</td>
+        <td>${type==='매입'?(t.vendorNm||'-'):(p?.client||'-')}</td>
+        <td class="num">${fmt(t.supplyAmt||0)}원</td>
+        <td class="num">${fmt(t.taxAmt||0)}원</td>
+        <td class="num" style="font-weight:700">${fmt(total)}원</td>
+        <td style="font-size:11px">${t.date||'-'}</td>
+        <td>${statusBadge(t.status||'미발행')}</td>
+        <td style="font-size:11px;color:var(--g500)">${t.item||'-'}</td>
+        <td style="display:flex;gap:4px">
+          <button class="btn btn-ghost btn-sm btn-icon" onclick="openTaxPreview('${t.id}')" title="미리보기">${svgIcon('eye',12)}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" onclick="printTax('${t.id}')">${svgIcon('print',12)}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteTax('${t.id}')">${svgIcon('trash',12)}</button>
+        </td>
+      </tr>`;}).join('')
+    :`<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--g400)">${type} 세금계산서 없음</td></tr>`}
+  </tbody></table></div>`;
+}
+function _taxMonthly(taxes,ps){
+  // Group by month
+  const months={};
+  taxes.forEach(t=>{const ym=t.date?t.date.slice(0,7):'미정';if(!months[ym])months[ym]={sales:[],purchase:[]};
+    if(t.type==='매입')months[ym].purchase.push(t);else months[ym].sales.push(t);
+  });
+  const sortedMonths=Object.keys(months).sort().reverse();
+  return`<div style="display:flex;flex-direction:column;gap:12px">
+    ${sortedMonths.map(ym=>{
+      const d=months[ym];
+      const salesAmt=d.sales.reduce((a,t)=>a+(t.supplyAmt||0),0);
+      const salesTax=d.sales.reduce((a,t)=>a+(t.taxAmt||0),0);
+      const purchaseAmt=d.purchase.reduce((a,t)=>a+(t.supplyAmt||0),0);
+      const purchaseTax=d.purchase.reduce((a,t)=>a+(t.taxAmt||0),0);
+      const netVat=salesTax-purchaseTax;
+      return`<div class="card" style="padding:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:14px;font-weight:700">${ym==='미정'?'날짜 미정':ym.replace('-','년 ')+'월'}</div>
+          <div style="font-size:12px;color:var(--g500)">매출 ${d.sales.length}건 / 매입 ${d.purchase.length}건</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+          <div style="background:var(--blue)08;border-radius:6px;padding:10px;text-align:center">
+            <div style="font-size:10px;color:var(--blue)">매출 공급가액</div>
+            <div style="font-size:14px;font-weight:700">${fmtShort(salesAmt)}</div>
+            <div style="font-size:10px;color:var(--g500)">세액: ${fmtShort(salesTax)}</div>
+          </div>
+          <div style="background:var(--orange)08;border-radius:6px;padding:10px;text-align:center">
+            <div style="font-size:10px;color:var(--orange)">매입 공급가액</div>
+            <div style="font-size:14px;font-weight:700">${fmtShort(purchaseAmt)}</div>
+            <div style="font-size:10px;color:var(--g500)">세액: ${fmtShort(purchaseTax)}</div>
+          </div>
+          <div style="background:${netVat>=0?'var(--red)':'var(--green)'}08;border-radius:6px;padding:10px;text-align:center">
+            <div style="font-size:10px;color:${netVat>=0?'var(--red)':'var(--green)'}">부가세 ${netVat>=0?'납부':'환급'}</div>
+            <div style="font-size:14px;font-weight:800;color:${netVat>=0?'var(--red)':'var(--green)'}">${fmtShort(Math.abs(netVat))}</div>
+          </div>
+        </div>
+        <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--g200)">
+          ${salesAmt+purchaseAmt>0?`<div style="width:${salesAmt/(salesAmt+purchaseAmt)*100}%;background:var(--blue);height:100%"></div><div style="width:${purchaseAmt/(salesAmt+purchaseAmt)*100}%;background:var(--orange);height:100%"></div>`:''}
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--g500)">
+          <span>매출 ${fmt(salesAmt+salesTax)}원</span><span>매입 ${fmt(purchaseAmt+purchaseTax)}원</span>
+        </div>
+      </div>`;
+    }).join('')||'<div style="text-align:center;padding:40px;color:var(--g400)">세금계산서 데이터 없음</div>'}
   </div>`;
 }
 function openAddTax(){
-  const ps=getProjects();const co=getCompany();
-  openModal(`<div class="modal-bg"><div class="modal">
-    <div class="modal-hdr"><span class="modal-title">세금계산서 발행</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+  const ps=getProjects();const co=getCompany();const isPurchase=_taxView==='purchase';
+  openModal(`<div class="modal-bg"><div class="modal" style="max-width:580px">
+    <div class="modal-hdr"><span class="modal-title">${isPurchase?'📥 매입 세금계산서 등록':'📤 매출 세금계산서 발행'}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
+      <div style="display:flex;gap:8px;margin-bottom:14px">
+        <button class="btn ${!isPurchase?'btn-primary':'btn-outline'} btn-sm" onclick="_taxView='sales';closeModal();openAddTax()">매출</button>
+        <button class="btn ${isPurchase?'btn-primary':'btn-outline'} btn-sm" onclick="_taxView='purchase';closeModal();openAddTax()">매입</button>
+      </div>
       <div class="form-row form-row-2" style="margin-bottom:12px">
         <div><label class="lbl">프로젝트</label>
           <select class="sel" id="tx_pid" onchange="autoFillTax(this.value)">
@@ -4056,49 +4342,97 @@ function openAddTax(){
         </div>
         <div><label class="lbl">작성일</label><input class="inp" id="tx_date" type="date" value="${today()}"></div>
       </div>
+      ${isPurchase?`<div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">거래처명 *</label><input class="inp" id="tx_vendor" placeholder="거래처명"></div>
+        <div><label class="lbl">거래처 사업자번호</label><input class="inp" id="tx_vendorbiz" placeholder="000-00-00000"></div>
+      </div>`:''}
       <div class="form-row form-row-2" style="margin-bottom:12px">
         <div><label class="lbl">공급가액</label><input class="inp" id="tx_supply" type="number" oninput="calcTaxAmt()"></div>
         <div><label class="lbl">세액(10%)</label><input class="inp" id="tx_tax" type="number" style="background:var(--g50)"></div>
       </div>
       <div class="form-row form-row-2" style="margin-bottom:12px">
-        <div><label class="lbl">공급자(을)</label><div class="inp" style="background:var(--g50)">${co.name} (${co.bizNo})</div></div>
-        <div><label class="lbl">공급받는자 사업자번호</label><input class="inp" id="tx_buyerbiz"></div>
+        <div><label class="lbl">${isPurchase?'공급자 사업자번호':'공급받는자 사업자번호'}</label><input class="inp" id="tx_buyerbiz" placeholder="000-00-00000"></div>
+        <div><label class="lbl">품목</label><input class="inp" id="tx_item" placeholder="${isPurchase?'자재·용역 등':'인테리어 공사'}"></div>
       </div>
       <div class="form-row form-row-2">
         <div><label class="lbl">상태</label><select class="sel" id="tx_status"><option>미발행</option><option>발행예정</option><option>발행완료</option></select></div>
-        <div><label class="lbl">품목</label><input class="inp" id="tx_item" placeholder="인테리어 공사"></div>
+        <div><label class="lbl">비고</label><input class="inp" id="tx_memo" placeholder="메모"></div>
       </div>
+      ${!isPurchase?`<div style="margin-top:12px;background:var(--g50);border-radius:var(--radius);padding:10px;font-size:11px;color:var(--g600)">
+        <div><strong>공급자(을):</strong> ${co.name} (${co.bizNo})</div>
+      </div>`:''}
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">취소</button>
-      <button class="btn btn-primary" onclick="saveTax()">저장</button>
+      <button class="btn btn-primary" onclick="saveTax(${isPurchase?'true':'false'})">저장</button>
     </div>
   </div></div>`);
 }
 function autoFillTax(pid){
   const p=getProject(pid);if(!p)return;
-  const tot=getTotal(p);
-  const supply=Math.round(tot);
+  const tot=getTotal(p);const supply=Math.round(tot);
   document.getElementById('tx_supply').value=supply;
   document.getElementById('tx_tax').value=Math.round(supply*0.1);
 }
 function calcTaxAmt(){
   const supply=Number(document.getElementById('tx_supply')?.value||0);
-  const taxEl=document.getElementById('tx_tax');
-  if(taxEl)taxEl.value=Math.round(supply*0.1);
+  const taxEl=document.getElementById('tx_tax');if(taxEl)taxEl.value=Math.round(supply*0.1);
 }
-function saveTax(){
+function saveTax(isPurchase){
   const taxes=getTaxInvoices();
-  taxes.push({id:uid(),pid:v('tx_pid'),date:v('tx_date'),supplyAmt:Number(v('tx_supply')||0),
+  const tx={id:uid(),pid:v('tx_pid'),date:v('tx_date'),supplyAmt:Number(v('tx_supply')||0),
     taxAmt:Number(v('tx_tax')||0),buyerBiz:v('tx_buyerbiz'),status:v('tx_status')||'미발행',
-    item:v('tx_item')||'공사'});
-  saveTaxInvoices(taxes);closeModal();toast('저장되었습니다','success');renderTax();
+    item:v('tx_item')||'공사',memo:v('tx_memo')||'',type:isPurchase?'매입':'매출'};
+  if(isPurchase){tx.vendorNm=document.getElementById('tx_vendor')?.value||'';tx.vendorBiz=document.getElementById('tx_vendorbiz')?.value||'';}
+  taxes.push(tx);
+  saveTaxInvoices(taxes);closeModal();toast('✅ 저장되었습니다','success');renderTax();
 }
 function deleteTax(id){
   if(!confirm('삭제?'))return;
   saveTaxInvoices(getTaxInvoices().filter(t=>t.id!==id));renderTax();
 }
-function printTax(id){window.print();}
+function openTaxPreview(id){
+  const t=getTaxInvoices().find(x=>x.id===id);if(!t)return;
+  const co=getCompany();const p=getProject(t.pid);
+  const total=(t.supplyAmt||0)+(t.taxAmt||0);
+  const isPurchase=t.type==='매입';
+  openModal(`<div class="modal-bg"><div class="modal" style="max-width:640px">
+    <div class="modal-hdr"><span class="modal-title">세금계산서 미리보기</span><div style="display:flex;gap:6px"><button class="btn btn-outline btn-sm" onclick="window.print()">${svgIcon('print',12)} 인쇄</button><button class="modal-close" onclick="closeModal()">✕</button></div></div>
+    <div class="modal-body" style="padding:0">
+      <div style="background:#fff;padding:28px;font-family:'Noto Sans KR',sans-serif">
+        <div style="text-align:center;font-size:18px;font-weight:800;letter-spacing:.3em;border-bottom:3px double var(--dark);padding-bottom:10px;margin-bottom:16px">${isPurchase?'매입':'매출'} 세 금 계 산 서</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid var(--g300);margin-bottom:16px">
+          <tr><td style="width:20%;background:var(--g50);padding:6px 10px;border:1px solid var(--g300);font-weight:700">${isPurchase?'공급자':'공급자(을)'}</td><td style="padding:6px 10px;border:1px solid var(--g300)" colspan="3">${isPurchase?(t.vendorNm||'-'):co.name} (${isPurchase?(t.vendorBiz||'-'):co.bizNo})</td></tr>
+          <tr><td style="background:var(--g50);padding:6px 10px;border:1px solid var(--g300);font-weight:700">${isPurchase?'공급받는자':'공급받는자(갑)'}</td><td style="padding:6px 10px;border:1px solid var(--g300)" colspan="3">${isPurchase?co.name:(p?.client||'-')} (${t.buyerBiz||'-'})</td></tr>
+          <tr><td style="background:var(--g50);padding:6px 10px;border:1px solid var(--g300);font-weight:700">작성일</td><td style="padding:6px 10px;border:1px solid var(--g300)">${t.date||'-'}</td><td style="background:var(--g50);padding:6px 10px;border:1px solid var(--g300);font-weight:700">상태</td><td style="padding:6px 10px;border:1px solid var(--g300)">${t.status||'-'}</td></tr>
+        </table>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;border:1px solid var(--g300)">
+          <thead><tr style="background:var(--dark);color:#fff">
+            <th style="padding:8px;border:1px solid var(--g300);color:#fff">품목</th>
+            <th style="padding:8px;border:1px solid var(--g300);text-align:right;color:#fff">공급가액</th>
+            <th style="padding:8px;border:1px solid var(--g300);text-align:right;color:#fff">세액</th>
+            <th style="padding:8px;border:1px solid var(--g300);text-align:right;color:#fff">합계금액</th>
+          </tr></thead>
+          <tbody>
+            <tr><td style="padding:8px;border:1px solid var(--g300)">${t.item||'공사'}</td>
+              <td style="padding:8px;border:1px solid var(--g300);text-align:right">${fmt(t.supplyAmt||0)}원</td>
+              <td style="padding:8px;border:1px solid var(--g300);text-align:right">${fmt(t.taxAmt||0)}원</td>
+              <td style="padding:8px;border:1px solid var(--g300);text-align:right;font-weight:700">${fmt(total)}원</td>
+            </tr>
+            <tr style="background:var(--g50)"><td style="padding:8px;border:1px solid var(--g300);font-weight:700" colspan="1">합계</td>
+              <td style="padding:8px;border:1px solid var(--g300);text-align:right;font-weight:700">${fmt(t.supplyAmt||0)}원</td>
+              <td style="padding:8px;border:1px solid var(--g300);text-align:right;font-weight:700">${fmt(t.taxAmt||0)}원</td>
+              <td style="padding:8px;border:1px solid var(--g300);text-align:right;font-weight:800;font-size:14px">₩${fmt(total)}</td>
+            </tr>
+          </tbody>
+        </table>
+        ${t.memo?`<div style="margin-top:12px;font-size:11px;color:var(--g600)"><strong>비고:</strong> ${t.memo}</div>`:''}
+        ${p?`<div style="margin-top:8px;font-size:11px;color:var(--g500)">프로젝트: ${p.nm}</div>`:''}
+      </div>
+    </div>
+  </div></div>`);
+}
+function printTax(id){openTaxPreview(id);}
 function filterTax(){renderTax();}
 
 // ===== AS =====
