@@ -1,380 +1,421 @@
-# Frame Plus ERP — 최강 통합 전략 리포트
+# Frame Plus ERP — 최강 통합 전략 리포트 v3
 
-## v7 코드베이스(현재) + v8-4.jsx 결합 분석
+## v7 코드베이스(베이스) + v8-4.jsx(결합) = 올인원 건설 ERP
 
-**작성일**: 2026-02-19 v2  
-**목적**: 현재 운용 코드(v7)를 베이스로, v8-4.jsx의 강점을 흡수하여 최강의 ERP 구축  
-**전략**: **v7(베이스) + v8(결합)** — v7의 인프라·디자인·안정성 위에 v8의 비즈니스 로직을 포팅
-
----
-
-## 0. 전체 규모 비교
-
-| 항목 | v7 현재 코드베이스 | v8-4.jsx (참조) |
-|------|-------------------|----------------|
-| **총 코드량** | 6,163줄 (index.tsx 1,176 + app.js 4,987) | 3,798줄 (단일 React 파일) |
-| **함수 수** | 272개 (app.js 단독) | 48개 View 컴포넌트 + 유틸 ~30개 |
-| **DB 테이블** | 20개 (D1, 자동생성) | 시드 데이터 (DB 없음, in-memory) |
-| **CSS** | CSS 변수 기반 (var(--) 514회 사용), 다크모드, 반응형 | 인라인 스타일 (Theme 객체 T), 다크모드 없음 |
-| **서버** | Hono + Cloudflare Workers (CRUD 자동생성, 이메일, 날씨, AI) | 없음 (React 단독, 클라이언트 전용) |
-| **배포** | Cloudflare Pages 실가동 | 미배포 (프로토타입) |
+**작성일**: 2026-02-19 v3 (전면 재작성)  
+**전략**: v7의 실가동 인프라 위에 v8의 경영/디자인/영업 로직을 이식하여 **최강의 건설·인테리어 ERP** 구축  
+**핵심 원칙**: "기존을 깨뜨리지 않고 추가한다" — v7 베이스 100% 유지 + v8 기능 이식
 
 ---
 
-## 1. 아키텍처 비교 — 왜 v7이 베이스인가
+## Part I. 현재 상태 정밀 진단
 
-### v7 (현재 코드베이스)의 핵심 강점
+### 1.1 두 코드베이스 정량 비교
 
-| 강점 | 상세 |
+| 항목 | v7 현재 코드베이스 | v8-4.jsx (참조 원본) |
+|------|-------------------|---------------------|
+| **파일 구성** | `index.tsx` (1,176줄) + `app.js` (5,398줄) = **6,574줄** | 단일 React 파일 **3,798줄** |
+| **함수 수** | **279개** (app.js 단독) + 서버 3개 | 48개 View 컴포넌트 + 유틸 ~30개 = **~78개** |
+| **DB 테이블** | **20개** (D1 자동생성, Generic CRUD) | **0개** (in-memory seed data) |
+| **CSS 체계** | CSS 변수 기반 (**384회** `var(--*)` 사용), 다크모드, 반응형 | 인라인 스타일 (Theme 객체 `T`), 다크모드 없음 |
+| **서버** | Hono + Cloudflare Workers (CRUD 자동, 이메일, 날씨, AI) | **없음** (React 클라이언트 전용) |
+| **배포 상태** | Cloudflare Pages **실가동** | **미배포** (프로토타입) |
+| **외부 연동** | Resend(이메일), OpenWeather(날씨), OpenAI(AI), Chart.js, XLSX | 없음 |
+
+### 1.2 v7 (현재 코드베이스) 완전 자산 목록
+
+#### 서버 (index.tsx — 1,176줄)
+| 범주 | 기능 | 상세 |
+|------|------|------|
+| **DB** | D1 SQLite 20개 테이블 | company, team, projects, vendors, meetings, pricedb, orders_manual, as_list, notices, tax_invoices, msg_templates, labor_costs, expenses, item_images, work_presets, notifications, pricedb_history, estimate_template_sets, approvals, user_prefs |
+| **CRUD** | Generic CRUD 헬퍼 | 테이블명만 지정하면 GET/POST/PUT/DELETE 자동 생성 (18개 라우트) |
+| **API** | 특수 엔드포인트 | company (싱글톤), init (시드), health, dashboard/stats, pricedb/:id/stats |
+| **알림** | 읽음 처리 API | notifications/:id/read, notifications-read-all, notifications/unread-count |
+| **결재** | 승인/반려 워크플로 | approvals/:id/approve, approvals/:id/reject (관련 expense 자동 업데이트) |
+| **날씨** | OpenWeather 프록시 | 현재 날씨 + 5일 예보 (시공 현장용: outdoor_ok, rain_warning, snow_warning) |
+| **AI** | OpenAI 연동 | 맞춤법 검사 (gpt-4o-mini), AI 문서 어시스트 (견적 메모, 회의 요약, 계약 조항, 이메일 초안) |
+| **이메일** | Resend API | 범용 이메일, 견적서 HTML 이메일 (프로젝트 데이터 기반 자동 생성) |
+
+#### 프론트엔드 (app.js — 5,398줄, 279개 함수)
+
+**코어 인프라 (행 1-500)**
+| 기능 | 함수 | 설명 |
+|------|------|------|
+| API 레이어 | `api()`, `optimistic()` | JSON fetch 래퍼 + Optimistic UI 패턴 |
+| 데이터 캐시 | `initData()`, `_d` 객체 | 18개 리소스 병렬 패치, 메모리 캐시 |
+| 다크모드 | `applyDarkMode()`, `toggleDarkMode()` | CSS 클래스 전환 + 서버 저장 |
+| 알림 | `getNotifications()` ~ `createNotification()` | 뱃지 업데이트, 읽음 처리, 패널 드롭다운 |
+| 결재 | `getApprovals()` ~ `rejectApprovalItem()` | 요청→승인→반려 전체 흐름 + 자동 알림 생성 |
+| DB 변환 | `dbToProject()`, `projectToDb()` | D1 JSON 직렬화/역직렬화 |
+| 스토리지 | `getProjects()` ~ `saveCompany()` 등 15개 어댑터 | CRUD 캐시 관리 |
+| 상수 | `CATS(18)`, `STATUS_*`, `CONTRACT_STATUS`, `TEAM_MEMBERS` | 공종, 상태, 계약 |
+| 계산 엔진 | `calcP()`, `getTotal()`, `getMR()`, `getProg()`, `getPaid()`, `getUnpaid()`, `getRisks()` | 견적, 마진, 진행률, 미수금, 리스크 |
+| **경영 엔진** | `getFinSummary(pid)`, `getMonthlyAgg(ym)` | ✅ **v8에서 이미 포팅 완료** |
+| 유틸리티 | `fmt()`, `fmtShort()`, `uid()`, `catNm()`, `catIcon()`, `statusBadge()`, `diffDays()`, `addDays()`, `escHtml()`, `svgIcon()` (22종 아이콘) | 포맷팅, SVG 아이콘 |
+
+**네비게이션 & 라우팅 (행 428-558)**
+| 기능 | 상세 |
 |------|------|
-| 🏗️ **서버-클라이언트 분리** | `index.tsx`(서버) + `app.js`(프론트) = 관심사 분리 |
-| 🗄️ **D1 실 데이터베이스** | 20개 테이블, Generic CRUD, 자동 마이그레이션 |
-| 🎨 **Pluuug SaaS 디자인** | CSS 변수 기반, 다크모드, 완전 반응형, 모바일 하단 네비 |
-| ⚡ **Optimistic UI** | API 호출 전 UI 즉시 반영 → 롤백 패턴 |
-| 📧 **이메일 발송** | Resend API 연동 (견적서, 발주서, 미팅 메일) |
-| 🌤️ **날씨/AI 연동** | OpenWeather + OpenAI (맞춤법, AI 어시스트) |
-| 📊 **차트 라이브러리** | Chart.js 연동 (월별 매출 차트) |
-| 🔔 **알림 시스템** | 실시간 뱃지, 읽음 처리, 알림 센터 |
-| ✅ **결재 워크플로** | 경비 결재 요청→승인→반려 전체 흐름 |
-| 📦 **XLSX 내보내기** | 프로젝트, 발주, 노무비, 경비 엑셀 내보내기 |
-| 🖨️ **인쇄/PDF** | 견적서, 발주서, 노무명세서 인쇄 지원 |
-| 🔗 **URL 라우팅** | Browser history 기반 SPA + 딥링크 |
-| 🌙 **다크모드** | CSS 변수 전환 + 서버 설정 저장 |
-| 📱 **모바일 대응** | 하단 네비게이션, 햄버거 메뉴, 터치 최적화 |
+| NAV 배열 | 8개 섹션 (메인/경영/프로젝트/공사관리/비용관리/영업관리/데이터/기타/시스템), 22개 메뉴 |
+| renderNav() | 사이드바 렌더링 + 뱃지 (미수금, 리스크, 알림, 결재) |
+| nav() 라우터 | Browser History API + 딥링크 + 22개 case 분기 |
+| URL 파싱 | `parseUrlRoute()` + popstate 이벤트 |
 
-### v8 (참조 파일)의 핵심 강점
+**페이지/뷰 (행 559-5398) — 22개 페이지**
+| 페이지 | 함수 | 핵심 기능 |
+|--------|------|----------|
+| 🏠 **운영 대시보드** | `renderDash()` | Cost Flow Pipeline, KPI 4개, 진행 프로젝트 테이블, 이번주 일정, 빠른 실행 6버튼, 파이프라인 진행률, 리스크 경고, 공지사항, 날씨 위젯, 월 매출 차트(Chart.js) |
+| 📊 **경영 현황** | `renderExecDash()` | ✅ KPI 6개(매출/실집행/순이익/미수금/진행중/마진율), 월별 현금흐름 CSS 바 차트, 수익 랭킹, 예산 초과 경고, 위험 알림 |
+| 💹 **현금 흐름** | `renderCashFlow()` | ✅ 12개월 수입/지출/순현금 비교 테이블 + CSS 바 차트 |
+| 🏆 **수익 분석** | `renderProfitRank()` | ✅ 프로젝트별 수익 랭킹, 거래처별 집계, 3종 정렬(마진/집행률/계약액) |
+| 📋 프로젝트 목록 | `renderProjects()` | 테이블(정렬, 필터, 검색), 상태별 필터, 추가/편집/삭제, 진행률·마진·수금 시각화 |
+| 📝 견적 작성 | `renderEstimate()` | 공종별 접기/펼치기, 인라인 편집, 원가/판매가 분리, 요약 계산, 프리셋 적용, 사진, 이메일, 맞춤법 |
+| 📅 공정표 | `renderGanttList()` / `renderGanttDetail()` | 목록 + 상세 편집, Phase별 색상 |
+| 🚚 발주 | `renderOrderList()` / `renderOrderDetail()` | 프로젝트별 자동 생성 + 수동 편집, 이메일, 월 그룹 |
+| 💰 수금 관리 | `renderCollection()` | KPI(계약총/수금/미수), 프로젝트별 지급 상태 |
+| 📄 계약서 | `renderContracts()` / `renderContractDetail()` | 조항 편집, AI 검토, 계약서 인쇄 |
+| 📅 미팅 | `renderMeetings()` | 캘린더 + 리스트, 이메일 발송, 메시지 템플릿 |
+| 👥 CRM | `renderCRM()` | 미팅 기반 고객 관리 |
+| 🔧 단가 DB | `renderPriceDB()` | 그룹뷰 + 이력 추적 + 통계 |
+| ⭐ 거래처 | `renderVendors()` | 업종별 관리, 평점 |
+| 💵 세금계산서 | `renderTax()` | 자동 계산, 인쇄, 필터 |
+| 🔧 AS·하자 | `renderAS()` | 프로젝트별 하자 관리 |
+| 👥 팀원 | `renderTeam()` | 직원 관리 |
+| 👷 노무비 | `renderLabor()` | KPI, 월 아코디언, 노무명세서, 프리셋 |
+| 💳 경비 | `renderExpenses()` | 결재 워크플로, 이메일, 승인/반려 |
+| 📊 리포트 | `renderReports()` | 월간/분기 탭, 리포트 |
+| ⚙️ 관리자 | `renderAdmin()` | 회사정보, 공지, 백업/복원, 스토리지 |
+| 🔔 알림/결재 | `renderNotifications()` / `renderApprovals()` | 알림 센터, 결재함 |
 
-| 강점 | 상세 |
+**추가 기능**
+| 기능 | 상세 |
 |------|------|
-| 💰 **통합 수익 계산 엔진** | `getFinSummary()` — 견적원가, 실집행(발주+노무+경비), 수금, 마진율 통합 계산 |
-| 📈 **월별 현금흐름 집계** | `getMonthlyAgg()` — 월별 매출/지출/순이익 자동 집계 |
-| 🏢 **경영 대시보드** | `DashView` — CEO용 KPI 6개, 현금흐름 차트, 수익 랭킹, 예산초과 경고 |
-| 💹 **현금 흐름 뷰** | `CashFlowView` — 12개월 수입/지출/순현금 비교 |
-| 🏆 **수익 분석 뷰** | `ProfitRankView` — 프로젝트별·거래처별 수익 상세 + 정렬 |
-| 📋 **프로젝트 상세 모드** | `PROJECT_NAV` — 프로젝트 진입 시 사이드바 전환 (ERP/시공/Design/문서) |
-| 🏠 **ERP Overview** | `ErpOverviewView` — 프로젝트별 6개 KPI + 예산vs집행 + 원가구성 |
-| 📊 **ERP Budget** | `ErpBudgetView` — 공종별 예산 편성·관리 |
-| 📎 **ERP Attachments** | `ErpAttachmentsView` — 비용유형별(공사비/인건비/경비/기타) 증빙 관리 |
-| 📈 **ERP Report** | `ErpReportView` — 프로젝트별 매출·원가·마진·VAT 통합 분석 |
-| 🤝 **상담 관리** | `ConsultView` — CRM 파이프라인 (초기상담→니즈파악→제안→계약) |
-| 📝 **RFP 관리** | `RfpView` — 입찰/제안 관리 (제안서, 평가 점수, 마감일) |
-| 📐 **디자인 모듈 5개** | Concept / Mood Board / Floor Plan / Materials / Design Overview |
-| 📸 **현장사진 관리** | `SitePhotosView` — 공사 단계별 사진 정리 |
-| 🔍 **현장 분석** | `SiteAnalysisView` — 건물 분석, 구조 이슈, 설비, 접근성, 리스크 |
-| 📄 **견적서 프리뷰 (5탭)** | 표지(고급 세리프) / 견적서 요약 / 상세 내역서 / 공정표 / 대금조건 |
-| 🔧 **Gantt 자동 생성** | `generateGanttFromEstimate()` — 견적서에서 공정표 자동 생성 |
-| 📋 **회의자료 관리** | `MeetingMaterialsView` — 미팅 첨부·체크리스트·후속조치 |
-| ⚙️ **설정 화면** | `SettingsView` — 회사정보, 사용자 설정 |
-| 🏷️ **비용유형 시스템** | `COST_TYPES` — 공사비/인건비/경비/기타 4개 구분 체계 |
+| 📦 XLSX 내보내기 | `exportXLSX()`, `exportProjectsXLSX()`, `exportAllCSV()` |
+| 🖨️ 인쇄/PDF | `printPage()`, `exportPDF()` |
+| 💾 백업/복원 | `backupData()`, `restoreData()` |
+| 📸 사진 업로드 | `uploadEstPhoto()`, `viewEstPhoto()`, `removeEstPhoto()` |
+| 📧 이메일 | 견적서, 발주서, 미팅, 경비 결재 — 4종 이메일 |
+| 🔍 AI 맞춤법 | `checkSpelling()`, `doSpellCheck()`, `copySpellResult()` |
+| 🏷️ 견적 템플릿 | `openEstTemplateSelector()`, `applyTemplateSet()` |
+| 📊 단가 통계 | `openPriceDBStats()`, `recordPriceUsage()` |
+| 📱 모바일 | `openMobileMenu()`, `closeMobileMenu()` + 하단 네비게이션 바 |
 
 ---
 
-## 2. 기능 완전 비교 매트릭스 (모든 모듈)
+### 1.3 v8-4.jsx (참조 원본) — v7에 없는 고유 자산
 
-### 범례
-- ✅ 완전 구현  |  🔶 기본 구현  |  ❌ 미구현  |  🔴 버그 있음
+#### 이미 v7에 포팅 완료된 항목 ✅
+| 기능 | v8 원본 | v7 포팅 위치 | 상태 |
+|------|---------|-------------|------|
+| `getFinSummary()` | line 78-98 | app.js line 318 | ✅ 완료 |
+| `getMonthlyAgg()` | line 101-130 | app.js line 341 | ✅ 완료 |
+| `COST_TYPES`, `COST_ICONS` | line 45-48 | app.js line 275-276 | ✅ 완료 |
+| `renderExecDash()` | DashView line 1054-1214 | app.js line 1095 | ✅ 완료 |
+| `renderCashFlow()` | CashFlowView line 1217-1290 | app.js line 1258 | ✅ 완료 |
+| `renderProfitRank()` | ProfitRankView line 1294-1369 | app.js line 1364 | ✅ 완료 |
+| NAV 경영 섹션 | NAV 구조 | app.js line 431-434 | ✅ 완료 |
+| 라우터 case 추가 | switch-case | app.js line 519-521 | ✅ 완료 |
 
-### 2.1 인프라 & 공통
+#### Phase 0 버그 수정 완료 ✅
+| 버그 | 수정 내용 | 상태 |
+|------|----------|------|
+| `deleteOrder()` undefined 호출 | `api('orders/'+oid, 'DELETE')` 패턴으로 교체 | ✅ 완료 |
+| `monthlyAccordion()` 중복 정의 | line 4788 중복 제거, line 4098 통합본 유지 | ✅ 완료 |
 
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| D1 DB (20개 테이블) | ✅ | ❌ (in-memory) | v7 유지 |
-| Generic CRUD API | ✅ | ❌ | v7 유지 |
-| Optimistic UI | ✅ | ❌ | v7 유지 |
-| CSS 변수 디자인 | ✅ 514회 사용 | ❌ (인라인 T 객체) | v7 유지 |
-| 다크모드 | ✅ | ❌ | v7 유지 |
-| 모바일 반응형 | ✅ 하단네비 | 🔶 @media 기본 | v7 유지 |
-| 이메일 발송 (Resend) | ✅ | ❌ | v7 유지 |
-| 날씨 API | ✅ | ❌ | v7 유지 |
-| AI (맞춤법/어시스트) | ✅ | ❌ | v7 유지 |
-| Chart.js | ✅ | ❌ (CSS 막대) | v7 유지 |
-| XLSX 내보내기 | ✅ | ❌ | v7 유지 |
-| 알림 시스템 | ✅ 뱃지+센터 | 🔶 기본 목록 | v7 유지 |
-| 결재 워크플로 | ✅ 요청→승인→반려 | 🔶 기본 | v7 유지 |
-| URL 라우팅 | ✅ 딥링크 | ✅ Escape키 복귀 | v7 유지 + v8 Escape 참고 |
+#### 아직 이식하지 않은 v8 고유 기능 (이식 대상)
 
-### 2.2 대시보드 & 경영
+**A. 프로젝트 상세 모드 (v8 최대 강점)** — ★★★ 최우선
+| 컴포넌트 | v8 위치 | 기능 | 이식 난이도 |
+|----------|---------|------|------------|
+| `PROJECT_NAV` | line 198-216 | 프로젝트 전용 사이드바 4섹션 (ERP/시공/Design/문서) | 중 |
+| `enterProject(pid)` | line 3680 | 프로젝트 진입 → erp_overview 전환 | 쉬움 |
+| `ErpOverviewView` | line 3063-3204 | 프로젝트 6 KPI + 예산vs집행 + 원가구성 | 중 |
+| `ErpBudgetView` | line 3206-3240 | 공종별 예산 편성·관리 | 쉬움 |
+| `ErpAttachmentsView` | line 3241-3428 | 비용유형별(공사비/인건비/경비/기타) 증빙 폴더 | 중상 |
+| `ErpReportView` | line 3429-3638 | 프로젝트별 매출·원가·마진·VAT 통합 분석 리포트 | 중 |
 
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| **운영 대시보드** (메인) | ✅ Cost Flow Pipeline, KPI 4개, 진행 프로젝트, 이번주 일정, 빠른 실행, 리스크, 파이프라인, 공지, 날씨, 월매출 차트 | ❌ | **v7 유지 (메인)** |
-| **경영 대시보드** (CEO) | ❌ | ✅ KPI 6개(매출/실집행/순이익/미수금/프로젝트수/마진율), 현금흐름 차트, 수익 랭킹, 예산 초과 경고, 위험 알림 | **v8에서 포팅 ★** |
-| **통합 수익 계산** | ❌ | ✅ `getFinSummary()` — 견적원가, 실집행, 수금, 마진 | **v8에서 포팅 ★★** |
-| **월별 현금흐름 집계** | ❌ | ✅ `getMonthlyAgg()` — 월별 수입/지출/순이익 | **v8에서 포팅 ★★** |
-| **현금 흐름 뷰** | ❌ | ✅ 12개월 Bar 차트 + 테이블 | **v8에서 포팅 ★** |
-| **수익 분석 뷰** | ❌ | ✅ 프로젝트별·거래처별 + 3종 정렬 | **v8에서 포팅 ★** |
-| **예산 초과 경고** | ❌ | ✅ 집행률 90%/100% 경고 | **v8에서 포팅 ★** |
+**B. 영업 파이프라인 (신규 모듈)** — ★★ 고우선
+| 컴포넌트 | v8 위치 | 기능 | DB 테이블 필요 |
+|----------|---------|------|---------------|
+| `ConsultView` | line 1555-1628 | 고객 상담 7단계 파이프라인 (초기상담→니즈파악→제안준비→제안완료→계약진행→실주→보류) | consultations |
+| `RfpView` | line 1630-1702 | RFP/입찰 관리 (평가점수, 팀배정, 마감일, 경쟁사) | rfps |
 
-### 2.3 프로젝트 관리
+**C. 디자인 모듈 5개 (신규)** — ★★ 고우선
+| 컴포넌트 | v8 위치 | 기능 |
+|----------|---------|------|
+| `DesignOverviewView` | line 1800-1845 | 프로젝트 디자인 현황 총괄 |
+| `ConceptView` | line 1847-1873 | 디자인 컨셉 (키워드, 원칙, 디자인 스테이트먼트) |
+| `MoodView` | line 1875-1918 | 무드보드 (그라디언트 팔레트, 태그, 참조 이미지) |
+| `FloorPlanView` | line 1920-1968 | 평면 존 구성 (영역별 면적, 용도, 무드 연결) |
+| `MaterialView` | line 1970-2021 | 마감재 관리 (브랜드, 스펙, 가격, 적용 영역) |
+| `DesignDocument` | line 985-1052 | 디자인 문서 프리뷰 (인쇄용 PDF 스타일) |
 
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| 프로젝트 목록 | ✅ 테이블형 (정렬, 필터, 월 그룹) | ✅ 카드형 (태그, 진행률 바) | v7 테이블 유지 + v8 카드뷰 옵션 추가 |
-| 프로젝트 추가/편집 | ✅ 모달 방식 | ✅ 인라인+모달 | v7 유지 |
-| **프로젝트 클릭 동작** | 🔴 **estimate로만 이동** | ✅ **erp_overview로 이동** (상세 모드 진입) | **v8 방식으로 변경 ★★★** |
-| **프로젝트 상세 모드** | ❌ | ✅ PROJECT_NAV (ERP/시공/Design/문서 4섹션) | **v8에서 포팅 ★★** |
-| **ERP Overview** | ❌ | ✅ 6개 KPI + 예산vs집행 + 원가구성 | **v8에서 포팅 ★★** |
-| **ERP Budget** | ❌ | ✅ 공종별 예산 관리 | **v8에서 포팅 ★** |
-| **ERP Attachments** | ❌ | ✅ 비용유형별 증빙 관리 | **v8에서 포팅 ★** |
-| **ERP Report** | ❌ | ✅ 매출·원가·마진·VAT 분석 | **v8에서 포팅 ★** |
-| 태그 관리 | ❌ | ✅ 프로젝트 태그 (IT, VIP 등) | v8에서 포팅 |
+**D. 견적서 고급 프리뷰 & 자동 Gantt** — ★★ 고우선
+| 컴포넌트 | v8 위치 | 기능 |
+|----------|---------|------|
+| `EstimatePreviewDocument` | line 567-940 | **5탭 프리뷰**: 표지(세리프 고급 디자인) → 요약 → 상세 내역서 → 공정표 → 대금조건 |
+| `GANTT_PHASES` | line 122-132 | 9개 공사 Phase 정의 (준비→선행→골조→설비마감→마감1/2→설치→부속→마무리) |
+| `generateGanttFromEstimate()` | line 135-167 | 견적서 아이템에서 자동 공정표 생성 (금액 비례 공기 계산) |
 
-### 2.4 견적 & 계약
+**E. 현장 관리 & 회의자료** — ★ 중우선
+| 컴포넌트 | v8 위치 | 기능 |
+|----------|---------|------|
+| `SitePhotosView` | line 2023-2087 | 공사 단계별 현장사진 관리 |
+| `SiteAnalysisView` | line 2089-2152 | 현장 분석 (건물구조, 설비, 접근성, 리스크) |
+| `MeetingMaterialsView` | line 2900-2943 | 미팅 첨부, 체크리스트, 후속조치 관리 |
 
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| 견적서 편집 | ✅ 상세 인라인 편집 (공종별 접기/펼치기) | ✅ 유사 | v7 유지 |
-| 견적 계산 엔진 | ✅ `calcP()` | ✅ `calcP()` 동일 | v7 유지 |
-| 견적서 이메일 발송 | ✅ 실 발송 | 🔶 Mock 발송 | v7 유지 |
-| **견적서 인쇄 프리뷰** | 🔶 기본 인쇄 | ✅ **5탭 프리뷰** (표지/요약/상세/공정/대금) — 세리프 서체 고급 디자인 | **v8에서 포팅 ★★** |
-| **Gantt 자동 생성** | ❌ | ✅ `generateGanttFromEstimate()` — 9개 공사 Phase 기반 | **v8에서 포팅 ★** |
-| 견적 템플릿 세트 | ✅ 선택·적용 | ❌ | v7 유지 |
-| 단가 이력 추적 | ✅ `pricedb_history` | ❌ | v7 유지 |
-| 계약서 관리 | ✅ 조항 편집 + AI 검토 | 🔶 기본 | v7 유지 |
+**F. UI 컴포넌트** — 포팅 시 참고
+| 컴포넌트 | v8 위치 | 용도 |
+|----------|---------|------|
+| `PreviewOverlay` | line 486-530 | 인쇄 프리뷰 오버레이 (이메일/인쇄/PDF 액션바) |
+| `ActionBar` | line 531-565 | 프리뷰/인쇄/PDF 버튼 바 |
+| `Badge`, `StatusBadge`, `KpiCard`, `Card`, `Head`, `Empty`, `Table`, `Td` | 공통 UI | 재사용 가능 컴포넌트 |
 
-### 2.5 시공 운영
-
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| 공정표 (Gantt) | ✅ 리스트 + 상세 편집 | ✅ + 자동생성 | v7 유지 + v8 자동생성 추가 |
-| 발주 관리 | ✅ 목록/상세/필터/월그룹 | ✅ 유사 | v7 유지 |
-| 발주서 이메일 | ✅ 실 발송 | ❌ | v7 유지 |
-| **발주서 양식 (PO Form)** | 🔴 **아이템 테이블 미포함** | 🔶 기본 | **신규 개선 필요 ★** |
-| 수금 관리 | ✅ KPI + 필터 + 지급 처리 | ✅ 유사 | v7 유지 |
-| 노무비 관리 | ✅ KPI + 월 아코디언 + 노무명세서 | 🔶 기본 | v7 유지 |
-| 경비 관리 | ✅ 결재 워크플로 + 이메일 | 🔶 기본 | v7 유지 |
-| **현장사진 관리** | ❌ | ✅ 공사단계별 사진 | **v8에서 포팅 ★** |
-| **현장 분석** | ❌ | ✅ 건물·설비·리스크 분석 | **v8에서 포팅 ★** |
-
-### 2.6 영업 & CRM
-
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| CRM | 🔶 미팅 기반 기본 | 🔶 유사 | v7 유지 |
-| **상담 관리** | ❌ | ✅ ConsultView — 파이프라인 (7단계), 예산, 경쟁사, 담당자, 후속조치 | **v8에서 포팅 ★★** |
-| **RFP 관리** | ❌ | ✅ RfpView — 입찰, 평가점수, 팀배정, 제안서 | **v8에서 포팅 ★** |
-| 미팅 관리 | ✅ + 이메일 + 템플릿 | ✅ + 체크리스트 + 준비상태 | v7 유지 + v8 체크리스트 추가 |
-| **회의자료 관리** | ❌ | ✅ MeetingMaterialsView | **v8에서 포팅** |
-
-### 2.7 디자인
-
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| **Design Overview** | ❌ | ✅ 프로젝트 디자인 현황 | **v8에서 포팅 ★** |
-| **Concept** | ❌ | ✅ 디자인 컨셉 (키워드, 원칙, 스테이트먼트) | **v8에서 포팅** |
-| **Mood Board** | ❌ | ✅ 무드보드 (그라디언트, 태그, 이미지) | **v8에서 포팅** |
-| **Floor Plan** | ❌ | ✅ 존 구성 (영역, 면적, 무드 연결) | **v8에서 포팅** |
-| **Materials** | ❌ | ✅ 마감재 관리 (브랜드, 스펙, 가격) | **v8에서 포팅** |
-| **Design Document 프리뷰** | ❌ | ✅ 디자인 문서 인쇄 프리뷰 | **v8에서 포팅** |
-
-### 2.8 데이터 & 관리
-
-| 기능 | v7 (현재) | v8 (참조) | 통합 방향 |
-|------|-----------|----------|----------|
-| 단가 DB | ✅ 그룹뷰 + 이력추적 + 통계 | 🔶 기본 | v7 유지 |
-| 거래처 관리 | ✅ 상세 | ✅ 유사 | v7 유지 |
-| 팀원 관리 | ✅ | ✅ | v7 유지 |
-| AS·하자 관리 | ✅ | ✅ | v7 유지 |
-| 세금계산서 | ✅ 자동계산 + 인쇄 | ✅ 유사 | v7 유지 |
-| 리포트 | ✅ 월간/분기 탭 | ✅ 유사 | v7 유지 |
-| 관리자 | ✅ 회사정보 + 백업 | 🔶 SettingsView | v7 유지 |
-| **설정 화면** | ❌ (관리자에 포함) | ✅ SettingsView 별도 | v8 참고하여 개선 |
+**G. 시드 데이터 (테스트용)** — 참고
+| 데이터 | v8 위치 | 포함 내용 |
+|--------|---------|----------|
+| `seedData()` | line 219-409 | 5개 샘플 프로젝트 (ERP budget/attachments 포함), 상담 3건, RFP 2건, 미팅 3건 (체크리스트/준비상태), 벤더 4건, 팀 6명, 디자인 컨셉, 무드, 존, 마감재 |
 
 ---
 
-## 3. 🔴 치명적 버그 (즉시 수정 필요)
+## Part II. 사용자 지적 이슈 & 해결 현황
 
-### Bug #1: `updateOrder()` — undefined 함수 호출
-- **위치**: app.js line 4778
-- **증상**: 발주 아이템 수정 시 `getData()`/`saveOrderManual()` 호출 → 정의되지 않음 → 발주 편집 불가
-- **수정**: `getOrders()` + `api()` 패턴으로 교체
+### 이슈 A: "원래 쓰던 대시보드가 사라져서 불편해" ✅ 해결
+| 항목 | 설명 |
+|------|------|
+| **원인** | 경영 대시보드(v8 DashView) 도입 시 기존 운영 대시보드 교체 우려 |
+| **해결** | `dash`(운영 대시보드) + `exec_dash`(경영 대시보드) 이원 체계 |
+| **현재** | ✅ NAV에 둘 다 배치 완료, 라우터 연결 완료 |
 
-### Bug #2: `deleteOrder()` — undefined 함수 호출
-- **위치**: app.js line 2425 부근
-- **증상**: 발주 삭제 시 동일 문제
-- **수정**: API 직접 호출 패턴으로 교체
+### 이슈 B: "수익분석에서 프로젝트 클릭하면 프로젝트 메뉴로 이동하는데" ⬜ 미해결
+| 항목 | 설명 |
+|------|------|
+| **현상** | `renderProfitRank()`에서 프로젝트 클릭 시 `nav('projects')` → 프로젝트 목록으로만 이동 |
+| **목표** | 프로젝트 클릭 → `erp_overview` (프로젝트 상세 모드) 진입 |
+| **해결책** | v8의 `enterProject(pid)` → `setSelProject + setView('erp_overview')` 패턴 포팅 |
+| **의존성** | Phase 2 (프로젝트 상세 모드) 구현 후 가능 |
 
-### Bug #3: `monthlyAccordion()` 중복 정의
-- **위치**: app.js line 4098 & line 4788
-- **증상**: 두 번 정의되어 후자가 전자를 덮어씀 → 일부 모듈에서 예기치 않은 동작
-- **수정**: 하나로 통합
+### 이슈 C: "프로젝트 메뉴에서 각 프로젝트 클릭하면 프로젝트 전용 메뉴로 넘어가야 해" ⬜ 미해결
+| 항목 | 설명 |
+|------|------|
+| **현상** | 프로젝트 목록 클릭 → 편집 모달만 열림 (또는 견적서 이동) |
+| **목표** | 프로젝트 클릭 → 사이드바가 프로젝트 전용 NAV(ERP/시공/Design/문서)로 전환 |
+| **해결책** | v8의 `PROJECT_NAV` + `projectMode` 상태 + `renderNav()` 분기 |
+| **의존성** | Phase 2 핵심 |
 
----
+### 이슈 D: "프리셋 메뉴가 연/월 구조여야 하는데" ⬜ 미해결
+| 항목 | 설명 |
+|------|------|
+| **목표** | 년 → 월 → 프로젝트ID 3단 드릴다운 네비게이션 |
+| **의존성** | Phase 7 |
 
-## 4. 🟡 사용자 지적 문제 (핵심 UX 이슈)
-
-### 이슈 A: "원래 쓰던 대시보드가 사라져서 불편해"
-- **현상**: v7의 `renderDash()`는 **운영 대시보드** (일정, 빠른 실행, 리스크, 공지, 날씨 등)
-- **문제**: 경영 대시보드(v8 DashView)가 도입되면 이 운영 대시보드가 교체될 위험
-- **해결**: 
-  - `dash` (메인) = **운영 대시보드** (현재 renderDash) 유지·정리
-  - `exec_dash` (신규) = **경영 대시보드** (v8 DashView 포팅)
-  - 사이드바 NAV에 둘 다 배치
-
-### 이슈 B: "수익분석에서 프로젝트 클릭하면 프로젝트 메뉴로 이동하는데"
-- **현상**: 현재 코드에서 프로젝트 클릭 시 `nav('estimate')` → 견적서만 보임
-- **해결**: 프로젝트 클릭 시 **프로젝트 상세 모드**(erp_overview) 진입으로 변경
-- **구현**: v8의 `enterProject(pid)` → `selProject 설정 + erp_overview 이동` 패턴 포팅
-
-### 이슈 C: "프로젝트 메뉴에서 각 프로젝트 클릭하면 프로젝트 메뉴로 넘어가야 해"
-- **현상**: 프로젝트 목록에서 클릭 → 편집 모달만 열림
-- **해결**: v8의 `PROJECT_NAV` 구조 도입
-  - 프로젝트 선택 → 사이드바가 프로젝트 전용 네비로 전환
-  - ERP(Overview/Budget/첨부/견적/리포트) + 시공(공정/발주/수금/노무) + Design(5개) + 문서
-  - `← 보드` 버튼으로 프로젝트 목록 복귀
+### 이슈 E: "발주서 양식에 아이템 테이블이 없어" ⬜ 미해결
+| 항목 | 설명 |
+|------|------|
+| **목표** | PO 양식에 회사정보 + 아이템 테이블 + 합계 포함, 이메일에도 반영 |
+| **의존성** | Phase 7 |
 
 ---
 
-## 5. 통합 마스터 플랜 — 개발 로드맵
+## Part III. 통합 마스터 플랜 — 8 Phase 개발 로드맵
 
 ### 전략 원칙
-1. **v7을 베이스로 유지** — 서버, DB, CSS, 반응형, 이메일, AI, 차트 등 인프라 전부 유지
-2. **v8의 비즈니스 로직을 Vanilla JS로 포팅** — React 컴포넌트 → DOM 렌더 함수로 변환
-3. **기존 기능은 깨뜨리지 않음** — 추가만, 교체하지 않음
-4. **CSS 변수 체계 준수** — 인라인 스타일(T 객체) 대신 var(--) 사용
+```
+1. v7을 100% 베이스로 유지 — 서버, DB, CSS, 반응형, 이메일, AI, 차트 모두 보존
+2. v8의 React 컴포넌트를 Vanilla JS DOM 렌더 함수로 변환하여 이식
+3. CSS 변수(var(--*)) 체계 준수 — v8의 인라인 T 객체 스타일을 CSS 변수로 치환
+4. 기존 기능은 절대 교체하지 않음 — 추가만 허용
+5. 모든 데이터는 D1 DB 테이블로 관리 — in-memory 금지
+```
 
 ---
 
-### Phase 0: 버그 수정 (즉시, 30분)
-| # | 작업 | 상태 |
-|---|------|------|
-| 0-1 | `updateOrder()` 함수 수정 → api() 패턴 | ⬜ |
-| 0-2 | `deleteOrder()` 함수 수정 → api() 패턴 | ⬜ |
-| 0-3 | `monthlyAccordion()` 중복 제거 → 하나로 통합 | ⬜ |
+### Phase 0: 버그 수정 (30분) — ✅ 완료
+| # | 작업 | 커밋 | 상태 |
+|---|------|------|------|
+| 0-1 | `deleteOrder()` → `api('orders/'+oid, 'DELETE')` 패턴 | bce6f43 | ✅ |
+| 0-2 | `monthlyAccordion()` 중복 정의 제거 → 하나로 통합 | bce6f43 | ✅ |
 
 ---
 
-### Phase 1: 경영 엔진 포팅 (1일)
-> v8의 핵심 계산 엔진을 v7에 이식
-
-| # | 작업 | 포팅 원본 | 설명 |
-|---|------|----------|------|
-| 1-1 | `getFinSummary(pid)` | v8 line 78-98 | 프로젝트별 통합 수익 계산 (견적원가, 실집행, 수금, 마진) |
-| 1-2 | `getMonthlyAgg(ym)` | v8 line 101-130 | 월별 매출/지출/순이익 집계 |
-| 1-3 | `COST_TYPES`, `COST_ICONS` | v8 line 45-48 | 비용유형 상수 (공사비/인건비/경비/기타) |
-| 1-4 | `renderExecDash()` | v8 DashView line 1054-1214 | 경영 대시보드 (KPI 6개 + 현금흐름 + 수익 랭킹) |
-| 1-5 | `renderCashFlow()` | v8 CashFlowView line 1217-1290 | 12개월 현금 흐름 뷰 |
-| 1-6 | `renderProfitRank()` | v8 ProfitRankView line 1294-1369 | 수익 분석 (프로젝트별·거래처별 + 정렬) |
-| 1-7 | NAV 구조 수정 | — | 경영 섹션에 `경영 현황`, `현금 흐름`, `수익 분석` 추가 |
-
----
-
-### Phase 2: 프로젝트 상세 모드 (1-2일)
-> v8의 핵심 UX — 프로젝트 진입 시 별도 네비게이션
-
-| # | 작업 | 포팅 원본 | 설명 |
-|---|------|----------|------|
-| 2-1 | `PROJECT_NAV` 구조 도입 | v8 line 192-215 | 프로젝트 전용 사이드바 (4섹션) |
-| 2-2 | `enterProject(pid)` 패턴 | v8 line 3680 | 프로젝트 진입 함수 |
-| 2-3 | `renderNav()` 수정 | — | 프로젝트 모드 시 사이드바 전환 |
-| 2-4 | `renderErpOverview(pid)` | v8 ErpOverviewView line 3063-3204 | 프로젝트 종합 현황 (6 KPI + 예산vs집행 + 원가구성) |
-| 2-5 | `renderErpBudget(pid)` | v8 ErpBudgetView line 3206-3240 | 예산 관리 |
-| 2-6 | `renderErpAttachments(pid)` | v8 ErpAttachmentsView line 3241-3428 | 증빙 관리 (비용유형별) |
-| 2-7 | `renderErpReport(pid)` | v8 ErpReportView line 3429-3638 | 프로젝트별 리포트 |
-| 2-8 | 전체 프로젝트 클릭 동작 수정 | — | `nav('estimate')` → `enterProject(pid)` 전환 |
+### Phase 1: 경영 엔진 & 대시보드 포팅 (1일) — ✅ 완료
+| # | 작업 | v8 원본 위치 | v7 포팅 위치 | 상태 |
+|---|------|-------------|-------------|------|
+| 1-1 | `getFinSummary(pid)` | line 78-98 | app.js line 318 | ✅ |
+| 1-2 | `getMonthlyAgg(ym)` | line 101-130 | app.js line 341 | ✅ |
+| 1-3 | `COST_TYPES`, `COST_ICONS` 상수 | line 45-48 | app.js line 275-276 | ✅ |
+| 1-4 | `renderExecDash()` CEO 경영 대시보드 | DashView 1054-1214 | app.js line 1095 | ✅ |
+| 1-5 | `renderCashFlow()` 12개월 현금 흐름 | CashFlowView 1217-1290 | app.js line 1258 | ✅ |
+| 1-6 | `renderProfitRank()` 수익 분석 | ProfitRankView 1294-1369 | app.js line 1364 | ✅ |
+| 1-7 | NAV 경영 섹션 추가 | — | app.js line 431-434 | ✅ |
+| 1-8 | 라우터 case 추가 | — | app.js line 519-521 | ✅ |
 
 ---
 
-### Phase 3: 영업 모듈 포팅 (1-2일)
-> v8의 신규 CRM 모듈
+### Phase 2: 프로젝트 상세 모드 (1.5일) — ⬜ 다음 구현 대상
+> **v8의 최대 강점: 프로젝트 클릭 → 전용 네비게이션 전환**
 
-| # | 작업 | 포팅 원본 | 설명 |
-|---|------|----------|------|
-| 3-1 | `consultations` DB 테이블 추가 | — | 서버 index.tsx에 테이블 + CRUD |
-| 3-2 | `renderConsultations()` | v8 ConsultView line 1555-1628 | 상담 관리 (7단계 파이프라인) |
-| 3-3 | `rfps` DB 테이블 추가 | — | 서버 index.tsx에 테이블 + CRUD |
-| 3-4 | `renderRFPs()` | v8 RfpView line 1630-1702 | RFP 관리 (입찰·평가·마감) |
-| 3-5 | NAV에 영업 섹션 추가 | — | 상담관리, RFP 추가 |
+| # | 작업 | v8 원본 | 필수 변경 | 난이도 |
+|---|------|---------|----------|--------|
+| 2-1 | `PROJECT_NAV` 상수 도입 | line 198-216 | app.js 상수 추가 | ⬜ 쉬움 |
+| 2-2 | `S.selPid` + 프로젝트 모드 상태 | line 3675 `projectMode` | S 객체 확장 | ⬜ 쉬움 |
+| 2-3 | `enterProject(pid)` 함수 | line 3680 | `selPid + nav('erp_overview')` | ⬜ 쉬움 |
+| 2-4 | `renderNav()` 수정 — 프로젝트 모드 분기 | line 3748-3780 | 프로젝트 전용 사이드바 렌더링, `← 보드` 버튼 | ⬜ 중 |
+| 2-5 | `renderErpOverview(pid)` | ErpOverviewView 3063-3204 | 6 KPI + 예산vs집행 + 원가구성 → Vanilla JS | ⬜ 중 |
+| 2-6 | `renderErpBudget(pid)` | ErpBudgetView 3206-3240 | 예산 편성·관리 | ⬜ 쉬움 |
+| 2-7 | `renderErpAttachments(pid)` | ErpAttachmentsView 3241-3428 | 비용유형별 증빙 관리 → DB 테이블 확장 | ⬜ 중상 |
+| 2-8 | `renderErpReport(pid)` | ErpReportView 3429-3638 | 프로젝트별 종합 리포트 | ⬜ 중 |
+| 2-9 | 라우터 확장 | — | `erp_overview`, `erp_budget`, `erp_attachments`, `erp_report` 4개 case | ⬜ 쉬움 |
+| 2-10 | 프로젝트 목록 클릭 동작 변경 | — | 편집 모달 → `enterProject(pid)` | ⬜ 쉬움 |
+| 2-11 | 수익분석 클릭 동작 변경 | — | `nav('projects')` → `enterProject(pid)` | ⬜ 쉬움 |
 
----
-
-### Phase 4: 견적서 프리뷰 & Gantt 자동생성 (1-2일)
-> v8의 고급 문서 기능
-
-| # | 작업 | 포팅 원본 | 설명 |
-|---|------|----------|------|
-| 4-1 | `renderEstimatePreview(pid)` | v8 EstimatePreviewDocument line 567-940 | 5탭 인쇄용 프리뷰 (표지/요약/상세/공정/대금) |
-| 4-2 | `GANTT_PHASES` 상수 | v8 line 135-160 | 9개 공사 Phase 정의 |
-| 4-3 | `generateGanttFromEstimate(pid)` | v8 line 135-190 | 견적서에서 공정표 자동 생성 |
-| 4-4 | 견적서 화면에 프리뷰/자동생성 버튼 추가 | — | UI 연결 |
+**DB 변경**: `projects` 테이블에 `erp_data TEXT` 칼럼 추가 (budget, attachments JSON 저장)  
+**핵심 로직**: `renderNav()` 내부에서 `S.selPid && PROJECT_VIEW_IDS.has(S.page)` 체크 → 프로젝트 전용 사이드바 렌더
 
 ---
 
-### Phase 5: 디자인 모듈 포팅 (2-3일)
-> v8의 디자인 프레젠테이션 모듈
+### Phase 3: 영업 모듈 (1.5일) — ⬜ 대기
+> 신규 DB 테이블 2개 + 렌더 함수 2개
 
-| # | 작업 | 포팅 원본 |
-|---|------|----------|
-| 5-1 | `design_*` DB 테이블 추가 | concepts, moods, zones, materials |
-| 5-2 | `renderDesignOverview()` | v8 DesignOverviewView |
-| 5-3 | `renderConcept()` | v8 ConceptView |
-| 5-4 | `renderMoodBoard()` | v8 MoodView |
-| 5-5 | `renderFloorPlan()` | v8 FloorPlanView |
-| 5-6 | `renderMaterials()` | v8 MaterialView |
-| 5-7 | `renderDesignDocument()` | v8 DesignDocument (인쇄 프리뷰) |
+| # | 작업 | v8 원본 | 서버 변경 | 난이도 |
+|---|------|---------|----------|--------|
+| 3-1 | `consultations` DB 테이블 생성 | seedData consultations | index.tsx `ensureTables()` + `crud('consultations')` | ⬜ 중 |
+| 3-2 | `renderConsultations()` | ConsultView 1555-1628 | 7단계 파이프라인 칸반, CRUD | ⬜ 중 |
+| 3-3 | `rfps` DB 테이블 생성 | seedData rfps | index.tsx `ensureTables()` + `crud('rfps')` | ⬜ 중 |
+| 3-4 | `renderRFPs()` | RfpView 1630-1702 | 입찰/평가/마감, CRUD | ⬜ 중 |
+| 3-5 | NAV 영업 섹션 확장 | — | 상담관리, RFP 추가 | ⬜ 쉬움 |
+| 3-6 | 라우터 case 추가 | — | `consultations`, `rfp` 2개 | ⬜ 쉬움 |
+
+**consultations 테이블 스키마**:
+```sql
+CREATE TABLE IF NOT EXISTS consultations (
+  id TEXT PRIMARY KEY, client_company TEXT, contact_name TEXT, contact_email TEXT,
+  contact_phone TEXT, date TEXT, type TEXT DEFAULT '방문', status TEXT DEFAULT '초기상담',
+  budget_range TEXT, area REAL DEFAULT 0, requirements TEXT, style_pref TEXT,
+  timeline TEXT, decision_maker TEXT, referral TEXT, competitor TEXT,
+  assigned TEXT, next_action TEXT, next_date TEXT, notes TEXT DEFAULT '[]',
+  pid TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**rfps 테이블 스키마**:
+```sql
+CREATE TABLE IF NOT EXISTS rfps (
+  id TEXT PRIMARY KEY, title TEXT, client TEXT, received TEXT, deadline TEXT,
+  status TEXT DEFAULT '작성중', priority TEXT DEFAULT '보통', budget REAL DEFAULT 0,
+  area REAL DEFAULT 0, location TEXT, requirements TEXT, approach TEXT,
+  drive_url TEXT, proposal_url TEXT, team TEXT DEFAULT '[]',
+  eval TEXT DEFAULT '[]', competitor TEXT, result TEXT,
+  consultation_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
 
 ---
 
-### Phase 6: 현장 관리 & 회의자료 (1일)
+### Phase 4: 견적서 5탭 프리뷰 & Gantt 자동생성 (1.5일) — ⬜ 대기
 
-| # | 작업 | 포팅 원본 |
-|---|------|----------|
-| 6-1 | `site_photos` DB 테이블 추가 | — |
-| 6-2 | `renderSitePhotos()` | v8 SitePhotosView |
-| 6-3 | `site_analysis` DB 테이블 추가 | — |
-| 6-4 | `renderSiteAnalysis()` | v8 SiteAnalysisView |
-| 6-5 | `meeting_materials` 테이블 확장 | — |
-| 6-6 | `renderMeetingMaterials()` 개선 | v8 MeetingMaterialsView |
-| 6-7 | 미팅에 체크리스트·준비상태 추가 | v8 meetings 확장 |
+| # | 작업 | v8 원본 | 난이도 |
+|---|------|---------|--------|
+| 4-1 | `GANTT_PHASES` 상수 | line 122-132 | ⬜ 쉬움 |
+| 4-2 | `generateGanttFromEstimate(pid)` | line 135-167 | ⬜ 중 |
+| 4-3 | `renderEstimatePreview(pid)` 5탭 | EstimatePreviewDocument 567-940 | ⬜ 상 |
+| 4-4 | 프리뷰 오버레이 (`renderPreviewOverlay`) | PreviewOverlay 486-530 | ⬜ 중 |
+| 4-5 | 견적서 화면에 "프리뷰"/"공정표 자동생성" 버튼 추가 | — | ⬜ 쉬움 |
+
+**5탭 상세**:
+1. **표지** — Noto Serif KR 서체, 프로젝트명, 의뢰처, 금액, 날짜, 회사 서명란
+2. **요약** — 공종별 합계 테이블 + 간접비(이윤/안전/식대) + 총 견적금액
+3. **상세 내역서** — 공종별 세부 아이템 (재료비/노무비/장비비 + 원가 열)
+4. **공정표** — Gantt 타임라인 + 공사 기간/날짜 표
+5. **대금조건** — 지불 조건 (계약금/중도금/잔금 %)
 
 ---
 
-### Phase 7: 프리셋 메뉴 연/월 구조 + PO 양식 (1-2일)
-> 이전 리포트에서 지적된 미구현 항목
+### Phase 5: 디자인 모듈 5개 (2일) — ⬜ 대기
+
+| # | 작업 | v8 원본 | DB 변경 |
+|---|------|---------|---------|
+| 5-1 | 디자인 데이터 구조 확장 | projects 테이블에 `design_data TEXT` 칼럼 | index.tsx |
+| 5-2 | `renderDesignOverview()` | DesignOverviewView 1800-1845 | — |
+| 5-3 | `renderConcept()` | ConceptView 1847-1873 | — |
+| 5-4 | `renderMoodBoard()` | MoodView 1875-1918 | — |
+| 5-5 | `renderFloorPlan()` | FloorPlanView 1920-1968 | — |
+| 5-6 | `renderMaterials()` | MaterialView 1970-2021 | — |
+| 5-7 | `renderDesignDocument()` 인쇄 프리뷰 | DesignDocument 985-1052 | — |
+| 5-8 | NAV PROJECT_NAV에 Design 섹션 + 5개 항목 | — | — |
+
+**design_data JSON 구조**:
+```json
+{
+  "concept": { "keywords": [], "principles": [], "statement": "" },
+  "moods": [{ "id": "", "gradient": [], "tags": [], "images": [] }],
+  "zones": [{ "id": "", "name": "", "area": 0, "purpose": "", "mood_id": "" }],
+  "materials": [{ "id": "", "name": "", "brand": "", "spec": "", "price": 0, "zone_id": "" }]
+}
+```
+
+---
+
+### Phase 6: 현장 관리 & 회의자료 (1일) — ⬜ 대기
+
+| # | 작업 | v8 원본 | DB 변경 |
+|---|------|---------|---------|
+| 6-1 | `site_photos` DB 테이블 | — | index.tsx |
+| 6-2 | `renderSitePhotos()` | SitePhotosView 2023-2087 | — |
+| 6-3 | `site_analysis` DB 테이블 | — | index.tsx |
+| 6-4 | `renderSiteAnalysis()` | SiteAnalysisView 2089-2152 | — |
+| 6-5 | meetings 테이블 확장 | 체크리스트, 준비상태 필드 | index.tsx |
+| 6-6 | `renderMeetingMaterials()` | MeetingMaterialsView 2900-2943 | — |
+
+---
+
+### Phase 7: 프리셋 메뉴 구조 + PO 양식 (1.5일) — ⬜ 대기
 
 | # | 작업 | 설명 |
 |---|------|------|
 | 7-1 | 프리셋 3단 드릴다운 | 년 → 월 → 프로젝트ID 계층 네비게이션 |
-| 7-2 | 페이지 공통 프로젝트 필터 드롭다운 | 발주/노무/경비 등 모든 페이지에 프로젝트 필터 |
-| 7-3 | PO 양식 개선 | 회사정보 + 아이템 테이블 + 합계 + 인쇄/PDF |
-| 7-4 | PO 이메일에 아이템 포함 | 현재 요약만 보냄 → 전체 아이템 테이블 포함 |
+| 7-2 | 페이지별 프로젝트 필터 드롭다운 | 발주/노무/경비 모든 페이지에 공통 적용 |
+| 7-3 | PO 양식 개선 | 회사정보 헤더 + 아이템 테이블 + 합계 + 인쇄/PDF |
+| 7-4 | PO 이메일 개선 | 요약 → 전체 아이템 테이블 포함 |
 
 ---
 
-### Phase 8: CSS 변수 마이그레이션 (ID 9) + 마무리
+### Phase 8: CSS 마이그레이션 + 테스트 + 배포 (1.5일) — ⬜ 대기
 
 | # | 작업 | 설명 |
 |---|------|------|
-| 8-1 | CSS 변수 전체 마이그레이션 | 나머지 하드코딩 색상 → var(--) 전환 |
-| 8-2 | 운영 대시보드 정리 | 위젯 배치 최적화, 불필요 항목 정리 |
-| 8-3 | 전체 E2E 테스트 | 모든 CRUD, 네비게이션, 이메일 발송 |
-| 8-4 | 배포 검증 | Cloudflare Pages 프로덕션 배포 + 확인 |
+| 8-1 | 나머지 하드코딩 색상 → `var(--*)` 전환 | 포팅된 모든 뷰의 CSS 변수 치환 |
+| 8-2 | 운영 대시보드 위젯 정리 | 레이아웃 최적화 |
+| 8-3 | 전체 기능 테스트 | 모든 CRUD, 네비게이션, 이메일, 인쇄 |
+| 8-4 | Cloudflare Pages 프로덕션 배포 | 빌드 → 디플로이 → 검증 |
 
 ---
 
-## 6. 사이드바 NAV 목표 구조 (통합 후)
+## Part IV. 통합 후 최종 아키텍처
+
+### 4.1 사이드바 NAV 최종 구조
 
 ```
 ┌─────────────────────────────────────────┐
 │  Frame Plus ERP                         │
 ├─────────────────────────────────────────┤
 │  🏠 메인                                │
-│    ├ 대표 대시보드 (dash)     [메인]     │
-│    └ 경영 현황 (exec_dash)    [NEW]     │
+│    ├ 대표 대시보드 (dash)               │
+│    └ 경영 현황 (exec_dash)    [DONE]    │
 │                                         │
-│  📊 경영                                │
-│    ├ 현금 흐름 (cashflow)     [NEW]     │
-│    ├ 수익 분석 (profit_rank)  [NEW]     │
-│    └ 월 손익 리포트 (reports)            │
+│  📊 경영                      [DONE]    │
+│    ├ 현금 흐름 (cashflow)               │
+│    └ 수익 분석 (profit_rank)            │
 │                                         │
 │  📋 프로젝트                            │
 │    ├ 프로젝트 목록 (projects)            │
 │    ├ 견적서 (estimate)                  │
 │    └ 계약 (contracts)                   │
 │                                         │
-│  🤝 영업                        [NEW]   │
-│    ├ 상담 관리 (consultations)  [NEW]   │
-│    ├ RFP 관리 (rfp)            [NEW]   │
+│  🤝 영업                      [Phase 3] │
+│    ├ 상담 관리 (consultations)           │
+│    ├ RFP 관리 (rfp)                     │
+│    ├ 미팅 캘린더 (meetings)              │
 │    └ CRM (crm)                          │
 │                                         │
 │  🏗️ 공사 관리                           │
@@ -387,39 +428,41 @@
 │  💾 데이터                              │
 │    ├ 단가 DB (pricedb)                  │
 │    ├ 거래처 (vendors)                   │
-│    ├ 팀원 관리 (team)                   │
-│    ├ 미팅/회의자료 (meetings)            │
-│    └ 현장사진 (site_photos)     [NEW]   │
+│    └ 팀원 관리 (team)                   │
 │                                         │
 │  ⚙️ 시스템                              │
 │    ├ 세금계산서 (tax)                    │
 │    ├ AS·하자 (as)                       │
 │    ├ 알림 센터 (notifications)           │
 │    ├ 결재함 (approvals)                 │
-│    └ 관리자/설정 (admin)                │
+│    ├ 리포트 (reports)                   │
+│    └ 관리자 (admin)                     │
 └─────────────────────────────────────────┘
+```
 
-[프로젝트 상세 모드] (프로젝트 클릭 시)
+### 4.2 프로젝트 상세 모드 (Phase 2 구현 후)
+
+```
 ┌─────────────────────────────────────────┐
-│  ← 보드     [프로젝트명]               │
-│  [클라이언트] · [면적]                  │
+│  ← 보드      [프로젝트명]              │
+│  [클라이언트] · [면적] m²              │
 ├─────────────────────────────────────────┤
-│  📊 ERP                                │
-│    ├ Overview       [NEW]               │
-│    ├ Budget         [NEW]               │
-│    ├ Attachments    [NEW]               │
+│  ▣ ERP                                 │
+│    ├ Overview                           │
+│    ├ Budget                             │
+│    ├ Attachments                        │
 │    ├ 견적서                             │
-│    └ Report         [NEW]               │
+│    └ Report                             │
 │                                         │
 │  🏗️ 시공                               │
 │    ├ 공정표                             │
 │    ├ 발주                               │
 │    ├ 수금                               │
 │    ├ 노무비                             │
-│    ├ 현장사진       [NEW]               │
-│    └ 현장 분석      [NEW]               │
+│    ├ 현장사진           [Phase 6]       │
+│    └ 현장 분석          [Phase 6]       │
 │                                         │
-│  ◆ Design           [NEW]              │
+│  ◆ Design               [Phase 5]      │
 │    ├ Overview                           │
 │    ├ Concept                            │
 │    ├ Mood Board                         │
@@ -433,53 +476,196 @@
 
 ---
 
-## 7. 예상 일정
+### 4.3 통합 후 정량 예측
 
-| Phase | 내용 | 소요 | 누적 |
-|-------|------|------|------|
-| **Phase 0** | 버그 수정 3건 | 0.5일 | 0.5일 |
-| **Phase 1** | 경영 엔진 + 대시보드 | 1일 | 1.5일 |
-| **Phase 2** | 프로젝트 상세 모드 | 1.5일 | 3일 |
-| **Phase 3** | 영업 모듈 (상담/RFP) | 1.5일 | 4.5일 |
-| **Phase 4** | 견적 프리뷰 + Gantt 자동 | 1.5일 | 6일 |
-| **Phase 5** | 디자인 모듈 5개 | 2일 | 8일 |
-| **Phase 6** | 현장관리 + 회의자료 | 1일 | 9일 |
-| **Phase 7** | 프리셋 메뉴 + PO 양식 | 1.5일 | 10.5일 |
-| **Phase 8** | CSS 마이그레이션 + 테스트 | 1.5일 | **12일** |
+| 구분 | 현재 (v7+Phase 0-1) | Phase 2 후 | Phase 3 후 | Phase 4 후 | 최종 (Phase 8) |
+|------|---------------------|-----------|-----------|-----------|---------------|
+| 페이지/뷰 | **25개** | 29개 | 31개 | 32개 | **42개** |
+| DB 테이블 | **20개** | 20개 (+칼럼) | 22개 | 22개 | **26개** |
+| API 엔드포인트 | **~50개** | ~54개 | ~62개 | ~62개 | **~72개** |
+| 함수 수 | **279개** | ~300개 | ~315개 | ~330개 | **~380개** |
+| 코드 라인 | **6,574줄** | ~7,500줄 | ~8,200줄 | ~8,800줄 | **~10,500줄** |
 
 ---
 
-## 8. 최종 통합 후 예상 모듈 수
+## Part V. 기술 구현 가이드
 
-| 구분 | 현재 (v7) | 통합 후 | 증가 |
-|------|-----------|---------|------|
-| 페이지/뷰 | 22개 | **42개** | +20 |
-| DB 테이블 | 20개 | **26개** | +6 |
-| API 엔드포인트 | ~50개 | **~70개** | +20 |
-| 함수 수 | 272개 | **~380개** | +108 |
-| 코드 라인 | 6,163줄 | **~10,000줄** | +3,837 |
+### 5.1 React → Vanilla JS 변환 패턴
+
+**v8 (React)**:
+```jsx
+function DashView({ D, setView, setSelProject }) {
+  const fins = D.projects.map(p => ({ p, f: getFinSummary(p, D) }));
+  return <div>
+    <div style={{ fontSize:22, fontWeight:800 }}>경영 대시보드</div>
+    {fins.map(({p,f}) => <div key={p.id} onClick={() => {
+      setSelProject(p.id); setView("erp_overview");
+    }}>{p.nm}</div>)}
+  </div>;
+}
+```
+
+**v7 (Vanilla JS) 변환 결과**:
+```javascript
+function renderExecDash() {
+  const ps = getProjects();
+  const fins = ps.map(p => ({ p, f: getFinSummary(p) }));
+  document.getElementById('content').innerHTML = `
+    <div style="font-size:22px;font-weight:800;color:var(--text)">경영 대시보드</div>
+    ${fins.map(({p,f}) => `
+      <div onclick="enterProject('${p.id}')" style="cursor:pointer">${escHtml(p.nm)}</div>
+    `).join('')}
+  `;
+}
+```
+
+**핵심 변환 규칙**:
+| React 패턴 | Vanilla JS 패턴 |
+|------------|----------------|
+| `{D.projects.map(...)}` | `getProjects().map(...)` |
+| `onClick={() => fn(x)}` | `onclick="fn('${x}')"` |
+| `setView("page")` | `nav('page')` |
+| `setSelProject(pid)` | `S.selPid = pid` |
+| `style={{ color: T.r }}` | `style="color:var(--danger)"` |
+| `<Card>...</Card>` | `<div class="card">...</div>` |
+| `{condition && <div>}` | `${condition ? '<div>...</div>' : ''}` |
+| `useState(initial)` | `let _variable = initial` (모듈 레벨) |
+
+### 5.2 CSS 변수 매핑 (v8 Theme → v7 CSS Variables)
+
+| v8 Theme (T.) | v7 CSS Variable | 용도 |
+|----------------|-----------------|------|
+| `T.t` (#1A1A1A) | `var(--text)` | 기본 텍스트 |
+| `T.t2` (#777) | `var(--text-muted)` | 보조 텍스트 |
+| `T.t3` (#AAA) | `var(--text-light)` | 희미한 텍스트 |
+| `T.s` (#FFFFFF) | `var(--white)` | 배경 흰색 |
+| `T.bg` (#F5F5F3) | `var(--gray-50)` | 전체 배경 |
+| `T.b` (#ECECEA) | `var(--border)` | 테두리 |
+| `T.b2` (#F2F2F0) | `var(--border-light)` | 연한 테두리 |
+| `T.r` (#D4564E) | `var(--danger)` | 위험/에러 |
+| `T.g` (#4A7A4A) | `var(--success)` | 성공/이익 |
+| `T.blue` (#3B82F6) | `var(--primary)` | 주 색상 |
+| `T.purple` (#8B5CF6) | `var(--purple)` | 보라색 |
+| `T.orange` (#EA8B2D) | `var(--warning)` | 경고/주의 |
+| `T.w` (#A89070) | `var(--warm)` | 따뜻한 톤 |
+| `T.radius` (10) | `var(--radius)` | 모서리 |
+
+### 5.3 프로젝트 상세 모드 구현 상세 (Phase 2 핵심)
+
+```javascript
+// app.js에 추가할 구조
+
+// PROJECT_NAV 정의
+const PROJECT_NAV = [
+  { section:'ERP', icon:'▣', items:[
+    {id:'erp_overview',label:'Overview'},{id:'erp_budget',label:'Budget'},
+    {id:'erp_attachments',label:'Attachments'},{id:'estimate',label:'견적서'},
+    {id:'erp_report',label:'Report'}
+  ]},
+  { section:'시공', icon:'🏗️', items:[
+    {id:'gantt',label:'공정표'},{id:'orders',label:'발주'},
+    {id:'collection',label:'수금'},{id:'labor',label:'노무비'}
+  ]},
+  { section:'문서', icon:'📄', items:[
+    {id:'contracts',label:'계약서'}
+  ]}
+];
+const PROJECT_VIEW_IDS = new Set(PROJECT_NAV.flatMap(g=>g.items.map(i=>i.id)));
+
+// 프로젝트 진입
+function enterProject(pid) {
+  S.selPid = pid;
+  nav('erp_overview');
+}
+
+// 보드 복귀
+function backToBoard() {
+  S.selPid = null;
+  nav('projects');
+}
+
+// renderNav() 수정: 프로젝트 모드 시 전용 사이드바
+function renderNav() {
+  const projectMode = S.selPid && PROJECT_VIEW_IDS.has(S.page);
+  if (projectMode) {
+    renderProjectNav(); // 프로젝트 전용
+  } else {
+    renderGlobalNav();  // 기존 전역 네비
+  }
+}
+```
 
 ---
 
-## 9. 결론 — 왜 이 전략이 최강인가
+## Part VI. 우선순위 & 일정
 
-### v7 (베이스)이 제공하는 것
-- 🏗️ 실가동 서버 인프라 (D1 DB, API, CRUD 자동화)
-- 🎨 프로급 Pluuug SaaS 디자인 (CSS 변수, 다크모드, 반응형)
-- 📧 실 이메일 발송, 🌤️ 날씨, 🤖 AI 연동
-- 📊 Chart.js, 📦 XLSX, 🖨️ 인쇄 등 성숙한 기능
+### 권장 구현 순서
 
-### v8 (결합)이 더하는 것
-- 💰 CEO급 경영 분석 (통합 수익, 현금흐름, 수익 랭킹)
-- 📋 프로젝트 심층 관리 (상세 모드, ERP 4뷰)
-- 🤝 영업 파이프라인 (상담 7단계, RFP 관리)
-- 🎨 디자인 프레젠테이션 (5개 모듈)
-- 📄 고급 문서 (5탭 견적 프리뷰, 디자인 문서)
+| 순서 | Phase | 내용 | 소요 | 누적 | 상태 |
+|------|-------|------|------|------|------|
+| 1 | **Phase 0** | 버그 수정 3건 | 0.5일 | 0.5일 | ✅ 완료 |
+| 2 | **Phase 1** | 경영 엔진 + 3개 뷰 | 1일 | 1.5일 | ✅ 완료 |
+| 3 | **Phase 2** | 프로젝트 상세 모드 | 1.5일 | 3일 | ⬜ **다음** |
+| 4 | **Phase 3** | 영업 (상담/RFP) | 1.5일 | 4.5일 | ⬜ |
+| 5 | **Phase 4** | 견적 프리뷰 + Gantt 자동 | 1.5일 | 6일 | ⬜ |
+| 6 | **Phase 5** | 디자인 모듈 5개 | 2일 | 8일 | ⬜ |
+| 7 | **Phase 6** | 현장관리 + 회의자료 | 1일 | 9일 | ⬜ |
+| 8 | **Phase 7** | 프리셋 메뉴 + PO 양식 | 1.5일 | 10.5일 | ⬜ |
+| 9 | **Phase 8** | CSS + 테스트 + 배포 | 1.5일 | **12일** | ⬜ |
+
+---
+
+## Part VII. 통합 완료 후 비전
+
+### 7.1 건설·인테리어 올인원 ERP 비즈니스 플로우
+
+```
+  영업                 디자인              견적/계약          시공               수금/경영
+  ─────────────────────────────────────────────────────────────────────────────────────────
+  상담 관리     ─→    컨셉               ─→  견적 작성    ─→  공정표 관리    ─→  수금 관리
+  (7단계            무드보드                 (자동 계산)       발주 관리         경영 대시보드
+   파이프라인)      평면 구성                5탭 프리뷰        노무비 관리       현금 흐름
+  RFP 관리          마감재                   Gantt 자동생성    경비 관리         수익 분석
+  미팅/CRM          디자인 문서              계약서 작성       현장사진/분석     월 리포트
+```
+
+### 7.2 최종 기대 효과
+
+| 지표 | 현재 | 목표 |
+|------|------|------|
+| **페이지 수** | 25개 | **42개** (+68%) |
+| **비즈니스 커버리지** | 시공~수금 | **영업~디자인~시공~수금~경영** (전 과정) |
+| **경영 분석** | 월 매출 차트 1개 | **CEO 대시보드 + 현금흐름 + 수익분석** (3개 뷰) |
+| **프로젝트 깊이** | 목록 → 견적서 | **목록 → 상세 모드(ERP/시공/Design/문서)** |
+| **영업 관리** | CRM 기본 | **7단계 상담 파이프라인 + RFP 입찰 관리** |
+| **문서 품질** | 기본 인쇄 | **5탭 고급 프리뷰 (세리프 서체 표지)** |
+| **자동화** | 수동 공정표 | **견적서 → 공정표 자동 생성** |
+
+---
+
+## Part VIII. 결론
+
+### 왜 v7(베이스) + v8(결합)이 최강인가
+
+**v7이 제공하는 기반**:
+- 🏗️ 실가동 서버 인프라 (D1 DB 20 테이블, CRUD 자동화, 에지 배포)
+- 🎨 프로급 SaaS 디자인 (CSS 변수 384회, 다크모드, 완전 반응형, 모바일)
+- 📧 실 이메일 발송 (Resend), 🌤️ 날씨 (OpenWeather), 🤖 AI (OpenAI)
+- 📊 Chart.js, 📦 XLSX, 🖨️ 인쇄/PDF, 🔔 알림, ✅ 결재
+- 📱 모바일 대응, 🌙 다크모드, 🔗 딥링크
+
+**v8이 더하는 가치**:
+- 💰 CEO급 경영 분석 엔진 (통합 수익, 현금흐름, 수익 랭킹) ← ✅ 완료
+- 📋 프로젝트 심층 관리 (상세 모드 4섹션, ERP Overview/Budget/첨부/리포트)
+- 🤝 영업 파이프라인 (7단계 상담, RFP 입찰)
+- 🎨 디자인 프레젠테이션 (5개 모듈 + 문서 프리뷰)
+- 📄 고급 견적 프리뷰 (5탭, 세리프 표지)
 - 🔧 자동화 (Gantt 자동생성, 예산 초과 경고)
 
 ### 통합 결과
-> **건설/인테리어 전문 올인원 ERP** — 영업(상담→RFP) → 디자인(컨셉→마감재) → 견적(자동계산→인쇄 프리뷰) → 계약 → 시공(공정→발주→노무) → 수금 → 경영분석(수익→현금흐름) 전 과정을 하나의 앱에서 처리
+> **건설·인테리어 전문 올인원 ERP** — 영업(상담→RFP) → 디자인(컨셉→마감재) → 견적(자동계산→5탭 프리뷰) → 계약(AI 검토) → 시공(자동 공정→발주→노무) → 수금(지급처리) → 경영분석(수익→현금흐름→리포트) **전 과정을 하나의 앱에서 처리하는 최강의 ERP**
 
 ---
 
-**다음 단계**: Phase 0(버그 수정)부터 시작합니까? 아니면 Phase 1(경영 엔진)부터?
+**현재 진행률**: Phase 0 ✅ + Phase 1 ✅ = **25% 완료** (2/8 Phase)  
+**다음 단계**: **Phase 2 (프로젝트 상세 모드)** — 이슈 B, C 해결의 핵심

@@ -271,6 +271,10 @@ const STATUS_COLORS={'작성중':'gray','견적완료':'blue','계약완료':'pu
 const CONTRACT_STATUS=['미생성','초안작성','고객검토','서명완료','계약완료'];
 const TEAM_MEMBERS=['김승환','박관우','이지현','최민준','정수연','한동욱'];
 
+// ===== COST TYPES (from v8) =====
+const COST_TYPES = { CONSTRUCTION:'공사비', LABOR:'인건비', EXPENSE:'경비', OTHER_COST:'기타비용' };
+const COST_ICONS = { CONSTRUCTION:'🔨', LABOR:'👷', EXPENSE:'💳', OTHER_COST:'📦' };
+
 // ===== STATE =====
 let S={page:'dash',subPage:null,selPid:null,selOid:null,sidebarCollapsed:false,sortCol:{},sortDir:{},calY:new Date().getFullYear(),calM:new Date().getMonth(),isAdmin:false,notices:[],msgTemplates:[],editingEstPid:null,darkMode:false};
 
@@ -309,6 +313,52 @@ function getMR(p){const c=calcP(p);return c.finalTotal>0?((c.finalTotal-c.costDi
 function getProg(p){const ts=p.ganttTasks||[];if(!ts.length)return 0;return Math.round(ts.reduce((a,t)=>a+Number(t.progress||0),0)/ts.length)}
 function getPaid(p){return(p.payments||[]).filter(x=>x.paid).reduce((a,x)=>a+(getTotal(p)*Number(x.pct||0)/100),0)}
 function getUnpaid(p){return Math.max(0,getTotal(p)-getPaid(p))}
+
+// ===== FINANCIAL SUMMARY ENGINE (from v8 — 통합 수익 계산) =====
+function getFinSummary(pid){
+  const p = typeof pid==='string' ? getProject(pid) : pid;
+  if(!p) return {contractTotal:0,estCost:0,estProfit:0,estMargin:0,orderCost:0,laborCost:0,expenseCost:0,totalSpent:0,actualProfit:0,actualMargin:0,executionRate:0,collected:0,outstanding:0,collectionRate:0};
+  const c = calcP(p);
+  const id = p.id;
+  const orderCost = (getOrders()||[]).filter(o=>o.pid===id).reduce((a,o)=>a+Number(o.amount||0),0);
+  const laborCost = (getLabor()||[]).filter(l=>l.pid===id).reduce((a,l)=>a+Number(l.daily_rate||0)*Number(l.days||0)+Number(l.meal_cost||0)+Number(l.transport_cost||0)+Number(l.overtime_cost||0)-Number(l.deduction||0),0);
+  const expenseCost = (getExpenses()||[]).filter(e=>e.pid===id&&e.status==='승인').reduce((a,e)=>a+Number(e.amount||0),0);
+  const totalSpent = orderCost + laborCost + expenseCost;
+  const contractTotal = c.finalTotal;
+  const collected = (p.payments||[]).filter(x=>x.paid).reduce((s,x)=>s+(contractTotal*Number(x.pct||0)/100),0);
+  const outstanding = contractTotal - collected;
+  const estCost = c.costDirect;
+  const estProfit = contractTotal - estCost;
+  const estMargin = contractTotal>0 ? estProfit/contractTotal*100 : 0;
+  const actualProfit = contractTotal - totalSpent;
+  const actualMargin = contractTotal>0 ? actualProfit/contractTotal*100 : 0;
+  const executionRate = estCost>0 ? totalSpent/estCost*100 : 0;
+  const collectionRate = contractTotal>0 ? collected/contractTotal*100 : 0;
+  return {contractTotal,estCost,estProfit,estMargin,orderCost,laborCost,expenseCost,totalSpent,actualProfit,actualMargin,executionRate,collected,outstanding,collectionRate};
+}
+
+// ===== MONTHLY AGGREGATION ENGINE (from v8) =====
+function getMonthlyAgg(ym){
+  const ps = getProjects();
+  const [y,m] = ym.split('-').map(Number);
+  const monthStart = new Date(y,m-1,1);
+  const monthEnd = new Date(y,m,0);
+  const inMonth = (d)=>{ if(!d)return false; const dt=new Date(d); return dt>=monthStart&&dt<=monthEnd; };
+  // 수금 (payments that were paid this month)
+  let revenue = 0;
+  ps.forEach(p=>{
+    const tot = getTotal(p);
+    (p.payments||[]).forEach(pay=>{
+      if(pay.paid && pay.paidDate && inMonth(pay.paidDate)) revenue += tot*Number(pay.pct||0)/100;
+    });
+  });
+  // 지출
+  const orderSpent = (getOrders()||[]).filter(o=>inMonth(o.order_date||o.orderDate)).reduce((a,o)=>a+Number(o.amount||0),0);
+  const laborSpent = (getLabor()||[]).filter(l=>inMonth(l.date)).reduce((a,l)=>a+Number(l.net_amount||0),0);
+  const expenseSpent = (getExpenses()||[]).filter(e=>e.status==='승인'&&inMonth(e.date)).reduce((a,e)=>a+Number(e.amount||0),0);
+  const spent = orderSpent + laborSpent + expenseSpent;
+  return {revenue, spent, net: revenue-spent, orderSpent, laborSpent, expenseSpent};
+}
 
 function getRisks(p){
   const risks=[];const todayD=new Date();const calc=calcP(p);
@@ -378,6 +428,10 @@ function svgIcon(name,size=14){
 const NAV=[
   {section:'메인'},
   {id:'dash',label:'대시보드',icon:'home'},
+  {section:'경영'},
+  {id:'exec_dash',label:'경영 현황',icon:'chart'},
+  {id:'cashflow',label:'현금 흐름',icon:'dollar'},
+  {id:'profit_rank',label:'수익 분석',icon:'activity'},
   {section:'프로젝트'},
   {id:'projects',label:'프로젝트 목록',icon:'clipboard'},
   {id:'estimate',label:'견적 작성',icon:'file'},
@@ -462,6 +516,9 @@ function nav(page,sub=null,pid=null,pushHistory=true){
   const content=document.getElementById('content');
   switch(page){
     case 'dash':renderDash();break;
+    case 'exec_dash':renderExecDash();break;
+    case 'cashflow':renderCashFlow();break;
+    case 'profit_rank':renderProfitRank();break;
     case 'projects':renderProjects();break;
     case 'estimate':renderEstimate();break;
     case 'gantt':sub==='detail'?renderGanttDetail():renderGanttList();break;
@@ -1032,6 +1089,373 @@ function openWeatherForecast(){
         </div>
       </div></div>`);
     }).catch(e=>toast('예보 조회 실패: '+e.message,'error'));
+}
+
+// ===== EXECUTIVE DASHBOARD (경영 현황 — from v8 DashView) =====
+function renderExecDash(){
+  const ps=getProjects();
+  const activePs=ps.filter(p=>['계약완료','시공중'].includes(p.status));
+  const now=new Date();
+  const curYM=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  const dayNames=['일','월','화','수','목','금','토'];
+  const dateStr=`${now.getFullYear()}년 ${now.getMonth()+1}월 ${now.getDate()}일 (${dayNames[now.getDay()]})`;
+
+  // 전사 재무 집계
+  const fins=ps.map(p=>({p,f:getFinSummary(p)}));
+  const totalContract=fins.reduce((a,{f})=>a+f.contractTotal,0);
+  const totalSpent=fins.reduce((a,{f})=>a+f.totalSpent,0);
+  const totalCollected=fins.reduce((a,{f})=>a+f.collected,0);
+  const totalOutstanding=fins.reduce((a,{f})=>a+f.outstanding,0);
+  const totalActualProfit=fins.reduce((a,{f})=>a+f.actualProfit,0);
+  const avgMargin=totalContract>0?totalActualProfit/totalContract*100:0;
+
+  // 월별 현금흐름 (최근 6개월)
+  const months=[];
+  for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);}
+  const monthData=months.map(m=>({m,...getMonthlyAgg(m)}));
+
+  // 예산 초과 경고
+  const budgetAlerts=fins.filter(({p,f})=>['시공중','계약완료'].includes(p.status)&&f.estCost>0).map(({p,f})=>({p,f,execPct:f.executionRate})).filter(x=>x.execPct>=90).sort((a,b)=>b.execPct-a.execPct);
+
+  // 위험 알림
+  const alerts=[];
+  ps.forEach(p=>(p.ganttTasks||[]).forEach(t=>{if(t.end&&new Date(t.end)<new Date()&&Number(t.progress||0)<100)alerts.push({icon:'⚠️',msg:`[${p.nm}] "${t.nm}" 공정 지연`,color:'var(--danger)'});}));
+  const pendingExp=(getExpenses()||[]).filter(e=>e.status==='대기').length;
+  if(pendingExp>0)alerts.push({icon:'📋',msg:`지출결의서 ${pendingExp}건 결재 대기`,color:'var(--info)'});
+  const unpaidLabor=(getLabor()||[]).filter(l=>!l.paid).length;
+  if(unpaidLabor>0)alerts.push({icon:'👷',msg:`노무비 ${unpaidLabor}건 미지급`,color:'var(--warning)'});
+  if(totalOutstanding>0)alerts.push({icon:'💰',msg:`미수금 ${fmtShort(totalOutstanding)}원 회수 필요`,color:'var(--danger)'});
+
+  // 수익 랭킹
+  const ranked=fins.filter(({f})=>f.contractTotal>0).sort((a,b)=>b.f.actualMargin-a.f.actualMargin);
+
+  // 현금흐름 차트 maxVal
+  const cfMax=Math.max(...monthData.map(d=>Math.max(d.revenue,d.spent)),1);
+
+  document.getElementById('tb-title').textContent='경영 현황';
+  document.getElementById('tb-actions').innerHTML='';
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+  <!-- Header -->
+  <div style="margin-bottom:20px">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${dateStr}</div>
+    <div style="font-size:22px;font-weight:800;color:var(--text)">경영 대시보드</div>
+    <div style="font-size:13px;color:var(--text-muted);margin-top:4px">Frame Plus 실시간 경영지표</div>
+  </div>
+
+  <!-- KPI 6개 (3x2) -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+    ${[
+      ['이번 달 매출',fmtShort(monthData[5]?.revenue||0)+'원','var(--info)',`수금 기준 (${curYM})`],
+      ['이번 달 실집행',fmtShort(monthData[5]?.spent||0)+'원','var(--warning)','발주+노무+경비'],
+      ['이번 달 순이익',fmtShort(monthData[5]?.net||0)+'원',(monthData[5]?.net||0)>=0?'var(--success)':'var(--danger)','매출 - 실집행'],
+      ['미수금 총액',fmtShort(totalOutstanding)+'원',totalOutstanding>0?'var(--danger)':'var(--success)',`${ps.filter(p=>getFinSummary(p).outstanding>0).length}건 미수`],
+      ['진행 프로젝트',activePs.length+'건','var(--warning)',`전체 ${ps.length}건`],
+      ['평균 마진율',avgMargin.toFixed(1)+'%',avgMargin>=10?'var(--success)':avgMargin>=5?'var(--warning)':'var(--danger)','실제 집행 기준'],
+    ].map(([title,value,color,sub])=>`
+      <div class="card" style="padding:18px">
+        <div style="font-size:10px;color:var(--text-muted);font-weight:800;margin-bottom:6px">${title}</div>
+        <div style="font-size:22px;font-weight:900;color:${color}">${value}</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:4px">${sub}</div>
+      </div>
+    `).join('')}
+  </div>
+
+  <!-- 예산 초과 경고 + 위험 알림 -->
+  ${(budgetAlerts.length>0||alerts.length>0)?`<div style="margin-bottom:14px">
+    ${budgetAlerts.map(({p,execPct})=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius);background:${execPct>=100?'var(--danger-light)':'var(--warning-light)'};border-left:3px solid ${execPct>=100?'var(--danger)':'var(--warning)'};margin-bottom:4px;font-size:12px;font-weight:700;color:${execPct>=100?'var(--danger)':'var(--warning)'};cursor:pointer" onclick="S.selPid='${p.id}';nav('estimate')">
+        ${execPct>=100?'🚨':'⚠️'} [${p.nm}] 예산 집행률 ${execPct.toFixed(0)}% ${execPct>=100?'— 초과':'— 주의'}
+      </div>
+    `).join('')}
+    ${alerts.map(a=>`
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:var(--radius);background:color-mix(in srgb,${a.color} 10%,transparent);border-left:3px solid ${a.color};margin-bottom:4px;font-size:12px;font-weight:700;color:${a.color}">
+        ${a.icon} ${a.msg}
+      </div>
+    `).join('')}
+  </div>`:''}
+
+  <!-- 월별 현금 흐름 차트 -->
+  <div class="card" style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:900;color:var(--text-muted);margin-bottom:12px">📈 월별 현금 흐름 (최근 6개월)</div>
+    <div style="display:flex;align-items:flex-end;gap:2px;height:140px;margin-bottom:8px">
+      ${monthData.map(md=>{
+        const rH=md.revenue/cfMax*120;const sH=md.spent/cfMax*120;
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+          <div style="display:flex;gap:2px;align-items:flex-end;height:120px">
+            <div style="width:16px;height:${Math.max(2,rH)}px;background:var(--info);border-radius:3px 3px 0 0;transition:height .3s" title="수금 ${fmtShort(md.revenue)}"></div>
+            <div style="width:16px;height:${Math.max(2,sH)}px;background:var(--warning);border-radius:3px 3px 0 0;transition:height .3s" title="지출 ${fmtShort(md.spent)}"></div>
+          </div>
+          <div style="font-size:9px;color:var(--text-muted);margin-top:4px">${md.m.slice(5)}월</div>
+          <div style="font-size:9px;font-weight:700;color:${md.net>=0?'var(--success)':'var(--danger)'}">${md.net>=0?'+':''}${fmtShort(md.net)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:16px;justify-content:center;font-size:10px;color:var(--text-muted)">
+      <span>🟦 수금</span><span>🟧 지출</span><span style="font-weight:700">하단: 순현금</span>
+    </div>
+  </div>
+
+  <!-- 수익 랭킹 + 일정/알림 -->
+  <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:12px">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:900;color:var(--text-muted)">🏆 프로젝트 수익 랭킹</div>
+        <button class="btn btn-ghost btn-sm" onclick="nav('profit_rank')">상세 →</button>
+      </div>
+      <div class="tbl-wrap" style="border:none">
+        <table class="tbl">
+          <thead><tr><th>프로젝트</th><th>계약금액</th><th>실집행</th><th>마진율</th><th>집행률</th></tr></thead>
+          <tbody>
+            ${ranked.slice(0,6).map(({p,f},i)=>`
+              <tr style="cursor:pointer" onclick="S.selPid='${p.id}';nav('estimate')">
+                <td><div style="font-weight:700">${i<3?['🥇','🥈','🥉'][i]:''} ${p.nm}</div><div style="font-size:10px;color:var(--text-muted)">${p.client||''}</div></td>
+                <td style="font-weight:700">${fmtShort(f.contractTotal)}</td>
+                <td>${fmtShort(f.totalSpent)}</td>
+                <td><span style="font-weight:800;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">${f.actualMargin.toFixed(1)}%</span></td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <div class="prog" style="width:40px;flex-shrink:0"><div class="prog-bar" style="width:${Math.min(100,f.executionRate)}%;background:${f.executionRate>=100?'var(--danger)':f.executionRate>=90?'var(--warning)':'var(--success)'}"></div></div>
+                    <span style="font-size:10px;color:${f.executionRate>=100?'var(--danger)':'var(--text-muted)'}">${f.executionRate.toFixed(0)}%</span>
+                  </div>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <!-- 오늘의 일정 -->
+      <div class="card">
+        <div style="font-size:11px;font-weight:900;color:var(--text-muted);margin-bottom:8px">📅 오늘의 일정</div>
+        ${getMeetings().filter(m=>m.date===today()).length===0?
+          '<div style="font-size:12px;color:var(--text-muted);padding:10px">오늘 예정된 미팅 없음</div>':
+          getMeetings().filter(m=>m.date===today()).map(m=>`
+            <div style="padding:6px 0;border-bottom:1px solid var(--border-light)">
+              <div style="font-size:12px;font-weight:700">${m.title}</div>
+              <div style="font-size:10px;color:var(--text-muted)">${m.time||''} · ${m.client||''}</div>
+            </div>
+          `).join('')}
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="nav('meetings')">미팅 →</button>
+      </div>
+      <!-- 빠른 접근 -->
+      <div class="card">
+        <div style="font-size:11px;font-weight:900;color:var(--text-muted);margin-bottom:8px">⚡ 빠른 접근</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${[['수금관리','collection'],['발주','orders'],['노무비','labor'],['결재함','approvals']].map(([nm,id])=>`
+            <button class="btn btn-outline btn-sm" style="text-align:center" onclick="nav('${id}')">${nm}</button>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>`;
+}
+
+// ===== CASH FLOW VIEW (현금 흐름 — from v8) =====
+function renderCashFlow(){
+  const now=new Date();
+  const months=[];
+  for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`);}
+  const data=months.map(m=>({m,...getMonthlyAgg(m)}));
+  const maxVal=Math.max(...data.map(d=>Math.max(d.revenue,d.spent)),1);
+
+  // 누적 계산
+  let cumNet=0;
+  data.forEach(d=>{cumNet+=d.net;d.cumNet=cumNet;});
+  const totalRevenue=data.reduce((a,d)=>a+d.revenue,0);
+  const totalSpent=data.reduce((a,d)=>a+d.spent,0);
+  const totalNet=totalRevenue-totalSpent;
+
+  document.getElementById('tb-title').textContent='현금 흐름';
+  document.getElementById('tb-actions').innerHTML='';
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+    <div>
+      <h2 style="font-size:17px;font-weight:800;margin:0;color:var(--text)">현금 흐름</h2>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:5px">최근 12개월 수입/지출 현황</p>
+    </div>
+  </div>
+
+  <!-- KPI 4개 -->
+  <div class="dash-grid" style="margin-bottom:16px">
+    <div class="kpi-card kpi-info">
+      <div class="kpi-label">총 수금</div>
+      <div class="kpi-value">${fmtShort(totalRevenue)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card kpi-warning">
+      <div class="kpi-label">총 지출</div>
+      <div class="kpi-value">${fmtShort(totalSpent)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card ${totalNet>=0?'kpi-success':'kpi-danger'}">
+      <div class="kpi-label">순 현금</div>
+      <div class="kpi-value">${totalNet>=0?'+':''}${fmtShort(totalNet)}<span style="font-size:12px">원</span></div>
+    </div>
+    <div class="kpi-card kpi-primary">
+      <div class="kpi-label">누적 잔액</div>
+      <div class="kpi-value">${cumNet>=0?'+':''}${fmtShort(cumNet)}<span style="font-size:12px">원</span></div>
+    </div>
+  </div>
+
+  <!-- 12개월 Bar Chart -->
+  <div class="card" style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:900;color:var(--text-muted);margin-bottom:12px">📊 월별 수입/지출 비교</div>
+    <div style="display:flex;align-items:flex-end;gap:4px;height:180px;margin-bottom:8px">
+      ${data.map(d=>{
+        const rH=d.revenue/maxVal*160;const sH=d.spent/maxVal*160;
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:1px">
+          <div style="display:flex;gap:1px;align-items:flex-end;height:160px">
+            <div style="width:12px;height:${Math.max(2,rH)}px;background:var(--info);border-radius:2px 2px 0 0" title="수금 ${fmtShort(d.revenue)}"></div>
+            <div style="width:12px;height:${Math.max(2,sH)}px;background:var(--warning);border-radius:2px 2px 0 0" title="지출 ${fmtShort(d.spent)}"></div>
+          </div>
+          <div style="font-size:8px;color:var(--text-muted);margin-top:4px">${d.m.slice(5)}월</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="display:flex;gap:16px;justify-content:center;font-size:10px;color:var(--text-muted)">
+      <span>🟦 수금</span><span>🟧 지출</span>
+    </div>
+  </div>
+
+  <!-- 월별 상세 테이블 -->
+  <div class="card">
+    <div style="font-size:11px;font-weight:900;color:var(--text-muted);margin-bottom:10px">📋 월별 상세</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th>월</th><th style="text-align:right">수금</th><th style="text-align:right">발주비</th><th style="text-align:right">노무비</th><th style="text-align:right">경비</th><th style="text-align:right">총 지출</th><th style="text-align:right">순이익</th><th style="text-align:right">누적</th>
+        </tr></thead>
+        <tbody>
+          ${data.map(d=>{
+            const [y,m]=d.m.split('-');
+            return `<tr>
+              <td style="font-weight:700">${y}년 ${parseInt(m)}월</td>
+              <td style="text-align:right;color:var(--info);font-weight:700">${fmtShort(d.revenue)}</td>
+              <td style="text-align:right">${fmtShort(d.orderSpent)}</td>
+              <td style="text-align:right">${fmtShort(d.laborSpent)}</td>
+              <td style="text-align:right">${fmtShort(d.expenseSpent)}</td>
+              <td style="text-align:right;color:var(--warning);font-weight:700">${fmtShort(d.spent)}</td>
+              <td style="text-align:right;font-weight:800;color:${d.net>=0?'var(--success)':'var(--danger)'}">${d.net>=0?'+':''}${fmtShort(d.net)}</td>
+              <td style="text-align:right;font-weight:700;color:${d.cumNet>=0?'var(--success)':'var(--danger)'}">${d.cumNet>=0?'+':''}${fmtShort(d.cumNet)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+        <tfoot><tr style="font-weight:900;border-top:2px solid var(--border)">
+          <td>합계</td>
+          <td style="text-align:right;color:var(--info)">${fmtShort(totalRevenue)}</td>
+          <td style="text-align:right">${fmtShort(data.reduce((a,d)=>a+d.orderSpent,0))}</td>
+          <td style="text-align:right">${fmtShort(data.reduce((a,d)=>a+d.laborSpent,0))}</td>
+          <td style="text-align:right">${fmtShort(data.reduce((a,d)=>a+d.expenseSpent,0))}</td>
+          <td style="text-align:right;color:var(--warning)">${fmtShort(totalSpent)}</td>
+          <td style="text-align:right;color:${totalNet>=0?'var(--success)':'var(--danger)'}">${totalNet>=0?'+':''}${fmtShort(totalNet)}</td>
+          <td style="text-align:right;color:${cumNet>=0?'var(--success)':'var(--danger)'}">${cumNet>=0?'+':''}${fmtShort(cumNet)}</td>
+        </tr></tfoot>
+      </table>
+    </div>
+  </div>
+  </div>`;
+}
+
+// ===== PROFIT RANK VIEW (수익 분석 — from v8) =====
+let _profitSort='margin';
+function renderProfitRank(){
+  const ps=getProjects();
+  const fins=ps.map(p=>({p,f:getFinSummary(p)})).filter(({f})=>f.contractTotal>0);
+  const sorted=[...fins].sort((a,b)=>_profitSort==='margin'?b.f.actualMargin-a.f.actualMargin:_profitSort==='exec'?b.f.executionRate-a.f.executionRate:b.f.contractTotal-a.f.contractTotal);
+
+  // 거래처별 분석
+  const clientMap={};
+  fins.forEach(({p,f})=>{
+    if(!clientMap[p.client])clientMap[p.client]={count:0,revenue:0,margin:0};
+    clientMap[p.client].count++;
+    clientMap[p.client].revenue+=f.contractTotal;
+    clientMap[p.client].margin+=f.actualProfit;
+  });
+  const clients=Object.entries(clientMap).map(([nm,d])=>({nm,...d,avgMargin:d.revenue>0?d.margin/d.revenue*100:0})).sort((a,b)=>b.revenue-a.revenue);
+
+  document.getElementById('tb-title').textContent='수익 분석';
+  document.getElementById('tb-actions').innerHTML='';
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
+    <div>
+      <h2 style="font-size:17px;font-weight:800;margin:0;color:var(--text)">수익 분석</h2>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:5px">프로젝트별·거래처별 수익 현황</p>
+    </div>
+  </div>
+
+  <!-- KPI 4개 -->
+  <div class="dash-grid" style="margin-bottom:16px">
+    <div class="kpi-card"><div class="kpi-label">📄 총 계약금액</div><div class="kpi-value">${fmtShort(fins.reduce((a,{f})=>a+f.contractTotal,0))}<span style="font-size:12px">원</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">💸 총 실집행</div><div class="kpi-value" style="color:var(--warning)">${fmtShort(fins.reduce((a,{f})=>a+f.totalSpent,0))}<span style="font-size:12px">원</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">📈 총 실이익</div><div class="kpi-value" style="color:${fins.reduce((a,{f})=>a+f.actualProfit,0)>=0?'var(--success)':'var(--danger)'}">${fmtShort(fins.reduce((a,{f})=>a+f.actualProfit,0))}<span style="font-size:12px">원</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">📊 평균 마진</div><div class="kpi-value" style="color:var(--info)">${(fins.length>0?fins.reduce((a,{f})=>a+f.actualMargin,0)/fins.length:0).toFixed(1)}<span style="font-size:12px">%</span></div></div>
+  </div>
+
+  <!-- 프로젝트 수익 랭킹 -->
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-size:11px;font-weight:900;color:var(--text-muted)">프로젝트별 수익 상세</div>
+      <div style="display:flex;gap:4px">
+        ${[['margin','마진율순'],['exec','집행률순'],['contract','금액순']].map(([k,l])=>`
+          <button class="btn btn-sm ${_profitSort===k?'btn-primary':'btn-outline'}" onclick="_profitSort='${k}';renderProfitRank()" style="font-size:10px;padding:3px 8px">${l}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th style="width:30px"></th><th>프로젝트</th><th>고객</th><th style="text-align:right">계약금액</th><th style="text-align:right">견적원가</th><th style="text-align:right">실집행</th><th style="text-align:right">실이익</th><th style="text-align:right">마진율</th><th style="text-align:right">집행률</th><th style="text-align:right">수금률</th>
+        </tr></thead>
+        <tbody>
+          ${sorted.map(({p,f},i)=>`
+            <tr style="cursor:pointer;${f.executionRate>=100?'background:var(--danger-light)':''}" onclick="S.selPid='${p.id}';nav('estimate')">
+              <td style="text-align:center;font-weight:800;font-size:13px;color:${i<3?'var(--warning)':'var(--text-muted)'}">${i+1}</td>
+              <td><div style="font-weight:700">${p.nm}</div>${statusBadge(p.status)}</td>
+              <td style="color:var(--text-muted)">${p.client||''}</td>
+              <td style="text-align:right;font-weight:700">${fmtShort(f.contractTotal)}</td>
+              <td style="text-align:right;color:var(--text-muted)">${fmtShort(f.estCost)}</td>
+              <td style="text-align:right;color:var(--warning)">${fmtShort(f.totalSpent)}</td>
+              <td style="text-align:right;font-weight:800;color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</td>
+              <td style="text-align:right;font-weight:800;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">${f.actualMargin.toFixed(1)}%</td>
+              <td style="text-align:right">
+                <div style="display:flex;align-items:center;gap:3px;justify-content:flex-end">
+                  <div class="prog" style="width:36px;flex-shrink:0"><div class="prog-bar" style="width:${Math.min(100,f.executionRate)}%;background:${f.executionRate>=100?'var(--danger)':f.executionRate>=90?'var(--warning)':'var(--success)'}"></div></div>
+                  <span style="font-size:9px;color:${f.executionRate>=100?'var(--danger)':'var(--text-muted)'}">${f.executionRate.toFixed(0)}%</span>
+                </div>
+              </td>
+              <td style="text-align:right;color:${f.collectionRate>=100?'var(--success)':'var(--text-muted)'}">${f.collectionRate.toFixed(0)}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 거래처별 분석 -->
+  <div class="card">
+    <div style="font-size:11px;font-weight:900;color:var(--text-muted);margin-bottom:10px">🏢 거래처별 수익</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>거래처</th><th style="text-align:right">프로젝트 수</th><th style="text-align:right">총 매출</th><th style="text-align:right">총 이익</th><th style="text-align:right">평균 마진</th></tr></thead>
+        <tbody>
+          ${clients.map(c=>`
+            <tr>
+              <td style="font-weight:700">${c.nm||'(미지정)'}</td>
+              <td style="text-align:right">${c.count}건</td>
+              <td style="text-align:right;font-weight:700">${fmtShort(c.revenue)}</td>
+              <td style="text-align:right;font-weight:700;color:${c.margin>=0?'var(--success)':'var(--danger)'}">${fmtShort(c.margin)}</td>
+              <td style="text-align:right;font-weight:700;color:${c.avgMargin>=10?'var(--success)':'var(--warning)'}">${c.avgMargin.toFixed(1)}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  </div>`;
 }
 
 // ===== PROJECTS =====
