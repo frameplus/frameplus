@@ -2089,12 +2089,13 @@ async function saveEstimate(){
   updateEstSummary();
 }
 
-// ===== ESTIMATE PREVIEW MODAL =====
+// ===== ESTIMATE PREVIEW MODAL (5-Tab System) =====
+let _pvTab='cover';
 function openPreviewModal(pid){
   const p=getProject(pid);if(!p)return;
-  const co=getCompany();
-  openModal(`<div class="modal-bg"><div class="modal modal-xl" style="max-height:92vh">
-    <div class="modal-hdr">
+  _pvTab='cover';
+  openModal(`<div class="modal-bg"><div class="modal modal-xl" style="max-height:92vh;display:flex;flex-direction:column">
+    <div class="modal-hdr" style="flex-shrink:0">
       <span class="modal-title">견적서 미리보기 — ${p.nm}</span>
       <div style="display:flex;gap:8px">
         <button class="btn btn-outline btn-sm" onclick="window.print()">${svgIcon('print',12)} 인쇄/PDF</button>
@@ -2102,17 +2103,52 @@ function openPreviewModal(pid){
         <button class="modal-close" onclick="closeModal()">✕</button>
       </div>
     </div>
-    <div class="modal-body" style="padding:0;background:#e8e8e8">
-      ${buildPreviewHTML(p,co)}
+    <div class="pv-tab-bar" style="flex-shrink:0;display:flex;border-bottom:2px solid var(--g200);background:var(--g50);padding:0 16px">
+      ${[{id:'cover',icon:'📋',label:'표지'},{id:'summary',icon:'📊',label:'내역서'},{id:'aggregate',icon:'📈',label:'집계표'},{id:'detail',icon:'📝',label:'상세내역'},{id:'gantt',icon:'📅',label:'공정표'}].map(t=>
+        `<button class="pv-tab-btn${t.id==='cover'?' active':''}" data-tab="${t.id}" onclick="switchPvTab('${t.id}','${pid}')" style="padding:10px 16px;border:none;background:${t.id==='cover'?'#fff':'transparent'};font-size:12px;font-weight:600;cursor:pointer;border-bottom:${t.id==='cover'?'2px solid var(--blue)':'2px solid transparent'};margin-bottom:-2px;color:${t.id==='cover'?'var(--blue)':'var(--g600)'};transition:all .2s;display:flex;align-items:center;gap:5px">${t.icon} ${t.label}</button>`
+      ).join('')}
+    </div>
+    <div class="modal-body" id="pv-tab-content" style="padding:0;background:#e8e8e8;flex:1;overflow-y:auto">
+      ${buildPvCover(p)}
     </div>
   </div></div>`);
 }
-function buildPreviewHTML(p,co){
-  const calc=calcP(p);
-  const docNo=`FP-${p.date?.replace(/-/g,'').slice(2)||'000000'}-${p.id.slice(-3).toUpperCase()}`;
-  return `
-  <!-- COVER -->
-  <div class="pv-page pv-cover">
+function switchPvTab(tab,pid){
+  _pvTab=tab;
+  const p=getProject(pid);if(!p)return;
+  document.querySelectorAll('.pv-tab-btn').forEach(b=>{
+    const isActive=b.dataset.tab===tab;
+    b.style.background=isActive?'#fff':'transparent';
+    b.style.borderBottom=isActive?'2px solid var(--blue)':'2px solid transparent';
+    b.style.color=isActive?'var(--blue)':'var(--g600)';
+    if(isActive)b.classList.add('active');else b.classList.remove('active');
+  });
+  const el=document.getElementById('pv-tab-content');if(!el)return;
+  switch(tab){
+    case 'cover':el.innerHTML=buildPvCover(p);break;
+    case 'summary':el.innerHTML=buildPvSummary(p);break;
+    case 'aggregate':el.innerHTML=buildPvAggregate(p);break;
+    case 'detail':el.innerHTML=buildPvDetail(p);break;
+    case 'gantt':el.innerHTML=buildPvGantt(p);break;
+  }
+}
+function _pvDocNo(p){return`FP-${p.date?.replace(/-/g,'').slice(2)||'000000'}-${p.id.slice(-3).toUpperCase()}`;}
+function _pvHeader(co,p,title){
+  return`<div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px">
+    <div class="pv-ep-logo">${co.name}</div>
+    <div style="font-size:11px;color:var(--g500)">작성일: ${p.date||today()} | 문서번호: ${_pvDocNo(p)}${title?` | <strong>${title}</strong>`:''}</div>
+  </div>
+  <div style="height:2px;background:var(--black);margin-bottom:2px"></div>
+  <div style="height:1px;background:var(--g300);margin-bottom:20px"></div>`;
+}
+function _pvFooter(co){
+  return`<div style="margin-top:24px;border-top:1px solid var(--g200);padding-top:12px;text-align:center;font-size:10px;color:var(--g400)">${co.addr} | ${co.tel} | ${co.email}</div>`;
+}
+
+// TAB 1: 표지
+function buildPvCover(p){
+  const co=getCompany();const calc=calcP(p);const docNo=_pvDocNo(p);
+  return`<div class="pv-page pv-cover">
     <div style="padding:64px 72px 0;position:relative;z-index:1">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
         <div style="font-family:var(--serif);font-size:14px;font-weight:300;letter-spacing:.35em;color:rgba(255,255,255,.5);text-transform:uppercase">${co.name}</div>
@@ -2138,20 +2174,26 @@ function buildPreviewHTML(p,co){
         <div style="font-family:var(--serif);font-size:28px;font-weight:700;letter-spacing:.02em;color:#fff">${co.name}</div>
         <div style="font-size:11px;font-weight:300;letter-spacing:.2em;color:rgba(255,255,255,.4);margin-top:8px">${co.nameKo||''}</div>
       </div>
-      <div style="font-size:12px;font-weight:300;letter-spacing:.08em;color:rgba(255,255,255,.35);text-align:right">
-        담당: ${p.mgr||co.ceo}<br>${co.mobile||co.tel}
-      </div>
+      <div style="font-size:12px;font-weight:300;letter-spacing:.08em;color:rgba(255,255,255,.35);text-align:right">담당: ${p.mgr||co.ceo}<br>${co.mobile||co.tel}</div>
     </div>
   </div>
-  
-  <!-- SUMMARY PAGE -->
-  <div class="pv-page pv-ep">
-    <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px">
-      <div class="pv-ep-logo">${co.name}</div>
-      <div style="font-size:11px;color:var(--g500)">작성일: ${p.date||today()} | 문서번호: ${docNo}</div>
+  <div class="pv-page pv-end">
+    <div class="pv-end-circle">
+      <div class="pv-end-circle-en">${co.specialty?.split(' ')[0]||'Office'}</div>
+      <div class="pv-end-circle-ko">${co.specialty?.split(' ').slice(1).join(' ')||'Specialist'}</div>
     </div>
-    <div style="height:2px;background:var(--black);margin-bottom:2px"></div>
-    <div style="height:1px;background:var(--g300);margin-bottom:20px"></div>
+    <div class="pv-end-line"></div>
+    <div class="pv-end-name">${co.name}</div>
+    <div class="pv-end-name-ko">${co.nameKo?.split('').join(' ')||''}</div>
+    <div class="pv-end-info">📍 ${co.addr}<br>✉️ ${co.email}<br>📞 ${co.tel} | ${co.mobile}<br>🏢 사업자등록번호: ${co.bizNo}<br>👤 대표: ${co.ceo}</div>
+  </div>`;
+}
+
+// TAB 2: 내역서
+function buildPvSummary(p){
+  const co=getCompany();const calc=calcP(p);
+  return`<div class="pv-page pv-ep">
+    ${_pvHeader(co,p,'공사견적서')}
     <div class="pv-ep-title">공&nbsp;&nbsp;사&nbsp;&nbsp;견&nbsp;&nbsp;적&nbsp;&nbsp;서</div>
     <table class="pv-info-tbl">
       <tr><td>프로젝트명</td><td>${p.nm}</td><td>견적담당</td><td>${p.mgr||co.ceo}</td></tr>
@@ -2162,8 +2204,7 @@ function buildPreviewHTML(p,co){
     <table class="pv-stbl">
       <thead><tr><th>NO</th><th>공종</th><th>단위</th><th>수량</th><th style="text-align:right">금액</th><th>비고</th></tr></thead>
       <tbody>
-        ${CATS.map((c,i)=>{
-          const cs=calc.cs[c.id];const t=cs?.t||0;
+        ${CATS.map((c,i)=>{const cs=calc.cs[c.id];const t=cs?.t||0;
           return`<tr class="${t===0?'zero':''}"><td>${i+1}</td><td>${c.nm}</td><td>식</td><td>1</td><td style="text-align:right">${t>0?fmt(t):'-'}</td><td></td></tr>`;
         }).join('')}
         <tr class="subtotal"><td colspan="4">간접공사비</td><td style="text-align:right">${fmt(calc.indirect)}</td><td></td></tr>
@@ -2188,16 +2229,110 @@ function buildPreviewHTML(p,co){
         <div style="margin-top:16px;border-top:1px solid var(--g200);padding-top:8px;font-size:11px">서명:</div>
       </div>
     </div>
-    <div style="margin-top:24px;border-top:1px solid var(--g200);padding-top:12px;text-align:center;font-size:10px;color:var(--g400)">
-      ${co.addr} | ${co.tel} | ${co.email}
+    ${_pvFooter(co)}
+  </div>`;
+}
+
+// TAB 3: 집계표 (Aggregate by cost type & category)
+function buildPvAggregate(p){
+  const co=getCompany();const calc=calcP(p);
+  const activeCats=CATS.filter(c=>calc.cs[c.id]&&calc.cs[c.id].t>0);
+  const totalM=activeCats.reduce((s,c)=>s+(calc.cs[c.id]?.m||0),0);
+  const totalL=activeCats.reduce((s,c)=>s+(calc.cs[c.id]?.l||0),0);
+  const totalE=activeCats.reduce((s,c)=>s+(calc.cs[c.id]?.e||0),0);
+  return`<div class="pv-page pv-ep">
+    ${_pvHeader(co,p,'공종별 집계표')}
+    <div class="pv-ep-title" style="font-size:18px">공종별 원가 집계표</div>
+    <div style="font-size:11px;color:var(--g500);text-align:center;margin-bottom:16px">프로젝트: ${p.nm} | 면적: ${p.area||'-'}평 | 작성: ${p.date||today()}</div>
+    <!-- Main aggregate table -->
+    <table class="pv-dtbl" style="margin-bottom:20px">
+      <thead>
+        <tr style="background:var(--dark);color:#fff">
+          <th style="width:40px;color:#fff">NO</th>
+          <th class="tl" style="width:160px;color:#fff">공종명</th>
+          <th style="text-align:right;color:#fff">자재비</th>
+          <th style="text-align:right;color:#fff">노무비</th>
+          <th style="text-align:right;color:#fff">경비</th>
+          <th style="text-align:right;color:#fff">합계</th>
+          <th style="text-align:right;width:60px;color:#fff">비율</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${activeCats.map((c,i)=>{
+          const cs=calc.cs[c.id];const pct=calc.direct>0?(cs.t/calc.direct*100).toFixed(1):'0.0';
+          return`<tr>
+            <td style="text-align:center">${i+1}</td>
+            <td class="tl"><span style="margin-right:4px">${c.icon}</span>${c.nm}</td>
+            <td style="text-align:right">${fmt(cs.m||0)}</td>
+            <td style="text-align:right">${fmt(cs.l||0)}</td>
+            <td style="text-align:right">${fmt(cs.e||0)}</td>
+            <td style="text-align:right;font-weight:600">${fmt(cs.t)}</td>
+            <td style="text-align:right"><div style="display:flex;align-items:center;gap:4px;justify-content:flex-end"><div style="width:40px;height:6px;background:var(--g200);border-radius:3px;overflow:hidden"><div style="height:100%;background:var(--blue);width:${pct}%"></div></div><span style="font-size:10px">${pct}%</span></div></td>
+          </tr>`;
+        }).join('')}
+        <tr class="total-row" style="background:var(--g50)">
+          <td colspan="2" style="text-align:center;font-weight:700">직접공사비 소계</td>
+          <td style="text-align:right;font-weight:700">${fmt(totalM)}</td>
+          <td style="text-align:right;font-weight:700">${fmt(totalL)}</td>
+          <td style="text-align:right;font-weight:700">${fmt(totalE)}</td>
+          <td style="text-align:right;font-weight:800;font-size:13px">${fmt(calc.direct)}</td>
+          <td style="text-align:right;font-weight:700">100%</td>
+        </tr>
+      </tbody>
+    </table>
+    <!-- Cost composition summary -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+      <div style="border:1px solid var(--g200);border-radius:8px;padding:16px">
+        <div style="font-size:12px;font-weight:700;margin-bottom:12px">📊 원가 구성 비율</div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${[{label:'자재비',val:totalM,color:'#3b82f6'},{label:'노무비',val:totalL,color:'#f59e0b'},{label:'경비',val:totalE,color:'#10b981'}].map(x=>{
+            const pct=calc.direct>0?(x.val/calc.direct*100).toFixed(1):'0';
+            return`<div>
+              <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px"><span style="color:var(--g600)">${x.label}</span><span style="font-weight:600">${fmt(x.val)}원 (${pct}%)</span></div>
+              <div style="height:8px;background:var(--g100);border-radius:4px;overflow:hidden"><div style="height:100%;background:${x.color};width:${pct}%;border-radius:4px"></div></div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div style="border:1px solid var(--g200);border-radius:8px;padding:16px">
+        <div style="font-size:12px;font-weight:700;margin-bottom:12px">💰 간접공사비 내역</div>
+        <table style="width:100%;font-size:11px;border-collapse:collapse">
+          <tr style="border-bottom:1px solid var(--g100)"><td style="padding:6px 0;color:var(--g600)">기업이윤 (${p.profit||10}%)</td><td style="text-align:right;font-weight:600">${fmt(calc.profitAmt)}</td></tr>
+          <tr style="border-bottom:1px solid var(--g100)"><td style="padding:6px 0;color:var(--g600)">안전관리비 (0.7%)</td><td style="text-align:right;font-weight:600">${fmt(calc.safetyAmt)}</td></tr>
+          <tr style="border-bottom:1px solid var(--g100)"><td style="padding:6px 0;color:var(--g600)">식대·교통비 (3%)</td><td style="text-align:right;font-weight:600">${fmt(calc.mealAmt)}</td></tr>
+          <tr style="border-bottom:1px solid var(--g200)"><td style="padding:6px 0;font-weight:700">간접공사비 계</td><td style="text-align:right;font-weight:700">${fmt(calc.indirect)}</td></tr>
+          <tr style="border-bottom:1px solid var(--g100)"><td style="padding:6px 0;color:var(--g500)">단수정리</td><td style="text-align:right;color:var(--g500)">${fmt(calc.adj)}</td></tr>
+          <tr><td style="padding:8px 0;font-weight:800;font-size:13px">최종 도급금액</td><td style="text-align:right;font-weight:800;font-size:14px;color:var(--blue)">₩${fmt(calc.finalTotal)}</td></tr>
+        </table>
+      </div>
     </div>
-  </div>
-  
-  <!-- DETAIL SHEET -->
-  <div class="pv-page pv-dp">
+    <!-- Top 5 cost items -->
+    <div style="border:1px solid var(--g200);border-radius:8px;padding:16px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:12px">🏆 공종별 비중 TOP 5</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${activeCats.sort((a,b)=>(calc.cs[b.id]?.t||0)-(calc.cs[a.id]?.t||0)).slice(0,5).map((c,i)=>{
+          const cs=calc.cs[c.id];const pct=calc.direct>0?(cs.t/calc.direct*100).toFixed(1):'0';
+          const colors=['#3b82f6','#8b5cf6','#f59e0b','#10b981','#ef4444'];
+          return`<div style="flex:1;min-width:100px;background:${colors[i]}10;border:1px solid ${colors[i]}30;border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:18px;margin-bottom:4px">${c.icon}</div>
+            <div style="font-size:11px;font-weight:600;color:${colors[i]}">${c.nm}</div>
+            <div style="font-size:16px;font-weight:800;margin:4px 0">${pct}%</div>
+            <div style="font-size:10px;color:var(--g500)">${fmtShort(cs.t)}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+    ${_pvFooter(co)}
+  </div>`;
+}
+
+// TAB 4: 상세내역
+function buildPvDetail(p){
+  const co=getCompany();const calc=calcP(p);
+  return`<div class="pv-page pv-dp">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div class="pv-ep-logo">${co.name}</div>
-      <div style="font-size:13px;font-weight:700;letter-spacing:.1em">공사 내역서</div>
+      <div style="font-size:13px;font-weight:700;letter-spacing:.1em">공사 상세내역서</div>
     </div>
     <table class="pv-dtbl">
       <thead>
@@ -2211,27 +2346,21 @@ function buildPreviewHTML(p,co){
           <th colspan="2">경비</th>
           <th colspan="2">합계</th>
         </tr>
-        <tr>
-          <th>단가</th><th>금액</th>
-          <th>단가</th><th>금액</th>
-          <th>단가</th><th>금액</th>
-          <th>단가</th><th>금액</th>
-        </tr>
+        <tr><th>단가</th><th>금액</th><th>단가</th><th>금액</th><th>단가</th><th>금액</th><th>단가</th><th>금액</th></tr>
       </thead>
       <tbody>
         ${CATS.filter(c=>calc.cs[c.id]&&calc.cs[c.id].t>0).map(c=>{
-          const cs=calc.cs[c.id];
-          const items=p.items.filter(it=>it.cid===c.id);
-          let rows=`<tr class="cat-hdr"><td colspan="12">${c.nm}</td></tr>`;
+          const cs=calc.cs[c.id];const items=p.items.filter(it=>it.cid===c.id);
+          let rows=`<tr class="cat-hdr"><td colspan="12">${c.icon} ${c.nm}</td></tr>`;
           items.forEach(it=>{
-            const qty=Number(it.qty||0);
+            const qty=Number(it.qty||0);const mp=Number(it.mp||0);const lp=Number(it.lp||0);const ep=Number(it.ep||0);
+            const up=mp+lp+ep;
             rows+=`<tr>
               <td class="tl">${it.nm}</td><td>${it.spec||''}</td><td style="text-align:center">${it.unit}</td><td>${qty}</td>
-              <td>${fmt(it.mp||0)}</td><td>${fmt((it.mp||0)*qty)}</td>
-              <td>${fmt(it.lp||0)}</td><td>${fmt((it.lp||0)*qty)}</td>
-              <td>${fmt(it.ep||0)}</td><td>${fmt((it.ep||0)*qty)}</td>
-              <td>${fmt((Number(it.mp||0)+Number(it.lp||0)+Number(it.ep||0)))}</td>
-              <td>${fmt((Number(it.mp||0)+Number(it.lp||0)+Number(it.ep||0))*qty)}</td>
+              <td>${fmt(mp)}</td><td>${fmt(mp*qty)}</td>
+              <td>${fmt(lp)}</td><td>${fmt(lp*qty)}</td>
+              <td>${fmt(ep)}</td><td>${fmt(ep*qty)}</td>
+              <td>${fmt(up)}</td><td>${fmt(up*qty)}</td>
             </tr>`;
           });
           rows+=`<tr class="sub-row"><td class="tl" colspan="4">소계 (${c.nm})</td>
@@ -2251,81 +2380,200 @@ function buildPreviewHTML(p,co){
         <tr class="final-row"><td class="tl" colspan="4">최종 도급금액 (VAT 별도)</td><td colspan="8" style="text-align:right;font-size:14px">₩ ${fmt(calc.finalTotal)}</td></tr>
       </tbody>
     </table>
-  </div>
-  
-  <!-- GANTT PAGE -->
-  ${p.ganttTasks&&p.ganttTasks.length?buildGanttPreview(p):''}
-  
-  <!-- END PAGE -->
-  <div class="pv-page pv-end">
-    <div class="pv-end-circle">
-      <div class="pv-end-circle-en">${co.specialty?.split(' ')[0]||'Office'}</div>
-      <div class="pv-end-circle-ko">${co.specialty?.split(' ').slice(1).join(' ')||'Specialist'}</div>
-    </div>
-    <div class="pv-end-line"></div>
-    <div class="pv-end-name">${co.name}</div>
-    <div class="pv-end-name-ko">${co.nameKo?.split('').join(' ')||''}</div>
-    <div class="pv-end-info">
-      📍 ${co.addr}<br>
-      ✉️ ${co.email}<br>
-      📞 ${co.tel} | ${co.mobile}<br>
-      🏢 사업자등록번호: ${co.bizNo}<br>
-      👤 대표: ${co.ceo}
-    </div>
+    ${_pvFooter(co)}
   </div>`;
 }
-function buildGanttPreview(p){
-  const tasks=p.ganttTasks||[];if(!tasks.length)return'';
+
+// TAB 5: 공정표 (Gantt) with auto-generation
+function buildPvGantt(p){
+  const co=getCompany();
+  const tasks=p.ganttTasks||[];
+  if(!tasks.length){
+    return`<div class="pv-page pv-ep" style="text-align:center;padding:60px 40px">
+      ${_pvHeader(co,p,'공정표')}
+      <div style="font-size:48px;margin:32px 0">📅</div>
+      <div style="font-size:16px;font-weight:700;margin-bottom:8px">공정표가 없습니다</div>
+      <div style="font-size:13px;color:var(--g500);margin-bottom:24px">견적 항목을 기반으로 자동 공정표를 생성하거나, 공정표 페이지에서 직접 추가하세요.</div>
+      <div style="display:flex;gap:12px;justify-content:center">
+        <button class="btn btn-primary" onclick="autoGenerateGantt('${p.id}');switchPvTab('gantt','${p.id}')">🤖 자동 공정표 생성</button>
+        <button class="btn btn-outline" onclick="closeModal();openGanttDetail('${p.id}')">📝 직접 추가하기</button>
+      </div>
+    </div>`;
+  }
   const starts=tasks.map(t=>new Date(t.start));const ends=tasks.map(t=>new Date(t.end));
   const minD=new Date(Math.min(...starts));const maxD=new Date(Math.max(...ends));
   const totalDays=Math.max(1,diffDays(minD.toISOString().split('T')[0],maxD.toISOString().split('T')[0]));
   const todayD=new Date(today());
   const avgProg=Math.round(tasks.reduce((a,t)=>a+Number(t.progress||0),0)/tasks.length);
+  const delayed=tasks.filter(t=>t.end&&new Date(t.end)<new Date()&&Number(t.progress||0)<100).length;
   return`<div class="pv-page pv-ep">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px">
-      <div class="pv-ep-logo">${getCompany().name}</div>
-      <div style="font-size:13px;font-weight:700">공정표 (Gantt Chart)</div>
+    ${_pvHeader(co,p,'공정표 (Gantt Chart)')}
+    <!-- KPIs -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+      ${[{l:'총 공정',v:tasks.length+'개',c:'var(--blue)'},{l:'총 공기',v:totalDays+'일',c:'var(--green)'},{l:'평균 진도',v:avgProg+'%',c:'var(--orange)'},{l:'지연 공정',v:delayed+'건',c:delayed?'var(--red)':'var(--g500)'}].map(k=>
+        `<div style="background:${k.c}10;border:1px solid ${k.c}30;border-radius:8px;padding:12px;text-align:center">
+          <div style="font-size:10px;color:var(--g500)">${k.l}</div>
+          <div style="font-size:18px;font-weight:800;color:${k.c}">${k.v}</div>
+        </div>`
+      ).join('')}
     </div>
-    <div style="margin-bottom:8px;font-size:13px;font-weight:600">${p.nm}</div>
-    <div style="font-size:11px;color:var(--g500);margin-bottom:16px">${minD.toISOString().split('T')[0]} ~ ${maxD.toISOString().split('T')[0]} (총 ${totalDays}일)</div>
-    <div style="display:flex;align-items:stretch;border:1px solid var(--g200);border-radius:6px;overflow:hidden">
-      <div style="width:160px;flex-shrink:0;border-right:1px solid var(--g200)">
-        <div style="background:var(--g50);padding:8px;font-size:10px;font-weight:700;color:var(--g600);border-bottom:1px solid var(--g200)">공정명</div>
-        ${tasks.map(t=>`<div style="padding:8px;border-bottom:1px solid var(--g100);font-size:11px;font-weight:500">${t.nm}<br><span style="color:var(--blue);font-size:10px">${t.progress||0}%</span></div>`).join('')}
-      </div>
-      <div style="flex:1;overflow:hidden">
-        <div style="background:var(--g50);padding:8px;font-size:10px;font-weight:700;color:var(--g600);border-bottom:1px solid var(--g200);display:flex">
-          ${Array.from({length:Math.min(totalDays,42)},(_,i)=>{const d=new Date(minD);d.setDate(d.getDate()+i);
-            return i%7===0?`<div style="flex:7;text-align:center;min-width:0">${d.getMonth()+1}/${d.getDate()}</div>`:''}).join('')}
-        </div>
-        ${tasks.map(t=>{
-          const s=diffDays(minD.toISOString().split('T')[0],t.start);
-          const dur=diffDays(t.start,t.end);
-          const left=(s/totalDays*100).toFixed(1);
-          const w=(dur/totalDays*100).toFixed(1);
-          const prog=Number(t.progress||0);
-          return`<div style="padding:8px;border-bottom:1px solid var(--g100);position:relative;height:36px">
-            <div style="position:absolute;top:10px;left:${left}%;width:${w}%;height:14px;background:rgba(37,99,235,.15);border-radius:3px"></div>
-            <div style="position:absolute;top:10px;left:${left}%;width:${(w*prog/100).toFixed(1)}%;height:14px;background:${t.color||'var(--blue)'};border-radius:3px"></div>
-            ${todayD>=minD&&todayD<=maxD?`<div style="position:absolute;top:0;bottom:0;left:${(diffDays(minD.toISOString().split('T')[0],today())/totalDays*100).toFixed(1)}%;width:1.5px;background:var(--red)"></div>`:''}
+    <div style="font-size:11px;color:var(--g500);margin-bottom:8px">${minD.toISOString().split('T')[0]} ~ ${maxD.toISOString().split('T')[0]}</div>
+    <!-- Chart -->
+    <div style="display:flex;align-items:stretch;border:1px solid var(--g200);border-radius:6px;overflow:hidden;margin-bottom:16px">
+      <div style="width:180px;flex-shrink:0;border-right:1px solid var(--g200)">
+        <div style="background:var(--dark);color:#fff;padding:8px 10px;font-size:10px;font-weight:700;border-bottom:1px solid var(--g200)">공정명</div>
+        ${tasks.map(t=>{const isLate=t.end&&new Date(t.end)<new Date()&&Number(t.progress||0)<100;
+          return`<div style="padding:7px 10px;border-bottom:1px solid var(--g100);font-size:11px;font-weight:500;${isLate?'color:var(--red)':''}">
+            ${isLate?'⚠️ ':''}${t.nm}
+            <div style="font-size:9px;color:var(--g400)">${t.assignee||''}</div>
           </div>`;
         }).join('')}
       </div>
-      <div style="width:50px;flex-shrink:0;border-left:1px solid var(--g200)">
-        <div style="background:var(--g50);padding:8px;font-size:10px;font-weight:700;color:var(--g600);border-bottom:1px solid var(--g200);text-align:center">진도</div>
-        ${tasks.map(t=>`<div style="padding:8px;border-bottom:1px solid var(--g100);text-align:center;font-size:11px;font-weight:700;color:var(--blue)">${t.progress||0}%</div>`).join('')}
+      <div style="flex:1;overflow-x:auto">
+        <div style="min-width:${Math.max(400,totalDays*8)}px">
+          <div style="background:var(--dark);padding:8px;font-size:10px;font-weight:700;color:#fff;border-bottom:1px solid var(--g200);display:flex">
+            ${Array.from({length:Math.min(totalDays,60)},(_,i)=>{const d=new Date(minD);d.setDate(d.getDate()+i);
+              return i%7===0?`<div style="flex:7;text-align:center;min-width:0">${d.getMonth()+1}/${d.getDate()}</div>`:''}).join('')}
+          </div>
+          ${tasks.map(t=>{
+            const s=diffDays(minD.toISOString().split('T')[0],t.start);
+            const dur=diffDays(t.start,t.end);
+            const dispDays=Math.min(totalDays,60);
+            const left=(s/dispDays*100).toFixed(1);
+            const w=(dur/dispDays*100).toFixed(1);
+            const prog=Number(t.progress||0);
+            return`<div style="padding:6px 0;border-bottom:1px solid var(--g100);position:relative;height:34px">
+              <div style="position:absolute;top:10px;left:${left}%;width:${w}%;height:14px;background:${t.color||'var(--blue)'}26;border-radius:3px"></div>
+              <div style="position:absolute;top:10px;left:${left}%;width:${(w*prog/100).toFixed(1)}%;height:14px;background:${t.color||'var(--blue)'};border-radius:3px"></div>
+              ${todayD>=minD&&todayD<=maxD?`<div style="position:absolute;top:0;bottom:0;left:${(diffDays(minD.toISOString().split('T')[0],today())/dispDays*100).toFixed(1)}%;width:1.5px;background:var(--red)"></div>`:''}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div style="width:55px;flex-shrink:0;border-left:1px solid var(--g200)">
+        <div style="background:var(--dark);color:#fff;padding:8px;font-size:10px;font-weight:700;border-bottom:1px solid var(--g200);text-align:center">진도</div>
+        ${tasks.map(t=>`<div style="padding:7px 6px;border-bottom:1px solid var(--g100);text-align:center;font-size:11px;font-weight:700;color:${Number(t.progress||0)===100?'var(--green)':'var(--blue)'}">${t.progress||0}%</div>`).join('')}
       </div>
     </div>
-    <div style="margin-top:16px;background:var(--dark);color:#fff;padding:12px 16px;border-radius:6px;display:flex;justify-content:space-between;align-items:center">
-      <span style="font-size:13px;font-weight:700">총 공사기간 ${totalDays}일</span>
-      <span style="font-size:13px">전체 진행률: <strong>${avgProg}%</strong></span>
+    <!-- Legend + Summary -->
+    <div style="display:flex;justify-content:space-between;align-items:center;background:var(--dark);color:#fff;padding:12px 16px;border-radius:6px;margin-bottom:16px">
+      <div style="display:flex;gap:16px;font-size:11px">
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:6px;background:var(--red);border-radius:2px;display:inline-block"></span>오늘</span>
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:6px;background:rgba(37,99,235,.2);border-radius:2px;display:inline-block"></span>계획</span>
+        <span style="display:flex;align-items:center;gap:4px"><span style="width:12px;height:6px;background:var(--blue);border-radius:2px;display:inline-block"></span>진행</span>
+      </div>
+      <div style="font-size:13px"><strong>총 ${totalDays}일</strong> · 전체 진행률 <strong>${avgProg}%</strong></div>
     </div>
+    <!-- Task list table -->
+    <table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid var(--g200);border-radius:6px;overflow:hidden">
+      <thead><tr style="background:var(--g50)">
+        <th style="padding:8px;text-align:left;border-bottom:1px solid var(--g200)">NO</th>
+        <th style="padding:8px;text-align:left;border-bottom:1px solid var(--g200)">공정명</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">시작일</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">종료일</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">일수</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">담당</th>
+        <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">진도</th>
+      </tr></thead>
+      <tbody>
+        ${tasks.map((t,i)=>{const dur=diffDays(t.start,t.end);const prog=Number(t.progress||0);const isLate=t.end&&new Date(t.end)<new Date()&&prog<100;
+          return`<tr style="${isLate?'background:#fef2f2':''}">
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100)">${i+1}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100);font-weight:600;${isLate?'color:var(--red)':''}">${isLate?'⚠️ ':''}${t.nm}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center">${t.start}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center">${t.end}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center">${dur}일</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center">${t.assignee||'-'}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center;font-weight:700;color:${prog===100?'var(--green)':prog>0?'var(--blue)':'var(--g400)'}">${prog}%</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-outline btn-sm" onclick="autoGenerateGantt('${p.id}');switchPvTab('gantt','${p.id}')">🤖 자동 재생성</button>
+      <button class="btn btn-outline btn-sm" onclick="closeModal();openGanttDetail('${p.id}')">📝 공정표 편집</button>
+    </div>
+    ${_pvFooter(co)}
   </div>`;
 }
+
+// For backward compat: buildPreviewHTML still works for print
+function buildPreviewHTML(p,co){
+  return buildPvCover(p)+buildPvSummary(p)+buildPvDetail(p)+(p.ganttTasks&&p.ganttTasks.length?buildPvGantt(p):'');
+}
+
+// ===== GANTT AUTO-GENERATION ENGINE =====
+const GANTT_CAT_ORDER=['C01','C02','C03','C04','C05','C06','C07','C08','C09','C10','C11','C12','C13','C14','C15','C16','C17','C18'];
+const GANTT_CAT_DAYS={C01:7,C02:5,C03:5,C04:7,C05:5,C06:4,C07:5,C08:7,C09:5,C10:3,C11:3,C12:3,C13:5,C14:4,C15:3,C16:3,C17:3,C18:2};
+const GANTT_CAT_COLORS={C01:'#6366f1',C02:'#8b5cf6',C03:'#a855f7',C04:'#3b82f6',C05:'#0ea5e9',C06:'#14b8a6',C07:'#22c55e',C08:'#84cc16',C09:'#eab308',C10:'#f59e0b',C11:'#f97316',C12:'#ef4444',C13:'#ec4899',C14:'#d946ef',C15:'#64748b',C16:'#78716c',C17:'#0d9488',C18:'#7c3aed'};
+// Overlap groups: categories that can partially overlap
+const GANTT_OVERLAP_GROUPS=[
+  ['C01','C02'],        // demolition + frame can overlap
+  ['C06','C07','C08'],  // plumbing + electric + HVAC can overlap
+  ['C09','C10','C11'],  // finishing work can overlap
+  ['C14','C15','C16'],  // glass + signage + cleaning can overlap
+];
+function autoGenerateGantt(pid){
+  const p=getProject(pid);if(!p)return;
+  const items=p.items||[];if(!items.length){toast('견적 항목이 없습니다. 먼저 견적을 작성하세요.','warning');return;}
+  const calc=calcP(p);
+  // Get active categories in construction order
+  const activeCats=GANTT_CAT_ORDER.filter(cid=>{
+    const cs=calc.cs[cid];return cs&&cs.t>0;
+  });
+  if(!activeCats.length){toast('활성 공종이 없습니다.','warning');return;}
+  // Calculate durations: base from GANTT_CAT_DAYS, scale by cost proportion
+  const maxCatCost=Math.max(...activeCats.map(cid=>calc.cs[cid]?.t||0));
+  const startDate=p.date||today();
+  let cursor=startDate;
+  const tasks=[];
+  const overlapMap={};// cid -> group index
+  GANTT_OVERLAP_GROUPS.forEach((grp,gi)=>grp.forEach(cid=>overlapMap[cid]=gi));
+  let lastGroupIdx=-1;let groupStart=null;
+  activeCats.forEach((cid,idx)=>{
+    const cat=CATS.find(c=>c.id===cid);if(!cat)return;
+    const baseDays=GANTT_CAT_DAYS[cid]||5;
+    const costRatio=maxCatCost>0?(calc.cs[cid]?.t||0)/maxCatCost:1;
+    // Scale days: min 2, max baseDays*2
+    let days=Math.max(2,Math.round(baseDays*(0.5+costRatio*0.7)));
+    // Area-based scaling: larger area = more days
+    if(p.area>50)days=Math.round(days*1.2);
+    if(p.area>100)days=Math.round(days*1.4);
+    // Determine start: check if this category overlaps with previous
+    const myGroup=overlapMap[cid];
+    if(myGroup!==undefined&&myGroup===lastGroupIdx&&groupStart){
+      // Overlap: start 30-50% into previous task's duration
+      const prevTask=tasks[tasks.length-1];
+      if(prevTask){
+        const prevDur=diffDays(prevTask.start,prevTask.end);
+        const overlapDays=Math.max(1,Math.floor(prevDur*0.4));
+        cursor=addDays(prevTask.start,prevDur-overlapDays);
+      }
+    }else{
+      lastGroupIdx=myGroup!==undefined?myGroup:-1;
+      groupStart=cursor;
+    }
+    const tStart=cursor;
+    const tEnd=addDays(tStart,days);
+    tasks.push({
+      id:uid(),nm:cat.icon+' '+cat.nm,start:tStart,end:tEnd,
+      color:GANTT_CAT_COLORS[cid]||'#3b82f6',progress:0,
+      assignee:TEAM_MEMBERS[idx%TEAM_MEMBERS.length]||'',
+      note:`${(p.items||[]).filter(it=>it.cid===cid).length}개 항목 · ${fmtShort(calc.cs[cid]?.t||0)}`,
+      catId:cid
+    });
+    // Move cursor to end for next non-overlapping task
+    cursor=tEnd;
+  });
+  p.ganttTasks=tasks;
+  saveProject(p);
+  toast(`🤖 ${tasks.length}개 공정이 자동 생성되었습니다 (총 ${diffDays(startDate,cursor)}일)`,'success');
+}
+
+// ===== EMAIL =====
 function sendEstMail(pid){
   const p=getProject(pid);if(!p)return;
   const co=getCompany();
-  // 이메일 발송 모달 표시
   openModal(`<div class="modal-bg"><div class="modal modal-sm">
     <div class="modal-hdr">
       <span class="modal-title">${svgIcon('mail',16)} 견적서 이메일 발송</span>
@@ -2444,6 +2692,7 @@ function renderGanttDetail(){
   document.getElementById('tb-actions').innerHTML=`
     <button class="btn btn-outline btn-sm" onclick="nav('gantt')">${svgIcon('arrow_left',12)} 목록</button>
     <button class="btn btn-outline btn-sm" onclick="printPage()">${svgIcon('print',12)} 인쇄</button>
+    <button class="btn btn-outline btn-sm" onclick="autoGenerateGantt('${pid}');renderGanttDetail()">🤖 자동생성</button>
     <button class="btn btn-primary btn-sm" onclick="addGanttTask('${pid}')">+ 공정 추가</button>`;
   
   document.getElementById('content').innerHTML=`
