@@ -2420,10 +2420,13 @@ async function doSendOrderMail(oid){
   }catch(e){toast('발송 오류: '+e.message,'error');}
 }
 function copyOrder(){toast('발주서가 복사되었습니다','success');}
-function deleteOrder(oid){
+async function deleteOrder(oid){
   if(!confirm('삭제하시겠습니까?'))return;
-  const orders=getData('orders_manual',[]).filter(x=>x.id!==oid);
-  saveOrderManual(orders);nav('orders');toast('삭제되었습니다');
+  const res = await api('orders_manual/'+oid,'DELETE');
+  if(!res?.__error){
+    _d.orders = (_d.orders||[]).filter(x=>x.id!==oid);
+    nav('orders');toast('삭제되었습니다');
+  }
 }
 
 // ===== COLLECTION =====
@@ -4095,24 +4098,8 @@ function groupByMonth(items, dateField='date'){
   return Object.entries(groups).sort((a,b)=>b[0].localeCompare(a[0]));
 }
 
-function monthlyAccordion(groups, renderRow, extraHeader=''){
-  if(!groups.length) return '<div style="text-align:center;padding:40px;color:var(--g400)">데이터 없음</div>';
-  return groups.map(([ym, items])=>{
-    const [y,m]=ym.split('-');
-    const label=y&&m?`${y}년 ${parseInt(m)}월`:'날짜없음';
-    return `<div class="card" style="margin-bottom:8px">
-      <div style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:4px 0" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.acc-arrow').classList.toggle('open')">
-        <div style="font-weight:700;font-size:13px">${label} <span style="font-weight:400;color:var(--g500);font-size:12px">(${items.length}건)</span></div>
-        <span class="acc-arrow est-sec-toggle">▼</span>
-      </div>
-      <div class="est-sec-body${groups.indexOf(arguments[0])===0||groups[0][0]===ym?' open':''}">
-        <div class="tbl-wrap" style="margin-top:8px">
-          <table class="tbl">${extraHeader}<tbody>${items.map(renderRow).join('')}</tbody></table>
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-}
+// monthlyAccordion — unified version (see line ~4788 for enhanced version)
+// Removed duplicate to avoid override issues
 
 // ===== SORT FIX =====
 let _sortState={};
@@ -4784,21 +4771,21 @@ function updateOrder(field,val){
   api('orders_manual/'+o.id,'PUT',o);
 }
 
-// ===== MONTHLY ACCORDION (enhanced) =====
+// ===== MONTHLY ACCORDION (unified) =====
 function monthlyAccordion(groups, renderRowFn, headerHtml){
-  if(!groups.length) return '<div style="text-align:center;padding:40px;color:var(--g400)">데이터 없음</div>';
+  if(!groups.length) return '<div style="text-align:center;padding:40px;color:var(--text-muted)">데이터 없음</div>';
   return groups.map(([ym, items],idx)=>{
     const [y,m]=ym.split('-');
     const label=y&&m?`${y}년 ${parseInt(m)}월`:'날짜없음';
     const isOpen=idx===0;
     return `<div class="card" style="margin-bottom:8px">
       <div style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:4px 0" onclick="this.nextElementSibling.classList.toggle('open');this.querySelector('.est-sec-toggle').classList.toggle('open')">
-        <div style="font-weight:700;font-size:13px">${label} <span style="font-weight:400;color:var(--g500);font-size:12px">(${items.length}건)</span></div>
-        <span class="est-sec-toggle ${isOpen?'open':''}">▼</span>
+        <div style="font-weight:700;font-size:13px">${label} <span style="font-weight:400;color:var(--text-muted);font-size:12px">(${items.length}건)</span></div>
+        <span class="est-sec-toggle ${isOpen?'open':''}" style="font-size:11px;transition:transform .2s">▼</span>
       </div>
       <div class="est-sec-body${isOpen?' open':''}">
         <div class="tbl-wrap" style="margin-top:8px">
-          <table class="tbl"><thead>${headerHtml}</thead><tbody>${items.map(renderRowFn).join('')}</tbody></table>
+          <table class="tbl">${headerHtml?'<thead>'+headerHtml+'</thead>':''}<tbody>${items.map(renderRowFn).join('')}</tbody></table>
         </div>
       </div>
     </div>`;
