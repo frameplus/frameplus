@@ -5227,7 +5227,7 @@ function _adminSystem(){
       <div class="card">
         <div class="card-title">ℹ️ 시스템 정보</div>
         <div style="font-size:12px;line-height:2;color:var(--g600)">
-          <div><strong>버전:</strong> v7.0 Full-Stack</div>
+          <div><strong>버전:</strong> v7.1 Full-Stack (Auth+RBAC)</div>
           <div><strong>플랫폼:</strong> Cloudflare Pages + D1</div>
           <div><strong>프레임워크:</strong> Hono + Vanilla JS</div>
           <div><strong>데이터:</strong> D1 SQLite (Cloud Sync)</div>
