@@ -45,6 +45,8 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS rfp (id TEXT PRIMARY KEY, title TEXT NOT NULL, client_name TEXT DEFAULT '', client_contact TEXT DEFAULT '', deadline TEXT DEFAULT '', budget_min REAL DEFAULT 0, budget_max REAL DEFAULT 0, area REAL DEFAULT 0, location TEXT DEFAULT '', project_type TEXT DEFAULT '', requirements TEXT DEFAULT '', status TEXT DEFAULT '접수', assignee TEXT DEFAULT '', submitted_date TEXT DEFAULT '', result TEXT DEFAULT '', notes TEXT DEFAULT '', attachments TEXT DEFAULT '[]', priority TEXT DEFAULT '보통', win_probability REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, name TEXT DEFAULT '', role TEXT DEFAULT 'staff', email TEXT DEFAULT '', phone TEXT DEFAULT '', active INTEGER DEFAULT 1, last_login DATETIME DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT DEFAULT 'staff', expires_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT '', company TEXT DEFAULT '', address TEXT DEFAULT '', biz_no TEXT DEFAULT '', source TEXT DEFAULT '', grade TEXT DEFAULT 'B', tags TEXT DEFAULT '[]', memo TEXT DEFAULT '', total_amount REAL DEFAULT 0, project_count INTEGER DEFAULT 0, last_project_date TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS erp_attachments (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', folder TEXT DEFAULT '기타', file_name TEXT NOT NULL, file_type TEXT DEFAULT '', file_size INTEGER DEFAULT 0, file_data TEXT DEFAULT '', uploader TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
   // Seed default admin if no users
   try {
@@ -134,6 +136,8 @@ app.route('/api/approvals', crud('approvals'))
 app.route('/api/user-prefs', crud('user_prefs'))
 app.route('/api/consultations', crud('consultations'))
 app.route('/api/rfp', crud('rfp'))
+app.route('/api/clients', crud('clients'))
+app.route('/api/erp-attachments', crud('erp_attachments'))
 
 // Company (singleton)
 app.get('/api/company', async (c) => {
@@ -172,7 +176,21 @@ app.post('/api/init', async (c) => {
       ('wp1', 'C01', '기초공사', '[{"nm":"먹메김","spec":"식","unit":"식","qty":1},{"nm":"보양","spec":"식","unit":"식","qty":1},{"nm":"내부수평비계","spec":"식","unit":"식","qty":1},{"nm":"소운반비","spec":"식","unit":"식","qty":1},{"nm":"대운반비","spec":"식","unit":"식","qty":1},{"nm":"폐자재처리","spec":"식","unit":"식","qty":1},{"nm":"현장정리정돈","spec":"식","unit":"식","qty":1},{"nm":"준공청소","spec":"식","unit":"식","qty":1}]'),
       ('wp2', 'C02', '철거공사', '[{"nm":"기존 벽체 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 바닥 철거","spec":"m²","unit":"m²","qty":1},{"nm":"기존 천정 철거","spec":"m²","unit":"m²","qty":1},{"nm":"설비 철거","spec":"식","unit":"식","qty":1},{"nm":"잡철거","spec":"식","unit":"식","qty":1}]'),
       ('wp3', 'C04', '목공사', '[{"nm":"경량칸막이","spec":"m²","unit":"m²","qty":1},{"nm":"천정틀","spec":"m²","unit":"m²","qty":1},{"nm":"합판작업","spec":"m²","unit":"m²","qty":1},{"nm":"몰딩","spec":"m","unit":"m","qty":1},{"nm":"문틀/문짝","spec":"세트","unit":"세트","qty":1}]'),
-      ('wp4', 'C06', '도장공사', '[{"nm":"벽면도장","spec":"m²","unit":"m²","qty":1},{"nm":"천정도장","spec":"m²","unit":"m²","qty":1},{"nm":"친환경페인트","spec":"m²","unit":"m²","qty":1},{"nm":"퍼티작업","spec":"m²","unit":"m²","qty":1}]')
+      ('wp4', 'C06', '도장공사', '[{"nm":"벽면도장","spec":"m²","unit":"m²","qty":1},{"nm":"천정도장","spec":"m²","unit":"m²","qty":1},{"nm":"친환경페인트","spec":"m²","unit":"m²","qty":1},{"nm":"퍼티작업","spec":"m²","unit":"m²","qty":1}]'),
+      ('wp5', 'C03', '금속·유리공사', '[{"nm":"유리파티션","spec":"m²","unit":"m²","qty":1},{"nm":"강화유리도어","spec":"세트","unit":"세트","qty":1},{"nm":"유리난간","spec":"m","unit":"m","qty":1},{"nm":"스틸프레임","spec":"m","unit":"m","qty":1},{"nm":"알루미늄창호","spec":"세트","unit":"세트","qty":1}]'),
+      ('wp6', 'C05', '전기·통신공사', '[{"nm":"LED조명 설치","spec":"개","unit":"개","qty":1},{"nm":"콘센트 설치","spec":"개","unit":"개","qty":1},{"nm":"스위치 설치","spec":"개","unit":"개","qty":1},{"nm":"분전반 교체","spec":"식","unit":"식","qty":1},{"nm":"배선공사","spec":"식","unit":"식","qty":1},{"nm":"통신배선","spec":"식","unit":"식","qty":1},{"nm":"비상조명","spec":"개","unit":"개","qty":1}]'),
+      ('wp7', 'C07', '필름공사', '[{"nm":"창문 단열필름","spec":"m²","unit":"m²","qty":1},{"nm":"유리 안전필름","spec":"m²","unit":"m²","qty":1},{"nm":"인테리어필름(벽면)","spec":"m²","unit":"m²","qty":1},{"nm":"인테리어필름(가구)","spec":"m²","unit":"m²","qty":1},{"nm":"간판용 필름","spec":"m²","unit":"m²","qty":1}]'),
+      ('wp8', 'C08', '바닥공사', '[{"nm":"바닥타일","spec":"m²","unit":"m²","qty":1},{"nm":"장판시공","spec":"m²","unit":"m²","qty":1},{"nm":"강마루시공","spec":"m²","unit":"m²","qty":1},{"nm":"에폭시코팅","spec":"m²","unit":"m²","qty":1},{"nm":"걸레받이","spec":"m","unit":"m","qty":1},{"nm":"방수공사","spec":"m²","unit":"m²","qty":1}]'),
+      ('wp9', 'C09', '제작가구', '[{"nm":"붙박이장","spec":"세트","unit":"세트","qty":1},{"nm":"신발장","spec":"세트","unit":"세트","qty":1},{"nm":"수납장","spec":"세트","unit":"세트","qty":1},{"nm":"책상/테이블","spec":"세트","unit":"세트","qty":1},{"nm":"카운터제작","spec":"식","unit":"식","qty":1}]'),
+      ('wp10', 'C10', '에어컨공사', '[{"nm":"벽걸이 에어컨 설치","spec":"대","unit":"대","qty":1},{"nm":"천정형 에어컨 설치","spec":"대","unit":"대","qty":1},{"nm":"시스템 에어컨","spec":"대","unit":"대","qty":1},{"nm":"냉매배관","spec":"m","unit":"m","qty":1},{"nm":"드레인배관","spec":"m","unit":"m","qty":1},{"nm":"실외기 거치대","spec":"식","unit":"식","qty":1}]'),
+      ('wp11', 'C11', '덕트공사', '[{"nm":"환기덕트","spec":"m","unit":"m","qty":1},{"nm":"급기덕트","spec":"m","unit":"m","qty":1},{"nm":"배기덕트","spec":"m","unit":"m","qty":1},{"nm":"환풍기 설치","spec":"대","unit":"대","qty":1},{"nm":"디퓨저/그릴","spec":"개","unit":"개","qty":1}]'),
+      ('wp12', 'C12', '설비공사', '[{"nm":"급수배관","spec":"m","unit":"m","qty":1},{"nm":"배수배관","spec":"m","unit":"m","qty":1},{"nm":"온수배관","spec":"m","unit":"m","qty":1},{"nm":"세면대 설치","spec":"개","unit":"개","qty":1},{"nm":"양변기 설치","spec":"개","unit":"개","qty":1},{"nm":"수전 교체","spec":"개","unit":"개","qty":1}]'),
+      ('wp13', 'C13', '소방공사', '[{"nm":"스프링클러","spec":"개","unit":"개","qty":1},{"nm":"감지기 설치","spec":"개","unit":"개","qty":1},{"nm":"유도등 설치","spec":"개","unit":"개","qty":1},{"nm":"소화기 비치","spec":"개","unit":"개","qty":1},{"nm":"소방배관","spec":"m","unit":"m","qty":1},{"nm":"방화문","spec":"개","unit":"개","qty":1}]'),
+      ('wp14', 'C14', '타일공사', '[{"nm":"벽타일","spec":"m²","unit":"m²","qty":1},{"nm":"바닥타일","spec":"m²","unit":"m²","qty":1},{"nm":"포세린타일","spec":"m²","unit":"m²","qty":1},{"nm":"줄눈시공","spec":"m²","unit":"m²","qty":1},{"nm":"타일 물끊기","spec":"m","unit":"m","qty":1}]'),
+      ('wp15', 'C15', '간판공사', '[{"nm":"전면간판","spec":"식","unit":"식","qty":1},{"nm":"돌출간판","spec":"식","unit":"식","qty":1},{"nm":"채널사인","spec":"식","unit":"식","qty":1},{"nm":"LED사인","spec":"식","unit":"식","qty":1},{"nm":"안내사인","spec":"개","unit":"개","qty":1}]'),
+      ('wp16', 'C16', '커튼·블라인드', '[{"nm":"롤스크린","spec":"개","unit":"개","qty":1},{"nm":"버티칼블라인드","spec":"개","unit":"개","qty":1},{"nm":"우드블라인드","spec":"개","unit":"개","qty":1},{"nm":"암막커튼","spec":"m","unit":"m","qty":1},{"nm":"쉬어커튼","spec":"m","unit":"m","qty":1}]'),
+      ('wp17', 'C17', '조화공사', '[{"nm":"인조잔디","spec":"m²","unit":"m²","qty":1},{"nm":"조화벽면","spec":"m²","unit":"m²","qty":1},{"nm":"화분·플랜터","spec":"개","unit":"개","qty":1},{"nm":"조경석","spec":"식","unit":"식","qty":1}]'),
+      ('wp18', 'C18', '이동가구·기전', '[{"nm":"사무용 책상","spec":"개","unit":"개","qty":1},{"nm":"사무용 의자","spec":"개","unit":"개","qty":1},{"nm":"회의테이블","spec":"세트","unit":"세트","qty":1},{"nm":"소파","spec":"세트","unit":"세트","qty":1},{"nm":"냉장고","spec":"대","unit":"대","qty":1},{"nm":"전자레인지","spec":"대","unit":"대","qty":1},{"nm":"정수기","spec":"대","unit":"대","qty":1}]')
     `)
   } catch(e) { console.log('Preset seed skipped:', e) }
 
@@ -183,8 +201,20 @@ app.post('/api/init', async (c) => {
       { id: 'ets2', name: '철거공사 세트', description: '벽체, 바닥, 천정, 설비 철거', category: '철거공사', items: JSON.stringify([{nm:"기존 벽체 철거",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"기존 바닥 철거",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"기존 천정 철거",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"설비 철거",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"잡철거",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
       { id: 'ets3', name: '목공사 세트', description: '경량칸막이, 천정틀, 합판, 몰딩, 문짝', category: '목공사', items: JSON.stringify([{nm:"경량칸막이",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"천정틀",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"합판작업",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"몰딩",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"문틀/문짝",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0}]) },
       { id: 'ets4', name: '도장공사 세트', description: '벽면/천정 도장, 친환경페인트', category: '도장공사', items: JSON.stringify([{nm:"벽면도장",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"천정도장",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"친환경페인트",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"퍼티작업",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0}]) },
-      { id: 'ets5', name: '전기공사 세트', description: '조명, 콘센트, 스위치, 분전반', category: '전기공사', items: JSON.stringify([{nm:"LED조명 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"콘센트 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"스위치 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"분전반 교체",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"배선공사",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
-      { id: 'ets6', name: '바닥공사 세트', description: '타일, 장판, 마루, 에폭시', category: '바닥공사', items: JSON.stringify([{nm:"바닥타일",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"장판시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"강마루시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"걸레받이",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets5', name: '전기공사 세트', description: '조명, 콘센트, 스위치, 분전반, 통신', category: '전기공사', items: JSON.stringify([{nm:"LED조명 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"콘센트 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"스위치 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"분전반 교체",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"배선공사",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"통신배선",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"비상조명",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets6', name: '바닥공사 세트', description: '타일, 장판, 마루, 에폭시', category: '바닥공사', items: JSON.stringify([{nm:"바닥타일",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"장판시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"강마루시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"에폭시코팅",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"걸레받이",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"방수공사",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets7', name: '금속·유리 세트', description: '유리파티션, 강화유리도어, 스틸프레임', category: '금속·유리 공사', items: JSON.stringify([{nm:"유리파티션",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"강화유리도어",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"유리난간",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"스틸프레임",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"알루미늄창호",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets8', name: '필름공사 세트', description: '단열, 안전, 인테리어 필름', category: '필름 공사', items: JSON.stringify([{nm:"창문 단열필름",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"유리 안전필름",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"인테리어필름(벽면)",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"인테리어필름(가구)",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"간판용 필름",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets9', name: '제작가구 세트', description: '붙박이장, 수납장, 카운터', category: '제작가구', items: JSON.stringify([{nm:"붙박이장",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"신발장",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"수납장",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"책상/테이블",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"카운터제작",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets10', name: '에어컨공사 세트', description: '에어컨 설치, 배관, 실외기', category: '에어컨 공사', items: JSON.stringify([{nm:"벽걸이 에어컨 설치",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0},{nm:"천정형 에어컨 설치",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0},{nm:"시스템 에어컨",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0},{nm:"냉매배관",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"드레인배관",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"실외기 거치대",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets11', name: '덕트공사 세트', description: '환기, 급배기 덕트, 환풍기', category: '덕트 공사', items: JSON.stringify([{nm:"환기덕트",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"급기덕트",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"배기덕트",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"환풍기 설치",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0},{nm:"디퓨저/그릴",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets12', name: '설비공사 세트', description: '급배수, 위생기구 설치', category: '설비 공사', items: JSON.stringify([{nm:"급수배관",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"배수배관",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"온수배관",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"세면대 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"양변기 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"수전 교체",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets13', name: '소방공사 세트', description: '스프링클러, 감지기, 유도등', category: '소방 공사', items: JSON.stringify([{nm:"스프링클러",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"감지기 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"유도등 설치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"소화기 비치",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"소방배관",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"방화문",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets14', name: '타일공사 세트', description: '벽/바닥 타일, 줄눈', category: '타일 공사', items: JSON.stringify([{nm:"벽타일",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"바닥타일",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"포세린타일",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"줄눈시공",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"타일 물끊기",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets15', name: '간판공사 세트', description: '전면, 돌출, 채널사인', category: '간판 공사', items: JSON.stringify([{nm:"전면간판",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"돌출간판",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"채널사인",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"LED사인",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0},{nm:"안내사인",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets16', name: '커튼·블라인드 세트', description: '롤스크린, 블라인드, 커튼', category: '커튼·블라인드', items: JSON.stringify([{nm:"롤스크린",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"버티칼블라인드",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"우드블라인드",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"암막커튼",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0},{nm:"쉬어커튼",spec:"m",unit:"m",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets17', name: '조화공사 세트', description: '인조잔디, 조화벽면, 플랜터', category: '조화 공사', items: JSON.stringify([{nm:"인조잔디",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"조화벽면",spec:"m²",unit:"m²",qty:1,mp:0,lp:0,ep:0},{nm:"화분·플랜터",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"조경석",spec:"식",unit:"식",qty:1,mp:0,lp:0,ep:0}]) },
+      { id: 'ets18', name: '이동가구·기전 세트', description: '사무가구, 가전제품', category: '이동가구·기전', items: JSON.stringify([{nm:"사무용 책상",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"사무용 의자",spec:"개",unit:"개",qty:1,mp:0,lp:0,ep:0},{nm:"회의테이블",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"소파",spec:"세트",unit:"세트",qty:1,mp:0,lp:0,ep:0},{nm:"냉장고",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0},{nm:"전자레인지",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0},{nm:"정수기",spec:"대",unit:"대",qty:1,mp:0,lp:0,ep:0}]) },
     ]
     for (const t of templateData) {
       await db.prepare('INSERT OR IGNORE INTO estimate_template_sets (id, name, description, category, items) VALUES (?, ?, ?, ?, ?)').bind(t.id, t.name, t.description, t.category, t.items).run()
@@ -200,7 +230,7 @@ app.post('/api/init', async (c) => {
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v7.0' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.0' }))
 
 // ===== AUTH ENDPOINTS =====
 app.post('/api/auth/login', async (c) => {
@@ -354,47 +384,46 @@ app.get('/api/dashboard/stats', async (c) => {
 
 // ===== WEATHER API (OpenWeatherMap Proxy) =====
 app.get('/api/weather', async (c) => {
-  const apiKey = c.env.OPENWEATHER_API_KEY
-  if (!apiKey) return c.json({ error: 'OPENWEATHER_API_KEY not configured' }, 500)
-
   const lat = c.req.query('lat') || '37.5665'  // Seoul default
   const lon = c.req.query('lon') || '126.9780'
-  const city = c.req.query('city')
 
   try {
-    let url: string
-    if (city) {
-      url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=kr`
-    } else {
-      url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric&lang=kr`
-    }
-
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,cloud_cover&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&timezone=Asia%2FSeoul&forecast_days=1`
     const res = await fetch(url)
-    const data = await res.json() as Record<string, unknown>
+    const data = await res.json() as Record<string, any>
     if (!res.ok) return c.json({ error: 'Weather API error', detail: data }, res.status)
 
-    // 간결한 응답 포맷
-    const main = data.main as Record<string, number>
-    const weather = (data.weather as Array<Record<string, string>>)?.[0]
-    const wind = data.wind as Record<string, number>
-    const clouds = data.clouds as Record<string, number>
+    const current = data.current || {}
+    const daily = data.daily || {}
+    const wmoCode = current.weather_code || 0
+    const wmoMap: Record<number, {desc:string, icon:string}> = {
+      0:{desc:'맑음',icon:'01d'},1:{desc:'대체로 맑음',icon:'02d'},2:{desc:'구름 조금',icon:'03d'},3:{desc:'흐림',icon:'04d'},
+      45:{desc:'안개',icon:'50d'},48:{desc:'짙은 안개',icon:'50d'},
+      51:{desc:'가벼운 이슬비',icon:'09d'},53:{desc:'이슬비',icon:'09d'},55:{desc:'강한 이슬비',icon:'09d'},
+      61:{desc:'가벼운 비',icon:'10d'},63:{desc:'비',icon:'10d'},65:{desc:'강한 비',icon:'10d'},
+      71:{desc:'가벼운 눈',icon:'13d'},73:{desc:'눈',icon:'13d'},75:{desc:'강한 눈',icon:'13d'},
+      80:{desc:'소나기',icon:'09d'},81:{desc:'강한 소나기',icon:'09d'},82:{desc:'폭우',icon:'11d'},
+      95:{desc:'천둥번개',icon:'11d'},96:{desc:'우박 동반 뇌우',icon:'11d'},99:{desc:'강한 우박 뇌우',icon:'11d'}
+    }
+    const wmo = wmoMap[wmoCode] || {desc:'알 수 없음',icon:'01d'}
+    const temp = Math.round(current.temperature_2m || 0)
+    const windSpeed = current.wind_speed_10m || 0
 
     return c.json({
-      city: (data.name as string) || city || 'Seoul',
-      temp: Math.round(main?.temp || 0),
-      feels_like: Math.round(main?.feels_like || 0),
-      temp_min: Math.round(main?.temp_min || 0),
-      temp_max: Math.round(main?.temp_max || 0),
-      humidity: main?.humidity || 0,
-      description: weather?.description || '',
-      icon: weather?.icon || '01d',
-      icon_url: `https://openweathermap.org/img/wn/${weather?.icon || '01d'}@2x.png`,
-      wind_speed: wind?.speed || 0,
-      clouds: clouds?.all || 0,
-      // 시공 현장 날씨 판단
-      outdoor_ok: (main?.temp > 0 && main?.temp < 38 && (wind?.speed || 0) < 10),
-      rain_warning: !!(data.rain || (weather?.main === 'Rain')),
-      snow_warning: !!(data.snow || (weather?.main === 'Snow'))
+      city: '서울',
+      temp,
+      feels_like: Math.round(current.apparent_temperature || 0),
+      temp_min: Math.round(daily.temperature_2m_min?.[0] || 0),
+      temp_max: Math.round(daily.temperature_2m_max?.[0] || 0),
+      humidity: current.relative_humidity_2m || 0,
+      description: wmo.desc,
+      icon: wmo.icon,
+      icon_url: `https://openweathermap.org/img/wn/${wmo.icon}@2x.png`,
+      wind_speed: windSpeed,
+      clouds: current.cloud_cover || 0,
+      outdoor_ok: (temp > 0 && temp < 38 && windSpeed < 36),
+      rain_warning: [51,53,55,61,63,65,80,81,82,95,96,99].includes(wmoCode),
+      snow_warning: [71,73,75].includes(wmoCode)
     })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
@@ -402,51 +431,45 @@ app.get('/api/weather', async (c) => {
   }
 })
 
-// 5일 예보 (시공 일정 참고용)
+// 5일 예보 (시공 일정 참고용) — Open-Meteo 무료
 app.get('/api/weather/forecast', async (c) => {
-  const apiKey = c.env.OPENWEATHER_API_KEY
-  if (!apiKey) return c.json({ error: 'OPENWEATHER_API_KEY not configured' }, 500)
-
   const lat = c.req.query('lat') || '37.5665'
   const lon = c.req.query('lon') || '126.9780'
-  const city = c.req.query('city')
 
   try {
-    let url: string
-    if (city) {
-      url = `https://api.openweathermap.org/data/2.5/forecast?q=${encodeURIComponent(city)}&appid=${apiKey}&units=metric&lang=kr&cnt=40`
-    } else {
-      url = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric&lang=kr&cnt=40`
-    }
-
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&timezone=Asia%2FSeoul&forecast_days=5`
     const res = await fetch(url)
-    const data = await res.json() as Record<string, unknown>
+    const data = await res.json() as Record<string, any>
     if (!res.ok) return c.json({ error: 'Forecast API error', detail: data }, res.status)
 
-    const list = (data.list as Array<Record<string, unknown>>) || []
-    // 일별 그룹핑 (3시간 간격 → 일 단위)
-    const daily: Record<string, { temps: number[]; desc: string; icon: string; rain: boolean }> = {}
-    list.forEach((item) => {
-      const dt = (item.dt_txt as string)?.split(' ')[0] || ''
-      if (!daily[dt]) daily[dt] = { temps: [], desc: '', icon: '', rain: false }
-      const main = item.main as Record<string, number>
-      const weather = (item.weather as Array<Record<string, string>>)?.[0]
-      daily[dt].temps.push(main?.temp || 0)
-      if (weather?.icon?.includes('d')) { daily[dt].desc = weather?.description || ''; daily[dt].icon = weather?.icon || '' }
-      if (weather?.main === 'Rain' || weather?.main === 'Snow' || item.rain || item.snow) daily[dt].rain = true
+    const daily = data.daily || {}
+    const dates = daily.time || []
+    const wmoMap: Record<number, {desc:string, icon:string}> = {
+      0:{desc:'맑음',icon:'01d'},1:{desc:'대체로 맑음',icon:'02d'},2:{desc:'구름 조금',icon:'03d'},3:{desc:'흐림',icon:'04d'},
+      45:{desc:'안개',icon:'50d'},48:{desc:'짙은 안개',icon:'50d'},
+      51:{desc:'가벼운 이슬비',icon:'09d'},53:{desc:'이슬비',icon:'09d'},55:{desc:'강한 이슬비',icon:'09d'},
+      61:{desc:'가벼운 비',icon:'10d'},63:{desc:'비',icon:'10d'},65:{desc:'강한 비',icon:'10d'},
+      71:{desc:'가벼운 눈',icon:'13d'},73:{desc:'눈',icon:'13d'},75:{desc:'강한 눈',icon:'13d'},
+      80:{desc:'소나기',icon:'09d'},81:{desc:'강한 소나기',icon:'09d'},82:{desc:'폭우',icon:'11d'},
+      95:{desc:'천둥번개',icon:'11d'},96:{desc:'우박 동반 뇌우',icon:'11d'},99:{desc:'강한 우박 뇌우',icon:'11d'}
+    }
+
+    const forecast = dates.map((date: string, i: number) => {
+      const code = daily.weather_code?.[i] || 0
+      const wmo = wmoMap[code] || {desc:'알 수 없음',icon:'01d'}
+      return {
+        date,
+        temp_min: Math.round(daily.temperature_2m_min?.[i] || 0),
+        temp_max: Math.round(daily.temperature_2m_max?.[i] || 0),
+        description: wmo.desc,
+        icon: wmo.icon,
+        icon_url: `https://openweathermap.org/img/wn/${wmo.icon}@2x.png`,
+        rain: (daily.precipitation_probability_max?.[i] || 0) > 40,
+        rain_prob: daily.precipitation_probability_max?.[i] || 0
+      }
     })
 
-    const forecast = Object.entries(daily).slice(0, 5).map(([date, d]) => ({
-      date,
-      temp_min: Math.round(Math.min(...d.temps)),
-      temp_max: Math.round(Math.max(...d.temps)),
-      description: d.desc,
-      icon: d.icon,
-      icon_url: `https://openweathermap.org/img/wn/${d.icon || '01d'}@2x.png`,
-      rain: d.rain
-    }))
-
-    return c.json({ city: (data.city as Record<string, string>)?.name || 'Seoul', forecast })
+    return c.json({ city: '서울', forecast })
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     return c.json({ error: msg }, 500)
