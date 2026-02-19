@@ -116,6 +116,9 @@
 - **app.js**: 7,758 lines, 352 functions
 - **src/index.tsx**: ~1,264 lines (backend)
 - **Built output**: ~96 KB (_worker.js)
+- **D1 Tables**: 24개
+- **API Endpoints**: 30+
+- **Phase 완료**: 8/8 (100%)
 
 ## Tech Stack
 - **Backend**: Hono v4 (TypeScript)
