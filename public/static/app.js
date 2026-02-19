@@ -3402,9 +3402,12 @@ function renderCollection(){
   document.getElementById('content').innerHTML=`
   <!-- KPI Cards -->
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
-    <div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">계약금액 합계</div><div class="kpi-value">${fmtShort(totalContract)}<span style="font-size:12px">원</span></div></div>
+    ${isAdmin()?`<div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">계약금액 합계</div><div class="kpi-value">${fmtShort(totalContract)}<span style="font-size:12px">원</span></div></div>
     <div class="kpi-card" style="border-left:3px solid var(--green)"><div class="kpi-label">수금완료</div><div class="kpi-value" style="color:var(--green)">${fmtShort(totalPaid)}<span style="font-size:12px">원</span></div></div>
-    <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미수금</div><div class="kpi-value" style="color:var(--red)">${fmtShort(totalUnpaid)}<span style="font-size:12px">원</span></div><div style="font-size:10px;color:var(--g500)">${overdueItems.length>0?`<span style="color:var(--red);font-weight:700">⚠️ ${overdueItems.length}건 연체</span>`:'연체 없음'}</div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미수금</div><div class="kpi-value" style="color:var(--red)">${fmtShort(totalUnpaid)}<span style="font-size:12px">원</span></div><div style="font-size:10px;color:var(--g500)">${overdueItems.length>0?`<span style="color:var(--red);font-weight:700">⚠️ ${overdueItems.length}건 연체</span>`:'연체 없음'}</div></div>`
+    :`<div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">총 프로젝트</div><div class="kpi-value">${ps.length}<span style="font-size:12px">건</span></div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--green)"><div class="kpi-label">수금완료 건수</div><div class="kpi-value" style="color:var(--green)">${ps.filter(p=>getPaid(p)>0).length}<span style="font-size:12px">건</span></div></div>
+    <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미수금 건수</div><div class="kpi-value" style="color:var(--red)">${ps.filter(p=>getUnpaid(p)>0).length}<span style="font-size:12px">건</span></div><div style="font-size:10px;color:var(--g500)">${overdueItems.length>0?`<span style="color:var(--red);font-weight:700">⚠️ ${overdueItems.length}건 연체</span>`:'연체 없음'}</div></div>`}
     <div class="kpi-card" style="border-left:3px solid ${collRate>=80?'var(--green)':collRate>=50?'var(--orange)':'var(--red)'}"><div class="kpi-label">수금률</div><div class="kpi-value" style="color:var(--blue)">${collRate}%</div><div style="height:6px;background:var(--g200);border-radius:3px;margin-top:6px"><div style="height:100%;width:${collRate}%;background:${collRate>=80?'var(--green)':collRate>=50?'var(--orange)':'var(--red)'};border-radius:3px"></div></div></div>
   </div>
   <!-- Overdue Alerts -->
@@ -4793,24 +4796,28 @@ function renderReports(){
   const expenses=getExpenses();
   const totalLabor=labor.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
   const totalExpense=expenses.reduce((a,e)=>a+(Number(e.amount)||0),0);
+  const adm=isAdmin();
   
   document.getElementById('content').innerHTML=`
   <div class="dash-grid" style="margin-bottom:14px">
     <div class="kpi-card"><div class="kpi-label">총 프로젝트</div><div class="kpi-value">${ps.length}<span style="font-size:14px">건</span></div></div>
-    <div class="kpi-card"><div class="kpi-label">총 도급금액</div><div class="kpi-value" style="font-size:18px">${fmtShort(totalRevenue)}<span style="font-size:12px">원</span></div></div>
+    ${adm?`<div class="kpi-card"><div class="kpi-label">총 도급금액</div><div class="kpi-value" style="font-size:18px">${fmtShort(totalRevenue)}<span style="font-size:12px">원</span></div></div>
     <div class="kpi-card"><div class="kpi-label">평균 마진율</div><div class="kpi-value" style="color:var(--green)">${avgMR.toFixed(1)}%</div></div>
-    <div class="kpi-card"><div class="kpi-label">수금완료</div><div class="kpi-value" style="color:var(--blue)">${fmtShort(totalPaid)}<span style="font-size:12px">원</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">수금완료</div><div class="kpi-value" style="color:var(--blue)">${fmtShort(totalPaid)}<span style="font-size:12px">원</span></div></div>`
+    :`<div class="kpi-card"><div class="kpi-label">시공중</div><div class="kpi-value" style="color:var(--orange)">${ps.filter(p=>p.status==='시공중').length}<span style="font-size:14px">건</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">완료</div><div class="kpi-value" style="color:var(--green)">${completed.length}<span style="font-size:14px">건</span></div></div>
+    <div class="kpi-card"><div class="kpi-label">평균 공정률</div><div class="kpi-value" style="color:var(--blue)">${ps.length?Math.round(ps.reduce((a,p)=>a+getProg(p),0)/ps.length):0}%</div></div>`}
   </div>
   
   <!-- Tabs -->
   <div class="tab-list" style="margin-bottom:16px">
-    <button class="tab-btn active" onclick="showReportTab(this,'rpt-profit')">수익성 분석</button>
-    <button class="tab-btn" onclick="showReportTab(this,'rpt-labor')">인건비 현황</button>
+    ${adm?'<button class="tab-btn active" onclick="showReportTab(this,\'rpt-profit\')">수익성 분석</button>':''}
+    <button class="tab-btn ${adm?'':'active'}" onclick="showReportTab(this,'rpt-labor')">인건비 현황</button>
     <button class="tab-btn" onclick="showReportTab(this,'rpt-expense')">지출 현황</button>
     <button class="tab-btn" onclick="showReportTab(this,'rpt-chart')">차트</button>
   </div>
   
-  <!-- Profit tab -->
+  ${adm?`<!-- Profit tab (admin only) -->
   <div class="tab-pane active" id="rpt-profit">
     <div class="card">
       <div class="card-title">프로젝트 수익성 분석</div>
@@ -4829,29 +4836,30 @@ function renderReports(){
               const pLabor=labor.filter(l=>l.pid===p.id).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
               const pExp=expenses.filter(e=>e.pid===p.id).reduce((a,e)=>a+(Number(e.amount)||0),0);
               return`<tr>
-                <td style="font-weight:600">${p.nm}</td>
-                <td class="num">${tot>0?fmt(tot):'-'}</td>
-                <td class="num">${calc.costDirect>0?fmt(calc.costDirect):'-'}</td>
-                <td class="num" style="color:var(--orange)">${pLabor>0?fmt(pLabor):'-'}</td>
-                <td class="num" style="color:var(--purple)">${pExp>0?fmt(pExp):'-'}</td>
-                <td class="num" style="color:var(--green)">${tot>0?fmt(tot-calc.costDirect):'-'}</td>
-                <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
-                <td>${paidPct}%</td>
-                <td>${statusBadge(p.status)}</td>
+                <td style="font-weight:600">\${p.nm}</td>
+                <td class="num">\${tot>0?fmt(tot):'-'}</td>
+                <td class="num">\${calc.costDirect>0?fmt(calc.costDirect):'-'}</td>
+                <td class="num" style="color:var(--orange)">\${pLabor>0?fmt(pLabor):'-'}</td>
+                <td class="num" style="color:var(--purple)">\${pExp>0?fmt(pExp):'-'}</td>
+                <td class="num" style="color:var(--green)">\${tot>0?fmt(tot-calc.costDirect):'-'}</td>
+                <td style="font-weight:700;color:\${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">\${tot>0?mr.toFixed(1)+'%':'-'}</td>
+                <td>\${paidPct}%</td>
+                <td>\${statusBadge(p.status)}</td>
               </tr>`;
             }).join('')}
           </tbody>
         </table>
       </div>
     </div>
-  </div>
+  </div>`:''}
   
   <!-- Labor tab -->
-  <div class="tab-pane" id="rpt-labor">
+  <div class="tab-pane ${adm?'':'active'}" id="rpt-labor">
     <div class="dash-grid dash-grid-3" style="margin-bottom:14px">
-      <div class="kpi-card" style="border-left:3px solid var(--orange)"><div class="kpi-label">총 인건비</div><div class="kpi-value" style="color:var(--orange)">${fmtShort(totalLabor)}<span style="font-size:12px">원</span></div></div>
+      ${adm?`<div class="kpi-card" style="border-left:3px solid var(--orange)"><div class="kpi-label">총 인건비</div><div class="kpi-value" style="color:var(--orange)">${fmtShort(totalLabor)}<span style="font-size:12px">원</span></div></div>`
+      :`<div class="kpi-card" style="border-left:3px solid var(--orange)"><div class="kpi-label">인건비 건수</div><div class="kpi-value" style="color:var(--orange)">${labor.length}<span style="font-size:12px">건</span></div></div>`}
       <div class="kpi-card" style="border-left:3px solid var(--blue)"><div class="kpi-label">등록 인원</div><div class="kpi-value" style="color:var(--blue)">${[...new Set(labor.map(l=>l.worker_name))].length}<span style="font-size:12px">명</span></div></div>
-      <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미지급</div><div class="kpi-value" style="color:var(--red)">${fmtShort(labor.filter(l=>!l.paid).reduce((a,l)=>a+(Number(l.net_amount)||0),0))}<span style="font-size:12px">원</span></div></div>
+      <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미지급</div><div class="kpi-value" style="color:var(--red)">${adm?fmtShort(labor.filter(l=>!l.paid).reduce((a,l)=>a+(Number(l.net_amount)||0),0)):labor.filter(l=>!l.paid).length+'건'}<span style="font-size:12px">${adm?'원':''}</span></div></div>
     </div>
     <div class="card">
       <div class="card-title">프로젝트별 인건비 지급명세서</div>
@@ -4922,10 +4930,13 @@ function renderReports(){
         <div class="card-title">상태별 프로젝트 분포</div>
         <div class="chart-wrap"><canvas id="statusChart"></canvas></div>
       </div>
-      <div class="card">
+      ${adm?`<div class="card">
         <div class="card-title">공종별 매출 비중</div>
         <div class="chart-wrap"><canvas id="catChart"></canvas></div>
-      </div>
+      </div>`:`<div class="card">
+        <div class="card-title">담당자별 프로젝트 현황</div>
+        <div class="chart-wrap"><canvas id="mgrChart"></canvas></div>
+      </div>`}
     </div>
   </div>`;
   
@@ -4937,13 +4948,21 @@ function renderReports(){
       const vals=labels.map(l=>ps.filter(p=>p.status===l).length);
       new Chart(sctx,{type:'doughnut',data:{labels,datasets:[{data:vals,backgroundColor:['#9ca3af','#3b82f6','#8b5cf6','#f59e0b','#22c55e','#ef4444']}]},options:{responsive:true,maintainAspectRatio:false}});
     }
-    // Cat chart
+    // Cat chart (admin) or Mgr chart (staff)
     const cctx=document.getElementById('catChart');
     if(cctx){
       const catTotals={};
       ps.forEach(p=>{const calc=calcP(p);Object.entries(calc.cs).forEach(([cid,cs])=>{catTotals[cid]=(catTotals[cid]||0)+cs.t;});});
       const sorted=Object.entries(catTotals).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).slice(0,8);
       new Chart(cctx,{type:'bar',data:{labels:sorted.map(([cid])=>catNm(cid)),datasets:[{data:sorted.map(([,v])=>Math.round(v/10000)),backgroundColor:'rgba(37,99,235,.8)',borderRadius:4}]},options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`}}},responsive:true,maintainAspectRatio:false}});
+    }
+    const mctx=document.getElementById('mgrChart');
+    if(mctx){
+      const mgrCounts={};
+      ps.forEach(p=>{const m=p.mgr||'미지정';mgrCounts[m]=(mgrCounts[m]||0)+1;});
+      const sorted=Object.entries(mgrCounts).sort((a,b)=>b[1]-a[1]).slice(0,8);
+      const colors=['#6366f1','#8b5cf6','#3b82f6','#14b8a6','#22c55e','#f59e0b','#ef4444','#ec4899'];
+      new Chart(mctx,{type:'doughnut',data:{labels:sorted.map(([k])=>k),datasets:[{data:sorted.map(([,v])=>v),backgroundColor:colors.slice(0,sorted.length)}]},options:{responsive:true,maintainAspectRatio:false}});
     }
   },100);
 }
@@ -5346,13 +5365,13 @@ async function saveSystemSettings(){
 }
 function runIntegrityCheck(){
   const el=document.getElementById('integrity-result');if(!el)return;
-  const issues=[];const ps=getProjects();
+  const issues=[];const ps=getProjects();const taxes=getTaxInvoices();const orders=getOrders()||[];const labor=getLabor()||[];const expenses=getExpenses()||[];
   // Check 1: Projects without items
   const empty=ps.filter(p=>!p.items||!p.items.length);
   if(empty.length)issues.push({level:'info',msg:`빈 프로젝트 ${empty.length}건 (항목 0개)`});
   // Check 2: Projects with invalid payments
   const badPay=ps.filter(p=>(p.payments||[]).reduce((a,pm)=>a+Number(pm.pct||0),0)>100);
-  if(badPay.length)issues.push({level:'warn',msg:`수금 비율 합계 100% 초과 ${badPay.length}건`});
+  if(badPay.length)issues.push({level:'warn',msg:`수금 비율 합계 100% 초과 ${badPay.length}건: ${badPay.map(p=>p.nm).join(', ')}`});
   // Check 3: Overdue payments
   const overdue=[];ps.forEach(p=>(p.payments||[]).forEach(pm=>{if(!pm.paid&&pm.due&&diffDays(today(),pm.due)<0)overdue.push(p.nm);}));
   if(overdue.length)issues.push({level:'warn',msg:`연체 미수금 ${overdue.length}건`});
@@ -5360,10 +5379,35 @@ function runIntegrityCheck(){
   const noGantt=ps.filter(p=>p.items&&p.items.length>0&&(!p.ganttTasks||!p.ganttTasks.length));
   if(noGantt.length)issues.push({level:'info',msg:`공정표 미생성 프로젝트 ${noGantt.length}건`});
   // Check 5: Orphan tax invoices
-  const orphanTax=getTaxInvoices().filter(t=>t.pid&&!getProject(t.pid));
+  const orphanTax=taxes.filter(t=>t.pid&&!getProject(t.pid));
   if(orphanTax.length)issues.push({level:'warn',msg:`고아 세금계산서 ${orphanTax.length}건 (프로젝트 삭제됨)`});
-  if(!issues.length)issues.push({level:'ok',msg:'모든 데이터가 정상입니다!'});
-  el.innerHTML=issues.map(i=>{
+  // Check 6: Orphan orders (linked to deleted projects)
+  const orphanOrders=orders.filter(o=>o.pid&&!getProject(o.pid));
+  if(orphanOrders.length)issues.push({level:'warn',msg:`고아 발주서 ${orphanOrders.length}건 (프로젝트 삭제됨)`});
+  // Check 7: Orphan labor records
+  const orphanLabor=labor.filter(l=>l.pid&&!getProject(l.pid));
+  if(orphanLabor.length)issues.push({level:'warn',msg:`고아 노무비 ${orphanLabor.length}건 (프로젝트 삭제됨)`});
+  // Check 8: Orphan expenses
+  const orphanExp=expenses.filter(e=>e.pid&&!getProject(e.pid));
+  if(orphanExp.length)issues.push({level:'warn',msg:`고아 지출결의 ${orphanExp.length}건 (프로젝트 삭제됨)`});
+  // Check 9: Payment percentage consistency (< 100%)
+  const lowPay=ps.filter(p=>{const pct=(p.payments||[]).reduce((a,pm)=>a+Number(pm.pct||0),0);return pct>0&&pct<100&&['시공중','완료'].includes(p.status);});
+  if(lowPay.length)issues.push({level:'info',msg:`수금 비율 합계 100% 미만인 시공/완료 프로젝트 ${lowPay.length}건`});
+  // Check 10: Budget overrun projects
+  const overBudget=ps.filter(p=>{const f=getFinSummary(p);return f.estCost>0&&f.executionRate>100;});
+  if(overBudget.length)issues.push({level:'warn',msg:`예산 초과 프로젝트 ${overBudget.length}건: ${overBudget.map(p=>p.nm).join(', ')}`});
+  // Check 11: Completed projects with uncollected payments
+  const doneUnpaid=ps.filter(p=>p.status==='완료'&&getUnpaid(p)>0);
+  if(doneUnpaid.length)issues.push({level:'warn',msg:`완료 프로젝트 미수금 ${doneUnpaid.length}건: ${doneUnpaid.map(p=>p.nm).join(', ')}`});
+  // Check 12: Tax invoice vs collection cross-check
+  const taxTotal=taxes.filter(t=>t.type!=='매입').reduce((a,t)=>a+(t.supplyAmt||0)+(t.taxAmt||0),0);
+  const collTotal=ps.reduce((a,p)=>a+getPaid(p),0);
+  if(taxTotal>0&&collTotal>0&&Math.abs(taxTotal-collTotal)>100000)issues.push({level:'info',msg:`매출 세금계산서 합계(${fmtShort(taxTotal)})와 수금완료 합계(${fmtShort(collTotal)}) 차이 발생`});
+
+  if(!issues.filter(i=>i.level!=='ok').length&&!issues.length)issues.push({level:'ok',msg:'모든 데이터가 정상입니다!'});
+  if(!issues.filter(i=>i.level==='warn'||i.level==='error').length)issues.push({level:'ok',msg:'✅ 심각한 데이터 문제가 없습니다'});
+
+  el.innerHTML=`<div style="font-size:11px;color:var(--text-muted);margin-bottom:8px">총 ${issues.length}개 항목 검사 완료</div>`+issues.map(i=>{
     const ico=i.level==='ok'?'✅':i.level==='warn'?'⚠️':'ℹ️';
     const color=i.level==='ok'?'var(--green)':i.level==='warn'?'var(--orange)':'var(--blue)';
     return`<div style="padding:6px 0;border-bottom:1px solid var(--g100);color:${color}">${ico} ${i.msg}</div>`;
@@ -7095,17 +7139,20 @@ function renderErpOverview(){
             <div style="font-size:10px;color:var(--primary);font-weight:600">공정률</div>
             <div style="font-size:22px;font-weight:800;color:var(--primary)">${prog}%</div>
           </div>
-          <div style="text-align:center;padding:10px 16px;background:${f.actualMargin>=10?'var(--success-light)':f.actualMargin>=0?'var(--warning-light)':'var(--danger-light)'};border-radius:var(--radius)">
+          ${isAdmin()?`<div style="text-align:center;padding:10px 16px;background:${f.actualMargin>=10?'var(--success-light)':f.actualMargin>=0?'var(--warning-light)':'var(--danger-light)'};border-radius:var(--radius)">
             <div style="font-size:10px;font-weight:600;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">실행 마진</div>
             <div style="font-size:22px;font-weight:800;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">${f.actualMargin.toFixed(1)}%</div>
-          </div>
+          </div>`:`<div style="text-align:center;padding:10px 16px;background:var(--success-light);border-radius:var(--radius)">
+            <div style="font-size:10px;font-weight:600;color:var(--success)">수금률</div>
+            <div style="font-size:22px;font-weight:800;color:var(--success)">${f.collectionRate.toFixed(0)}%</div>
+          </div>`}
         </div>
       </div>
     </div>
 
     <!-- KPI Cards -->
     <div class="dash-grid" style="margin-bottom:16px">
-      <div class="kpi-card kpi-primary">
+      ${isAdmin()?`<div class="kpi-card kpi-primary">
         <div class="kpi-label">${svgIcon('dollar',12)} 계약 총액</div>
         <div class="kpi-value">${fmtShort(f.contractTotal)}</div>
         <div class="kpi-sub">견적원가 ${fmtShort(f.estCost)}</div>
@@ -7124,12 +7171,31 @@ function renderErpOverview(){
         <div class="kpi-label">${svgIcon('chart',12)} 실행 이익</div>
         <div class="kpi-value" style="color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
         <div class="kpi-sub">예상이익 ${fmtShort(f.estProfit)} (${f.estMargin.toFixed(1)}%)</div>
+      </div>`:`<div class="kpi-card kpi-primary">
+        <div class="kpi-label">${svgIcon('activity',12)} 공정 현황</div>
+        <div class="kpi-value">${prog}%</div>
+        <div class="kpi-sub">공정 진행률</div>
       </div>
+      <div class="kpi-card kpi-info">
+        <div class="kpi-label">${svgIcon('check',12)} 수금률</div>
+        <div class="kpi-value">${f.collectionRate.toFixed(0)}%</div>
+        <div class="kpi-sub">수금 진행 현황</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label">🔨 발주 건수</div>
+        <div class="kpi-value">${orders.length}<span style="font-size:14px">건</span></div>
+        <div class="kpi-sub">자재 발주 현황</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--orange)">
+        <div class="kpi-label">👷 인건비 건수</div>
+        <div class="kpi-value">${labor.length}<span style="font-size:14px">건</span></div>
+        <div class="kpi-sub">노무비 등록 현황</div>
+      </div>`}
     </div>
 
     <div style="display:grid;grid-template-columns:3fr 2fr;gap:16px;margin-bottom:16px">
-      <!-- Cost Composition -->
-      <div class="card">
+      <!-- Cost Composition (admin) / Work Status (staff) -->
+      ${isAdmin()?`<div class="card">
         <div class="card-title">📊 비용 구성</div>
         <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
           ${[
@@ -7151,7 +7217,30 @@ function renderErpOverview(){
           <span>총 집행액</span>
           <span>${fmtShort(f.totalSpent)}</span>
         </div>
-      </div>
+      </div>`:`<div class="card">
+        <div class="card-title">📊 작업 현황</div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+          ${[
+            {label:'자재발주', cnt:orders.length, color:'var(--primary)', icon:'🔨'},
+            {label:'노무비', cnt:labor.length, color:'var(--warning)', icon:'👷'},
+            {label:'지출결의', cnt:expenses.length, color:'var(--success)', icon:'💳'},
+          ].map(ct=>{
+            const total=orders.length+labor.length+expenses.length;
+            const pct=total>0?(ct.cnt/total*100):0;
+            return `<div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px;font-size:12px">
+                <span style="font-weight:600">${ct.icon} ${ct.label}</span>
+                <span style="font-weight:700">${ct.cnt}건</span>
+              </div>
+              <div class="prog" style="height:8px"><div class="prog-bar" style="width:${pct}%;background:${ct.color}"></div></div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:10px;display:flex;justify-content:space-between;font-size:13px;font-weight:700">
+          <span>총 등록건수</span>
+          <span>${orders.length+labor.length+expenses.length}건</span>
+        </div>
+      </div>`}
 
       <!-- Risks & Alerts -->
       <div class="card">
@@ -7181,33 +7270,33 @@ function renderErpOverview(){
 
     <!-- Category Breakdown -->
     <div class="card">
-      <div class="card-title">🏗️ 공종별 견적 현황</div>
+      <div class="card-title">🏗️ 공종별 ${isAdmin()?'견적 현황':'작업 항목'}</div>
       ${catEntries.length?`<div class="tbl-wrap">
         <table class="tbl">
           <thead><tr>
-            <th>공종</th><th style="text-align:right">자재비</th><th style="text-align:right">노무비</th><th style="text-align:right">경비</th><th style="text-align:right">합계</th><th>비율</th>
+            <th>공종</th>${isAdmin()?'<th style="text-align:right">자재비</th><th style="text-align:right">노무비</th><th style="text-align:right">경비</th><th style="text-align:right">합계</th>':''}<th>비율</th>
           </tr></thead>
           <tbody>
             ${catEntries.map(([cid,cv])=>{
               const pct=c.direct>0?(cv.t/c.direct*100):0;
               return `<tr>
                 <td><span style="font-weight:700">${catIcon(cid)} ${catNm(cid)}</span></td>
-                <td style="text-align:right">${fmt(cv.m)}</td>
+                ${isAdmin()?`<td style="text-align:right">${fmt(cv.m)}</td>
                 <td style="text-align:right">${fmt(cv.l)}</td>
                 <td style="text-align:right">${fmt(cv.e)}</td>
-                <td style="text-align:right;font-weight:700">${fmt(cv.t)}</td>
+                <td style="text-align:right;font-weight:700">${fmt(cv.t)}</td>`:''}
                 <td><div style="display:flex;align-items:center;gap:6px"><div class="prog" style="width:60px"><div class="prog-bar" style="width:${pct}%"></div></div><span style="font-size:10px">${pct.toFixed(1)}%</span></div></td>
               </tr>`;
             }).join('')}
           </tbody>
-          <tfoot><tr style="font-weight:800;border-top:2px solid var(--border)">
+          ${isAdmin()?`<tfoot><tr style="font-weight:800;border-top:2px solid var(--border)">
             <td>합계</td>
             <td style="text-align:right">${fmt(Object.values(c.cs).reduce((a,v)=>a+v.m,0))}</td>
             <td style="text-align:right">${fmt(Object.values(c.cs).reduce((a,v)=>a+v.l,0))}</td>
             <td style="text-align:right">${fmt(Object.values(c.cs).reduce((a,v)=>a+v.e,0))}</td>
             <td style="text-align:right">${fmt(c.direct)}</td>
             <td></td>
-          </tr></tfoot>
+          </tr></tfoot>`:''}
         </table>
       </div>`:
       `<div class="empty-state" style="padding:30px"><div class="empty-state-icon">📋</div><div class="empty-state-title">견적 항목이 없습니다</div><button class="btn btn-primary btn-sm" onclick="navEstimate('${p.id}')">견적서 작성하기</button></div>`}
@@ -7272,11 +7361,11 @@ function renderErpBudget(){
     <!-- Budget Summary KPIs -->
     <div class="dash-grid" style="margin-bottom:16px">
       <div class="kpi-card kpi-primary">
-        <div class="kpi-label">📋 견적 총액 (도급)</div>
-        <div class="kpi-value">${fmtShort(f.contractTotal)}</div>
-        <div class="kpi-sub">직접비 ${fmtShort(c.direct)} + 간접비 ${fmtShort(c.indirect)}</div>
+        <div class="kpi-label">📋 ${isAdmin()?'견적 총액 (도급)':'프로젝트 규모'}</div>
+        <div class="kpi-value">${isAdmin()?fmtShort(f.contractTotal):(p.area||0)+'평'}</div>
+        <div class="kpi-sub">${isAdmin()?'직접비 '+fmtShort(c.direct)+' + 간접비 '+fmtShort(c.indirect):'상태: '+p.status}</div>
       </div>
-      <div class="kpi-card kpi-info">
+      ${isAdmin()?`<div class="kpi-card kpi-info">
         <div class="kpi-label">💰 견적 원가</div>
         <div class="kpi-value">${fmtShort(f.estCost)}</div>
         <div class="kpi-sub">예상이익 ${fmtShort(f.estProfit)} (${f.estMargin.toFixed(1)}%)</div>
@@ -7290,11 +7379,25 @@ function renderErpBudget(){
         <div class="kpi-label">📈 실행 이익</div>
         <div class="kpi-value" style="color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
         <div class="kpi-sub">실행마진 ${f.actualMargin.toFixed(1)}%</div>
+      </div>`:`<div class="kpi-card kpi-info">
+        <div class="kpi-label">🔨 발주 건수</div>
+        <div class="kpi-value">${orders.length}<span style="font-size:14px">건</span></div>
+        <div class="kpi-sub">진행중 프로젝트</div>
       </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label">👷 인건비 건수</div>
+        <div class="kpi-value" style="color:var(--warning)">${labor.length}<span style="font-size:14px">건</span></div>
+        <div class="kpi-sub">등록된 노무비</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--success)">
+        <div class="kpi-label">📊 수금률</div>
+        <div class="kpi-value" style="color:var(--success)">${f.collectionRate.toFixed(0)}%</div>
+        <div class="kpi-sub">수금 진행 현황</div>
+      </div>`}
     </div>
 
     <!-- Cost Type Summary -->
-    <div class="card" style="margin-bottom:16px">
+    ${isAdmin()?`<div class="card" style="margin-bottom:16px">
       <div class="card-title">💳 비용 유형별 예산 vs 실적</div>
       <div class="tbl-wrap">
         <table class="tbl">
@@ -7330,10 +7433,10 @@ function renderErpBudget(){
           </tr></tfoot>
         </table>
       </div>
-    </div>
+    </div>`:''}
 
-    <!-- Category Budget vs Actual -->
-    <div class="card">
+    <!-- Category Budget vs Actual (admin only) -->
+    ${isAdmin()?`<div class="card">
       <div class="card-title">🏗️ 공종별 예산 vs 실적 (발주 기준)</div>
       ${catBudgetEntries.length?`<div class="tbl-wrap">
         <table class="tbl">
@@ -7361,10 +7464,10 @@ function renderErpBudget(){
         </table>
       </div>`:
       `<div class="empty-state" style="padding:30px"><div class="empty-state-icon">📋</div><div class="empty-state-title">예산 데이터가 없습니다</div></div>`}
-    </div>
+    </div>`:''}
 
-    <!-- Indirect Costs Breakdown -->
-    <div class="card" style="margin-top:16px">
+    <!-- Indirect Costs Breakdown (admin only) -->
+    ${isAdmin()?`<div class="card" style="margin-top:16px">
       <div class="card-title">📊 간접비 내역</div>
       <div class="tbl-wrap">
         <table class="tbl">
@@ -7378,7 +7481,7 @@ function renderErpBudget(){
           </tbody>
         </table>
       </div>
-    </div>
+    </div>`:''}
   </div>`;
 }
 
@@ -7527,11 +7630,14 @@ function renderErpReport(){
     <!-- Executive Summary -->
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">📊 ${isAdmin()?'경영 요약':'프로젝트 요약'}</div>
-      <div style="display:grid;grid-template-columns:repeat(${isAdmin()?3:1},1fr);gap:12px;margin-bottom:16px">
-        <div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
+      <div style="display:grid;grid-template-columns:repeat(${isAdmin()?3:2},1fr);gap:12px;margin-bottom:16px">
+        ${isAdmin()?`<div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">계약 총액</div>
           <div style="font-size:20px;font-weight:800;color:var(--primary)">${fmtShort(f.contractTotal)}</div>
-        </div>
+        </div>`:`<div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">공정 진행률</div>
+          <div style="font-size:20px;font-weight:800;color:var(--primary)">${prog}%</div>
+        </div>`}
         ${isAdmin()?`<div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">실행 비용</div>
           <div style="font-size:20px;font-weight:800;color:var(--warning)">${fmtShort(f.totalSpent)}</div>
@@ -7539,7 +7645,10 @@ function renderErpReport(){
         <div style="text-align:center;padding:16px;background:${f.actualProfit>=0?'var(--success-light)':'var(--danger-light)'};border-radius:var(--radius)">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">실행 이익</div>
           <div style="font-size:20px;font-weight:800;color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
-        </div>`:''}
+        </div>`:`<div style="text-align:center;padding:16px;background:var(--success-light);border-radius:var(--radius)">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">수금률</div>
+          <div style="font-size:20px;font-weight:800;color:var(--success)">${f.collectionRate.toFixed(0)}%</div>
+        </div>`}
       </div>
 
       <!-- Progress Bars -->
@@ -7551,13 +7660,13 @@ function renderErpReport(){
           </div>
           <div class="prog" style="height:10px"><div class="prog-bar" style="width:${prog}%;background:var(--primary)"></div></div>
         </div>
-        <div>
+        ${isAdmin()?`<div>
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
             <span style="font-weight:600">예산 집행률</span>
             <span style="font-weight:800;color:${f.executionRate>=100?'var(--danger)':'var(--warning)'}">${f.executionRate.toFixed(1)}%</span>
           </div>
           <div class="prog" style="height:10px"><div class="prog-bar" style="width:${Math.min(100,f.executionRate)}%;background:${f.executionRate>=100?'var(--danger)':'var(--warning)'}"></div></div>
-        </div>
+        </div>`:''}
         <div>
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
             <span style="font-weight:600">수금률</span>
@@ -7565,18 +7674,18 @@ function renderErpReport(){
           </div>
           <div class="prog" style="height:10px"><div class="prog-bar" style="width:${f.collectionRate}%;background:var(--success)"></div></div>
         </div>
-        <div>
+        ${isAdmin()?`<div>
           <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
             <span style="font-weight:600">실행 마진율</span>
             <span style="font-weight:800;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">${f.actualMargin.toFixed(1)}%</span>
           </div>
           <div class="prog" style="height:10px"><div class="prog-bar" style="width:${Math.max(0,Math.min(100,f.actualMargin*2))}%;background:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}"></div></div>
-        </div>
+        </div>`:''}
       </div>
     </div>
 
-    <!-- Financial Details -->
-    <div class="card" style="margin-bottom:16px">
+    <!-- Financial Details (admin only) -->
+    ${isAdmin()?`<div class="card" style="margin-bottom:16px">
       <div class="card-title">💰 재무 상세</div>
       <div class="tbl-wrap">
         <table class="tbl">
@@ -7598,10 +7707,10 @@ function renderErpReport(){
           </tbody>
         </table>
       </div>
-    </div>
+    </div>`:''}
 
-    <!-- Cost by Category -->
-    <div class="card" style="margin-bottom:16px">
+    <!-- Cost by Category (admin only) -->
+    ${isAdmin()?`<div class="card" style="margin-bottom:16px">
       <div class="card-title">🏗️ 공종별 견적 비용</div>
       ${catEntries.length?`<div class="tbl-wrap">
         <table class="tbl">
@@ -7619,7 +7728,7 @@ function renderErpReport(){
           </tbody>
         </table>
       </div>`:'<div style="text-align:center;padding:20px;color:var(--text-muted)">견적 항목 없음</div>'}
-    </div>
+    </div>`:''}
 
     <!-- Risks -->
     ${risks.length?`<div class="card" style="margin-bottom:16px">
@@ -7643,7 +7752,7 @@ function renderErpReport(){
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v6 Full-Stack · D1 Database · Dark Mode';
+  if(badge) badge.textContent = 'v8.0 Full-Stack · D1 Database · RBAC';
 })();
 
 
