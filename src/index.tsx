@@ -43,7 +43,16 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS user_prefs (id TEXT PRIMARY KEY, dark_mode INTEGER DEFAULT 0, sidebar_collapsed INTEGER DEFAULT 0, default_view TEXT DEFAULT 'dash', notification_enabled INTEGER DEFAULT 1, language TEXT DEFAULT 'ko', updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS consultations (id TEXT PRIMARY KEY, client_name TEXT DEFAULT '', client_contact TEXT DEFAULT '', client_email TEXT DEFAULT '', client_phone TEXT DEFAULT '', source TEXT DEFAULT '', project_type TEXT DEFAULT '', area REAL DEFAULT 0, budget TEXT DEFAULT '', location TEXT DEFAULT '', date TEXT DEFAULT '', time TEXT DEFAULT '', assignee TEXT DEFAULT '', status TEXT DEFAULT '신규', notes TEXT DEFAULT '', next_action TEXT DEFAULT '', next_date TEXT DEFAULT '', priority TEXT DEFAULT '보통', tags TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS rfp (id TEXT PRIMARY KEY, title TEXT NOT NULL, client_name TEXT DEFAULT '', client_contact TEXT DEFAULT '', deadline TEXT DEFAULT '', budget_min REAL DEFAULT 0, budget_max REAL DEFAULT 0, area REAL DEFAULT 0, location TEXT DEFAULT '', project_type TEXT DEFAULT '', requirements TEXT DEFAULT '', status TEXT DEFAULT '접수', assignee TEXT DEFAULT '', submitted_date TEXT DEFAULT '', result TEXT DEFAULT '', notes TEXT DEFAULT '', attachments TEXT DEFAULT '[]', priority TEXT DEFAULT '보통', win_probability REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, password TEXT NOT NULL, name TEXT DEFAULT '', role TEXT DEFAULT 'staff', email TEXT DEFAULT '', phone TEXT DEFAULT '', active INTEGER DEFAULT 1, last_login DATETIME DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT DEFAULT 'staff', expires_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
+  // Seed default admin if no users
+  try {
+    const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>()
+    if (!cnt || cnt.cnt === 0) {
+      await db.prepare('INSERT OR IGNORE INTO users (id, username, password, name, role) VALUES (?, ?, ?, ?, ?)').bind('admin-default', 'admin', 'admin1234', '관리자', 'admin').run()
+    }
+  } catch(e) { /* ignore first-run */ }
 }
 
 // ===== GENERIC CRUD HELPER =====
@@ -192,6 +201,80 @@ app.post('/api/init', async (c) => {
 
 // Health check
 app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v7.0' }))
+
+// ===== AUTH ENDPOINTS =====
+app.post('/api/auth/login', async (c) => {
+  const db = c.env.DB
+  await ensureTables(db)
+  const { username, password } = await c.req.json()
+  if (!username || !password) return c.json({ error: '아이디와 비밀번호를 입력하세요' }, 400)
+  const user = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').bind(username).first() as Record<string, unknown> | null
+  if (!user || user.password !== password) return c.json({ error: '아이디 또는 비밀번호가 올바르지 않습니다' }, 401)
+  // Create session (24h expiry)
+  const sid = crypto.randomUUID()
+  const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+  await db.prepare('INSERT INTO sessions (id, user_id, role, expires_at) VALUES (?, ?, ?, ?)').bind(sid, user.id, user.role, expires).run()
+  // Update last login
+  await db.prepare('UPDATE users SET last_login = ? WHERE id = ?').bind(new Date().toISOString(), user.id).run()
+  return c.json({ success: true, session: sid, user: { id: user.id, username: user.username, name: user.name, role: user.role, email: user.email } })
+})
+
+app.post('/api/auth/logout', async (c) => {
+  const db = c.env.DB
+  const sid = c.req.header('X-Session-Id') || ''
+  if (sid) await db.prepare('DELETE FROM sessions WHERE id = ?').bind(sid).run()
+  return c.json({ success: true })
+})
+
+app.get('/api/auth/me', async (c) => {
+  const db = c.env.DB
+  await ensureTables(db)
+  const sid = c.req.header('X-Session-Id') || ''
+  if (!sid) return c.json({ error: 'No session' }, 401)
+  const sess = await db.prepare('SELECT * FROM sessions WHERE id = ? AND expires_at > ?').bind(sid, new Date().toISOString()).first() as Record<string, unknown> | null
+  if (!sess) return c.json({ error: 'Invalid session' }, 401)
+  const user = await db.prepare('SELECT id, username, name, role, email, phone FROM users WHERE id = ?').bind(sess.user_id).first()
+  if (!user) return c.json({ error: 'User not found' }, 401)
+  return c.json(user)
+})
+
+// Users CRUD (admin only - simple version)
+app.get('/api/users', async (c) => {
+  const db = c.env.DB
+  const { results } = await db.prepare('SELECT id, username, name, role, email, phone, active, last_login, created_at FROM users ORDER BY created_at DESC').all()
+  return c.json(results || [])
+})
+
+app.post('/api/users', async (c) => {
+  const db = c.env.DB
+  const body = await c.req.json()
+  const id = body.id || crypto.randomUUID()
+  await db.prepare('INSERT OR REPLACE INTO users (id, username, password, name, role, email, phone, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(
+    id, body.username, body.password, body.name || '', body.role || 'staff', body.email || '', body.phone || '', body.active ?? 1
+  ).run()
+  return c.json({ success: true, id })
+})
+
+app.delete('/api/users/:id', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  // Don't allow deleting the last admin
+  const admins = await db.prepare('SELECT COUNT(*) as cnt FROM users WHERE role = ? AND id != ?').bind('admin', id).first<{cnt:number}>()
+  const user = await db.prepare('SELECT role FROM users WHERE id = ?').bind(id).first<{role:string}>()
+  if (user?.role === 'admin' && (!admins || admins.cnt === 0)) return c.json({ error: '최소 1명의 관리자가 필요합니다' }, 400)
+  await db.prepare('DELETE FROM users WHERE id = ?').bind(id).run()
+  await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+app.put('/api/users/:id/password', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  const { password } = await c.req.json()
+  if (!password || password.length < 4) return c.json({ error: '비밀번호는 4자 이상이어야 합니다' }, 400)
+  await db.prepare('UPDATE users SET password = ? WHERE id = ?').bind(password, id).run()
+  return c.json({ success: true })
+})
 
 // ===== NOTIFICATIONS: Mark as read =====
 app.put('/api/notifications/:id/read', async (c) => {

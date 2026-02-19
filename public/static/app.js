@@ -3,10 +3,19 @@
 // v7: Complete UI redesign inspired by Pluuug.com SaaS platform
 //     Modern card-based dashboard, purple accent, clean typography,
 //     Cost flow visualization, enhanced KPI cards, professional tables
+//     v7.1: Login system + role-based access (admin/staff)
+
+// ===== AUTH STATE =====
+let _authUser = null; // { id, username, name, role, email }
+let _sessionId = localStorage.getItem('fp_session') || '';
+
+function isAdmin() { return _authUser?.role === 'admin'; }
+function isLoggedIn() { return !!_authUser; }
 
 // ===== API LAYER (with Optimistic UI support) =====
 async function api(path, method, body) {
   const opts = { method: method || 'GET', headers: { 'Content-Type': 'application/json' } };
+  if (_sessionId) opts.headers['X-Session-Id'] = _sessionId;
   if (body) opts.body = JSON.stringify(body);
   try {
     const res = await fetch('/api/' + path, opts);
@@ -74,6 +83,99 @@ function toggleDarkMode() {
 }
 
 // ===== NOTIFICATION HELPERS =====
+
+// ===== LOGIN SCREEN =====
+function renderLoginScreen() {
+  document.getElementById('app').innerHTML = `
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0F172A 0%,#1E293B 50%,#334155 100%);padding:20px">
+    <div style="width:100%;max-width:400px;animation:fadeIn .5s ease">
+      <!-- Logo -->
+      <div style="text-align:center;margin-bottom:32px">
+        <div style="display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;background:var(--primary,#6366F1);border-radius:16px;margin-bottom:16px">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" width="28" height="28"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        </div>
+        <h1 style="font-size:24px;font-weight:800;color:#fff;letter-spacing:-.02em;margin:0">Frame Plus ERP</h1>
+        <p style="font-size:13px;color:rgba(255,255,255,.5);margin-top:6px">건설 프로젝트 관리 시스템</p>
+      </div>
+      <!-- Login Card -->
+      <div style="background:#fff;border-radius:16px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <h2 style="font-size:18px;font-weight:700;color:#1E293B;margin:0 0 24px 0;text-align:center">로그인</h2>
+        <div id="login-error" style="display:none;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#DC2626;text-align:center"></div>
+        <div style="margin-bottom:16px">
+          <label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:6px">아이디</label>
+          <input id="login-user" type="text" placeholder="아이디를 입력하세요" style="width:100%;padding:12px 14px;border:1px solid #E2E8F0;border-radius:10px;font-size:14px;outline:none;transition:border .2s;box-sizing:border-box" onfocus="this.style.borderColor='#6366F1'" onblur="this.style.borderColor='#E2E8F0'" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+        </div>
+        <div style="margin-bottom:24px">
+          <label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:6px">비밀번호</label>
+          <input id="login-pass" type="password" placeholder="비밀번호를 입력하세요" style="width:100%;padding:12px 14px;border:1px solid #E2E8F0;border-radius:10px;font-size:14px;outline:none;transition:border .2s;box-sizing:border-box" onfocus="this.style.borderColor='#6366F1'" onblur="this.style.borderColor='#E2E8F0'" onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <button id="login-btn" onclick="doLogin()" style="width:100%;padding:13px;background:#6366F1;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s" onmouseover="this.style.background='#4F46E5'" onmouseout="this.style.background='#6366F1'">
+          로그인
+        </button>
+        <div style="margin-top:16px;text-align:center;font-size:11px;color:#94A3B8">
+          기본 계정: admin / admin1234
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:20px;font-size:11px;color:rgba(255,255,255,.3)">
+        © ${new Date().getFullYear()} Frame Plus ERP v7.1
+      </div>
+    </div>
+  </div>`;
+  setTimeout(() => { const el = document.getElementById('login-user'); if(el) el.focus(); }, 100);
+}
+
+async function doLogin() {
+  const username = document.getElementById('login-user')?.value?.trim();
+  const password = document.getElementById('login-pass')?.value;
+  const errEl = document.getElementById('login-error');
+  const btn = document.getElementById('login-btn');
+  if (!username || !password) {
+    errEl.textContent = '아이디와 비밀번호를 입력하세요';
+    errEl.style.display = 'block';
+    return;
+  }
+  btn.disabled = true; btn.textContent = '로그인 중...';
+  try {
+    const res = await fetch('/api/auth/login', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ username, password }) });
+    const data = await res.json();
+    if (!res.ok || data.error) {
+      errEl.textContent = data.error || '로그인 실패';
+      errEl.style.display = 'block';
+      btn.disabled = false; btn.textContent = '로그인';
+      return;
+    }
+    _sessionId = data.session;
+    _authUser = data.user;
+    localStorage.setItem('fp_session', _sessionId);
+    S.isAdmin = _authUser.role === 'admin';
+    // Restore original layout and boot
+    location.reload();
+  } catch(e) {
+    errEl.textContent = '서버 연결 실패';
+    errEl.style.display = 'block';
+    btn.disabled = false; btn.textContent = '로그인';
+  }
+}
+
+async function checkAuth() {
+  if (!_sessionId) return false;
+  try {
+    const res = await fetch('/api/auth/me', { headers: { 'X-Session-Id': _sessionId } });
+    if (!res.ok) { _sessionId = ''; localStorage.removeItem('fp_session'); return false; }
+    _authUser = await res.json();
+    S.isAdmin = _authUser.role === 'admin';
+    return true;
+  } catch(e) { return false; }
+}
+
+async function doLogout() {
+  if (!confirm('로그아웃 하시겠습니까?')) return;
+  try { await api('auth/logout', 'POST'); } catch(e) {}
+  _sessionId = ''; _authUser = null;
+  localStorage.removeItem('fp_session');
+  S.isAdmin = false;
+  location.reload();
+}
 function getNotifications() { return (_d.notifications||[]).filter(n=>n.status==='unread'); }
 function getUnreadCount() { return getNotifications().length; }
 async function markNotifRead(id) {
@@ -452,10 +554,10 @@ function svgIcon(name,size=14){
 const NAV=[
   {section:'메인'},
   {id:'dash',label:'대시보드',icon:'home'},
-  {section:'경영'},
-  {id:'exec_dash',label:'경영 현황',icon:'chart'},
-  {id:'cashflow',label:'현금 흐름',icon:'dollar'},
-  {id:'profit_rank',label:'수익 분석',icon:'activity'},
+  {section:'경영',adminOnly:true},
+  {id:'exec_dash',label:'경영 현황',icon:'chart',adminOnly:true},
+  {id:'cashflow',label:'현금 흐름',icon:'dollar',adminOnly:true},
+  {id:'profit_rank',label:'수익 분석',icon:'activity',adminOnly:true},
   {section:'프로젝트'},
   {id:'projects',label:'프로젝트 목록',icon:'clipboard'},
   {id:'estimate',label:'견적 작성',icon:'file'},
@@ -483,7 +585,7 @@ const NAV=[
   {section:'시스템'},
   {id:'notifications',label:'알림 센터',icon:'alert'},
   {id:'approvals',label:'결재함',icon:'check'},
-  {id:'admin',label:'관리자',icon:'settings'},
+  {id:'admin',label:'관리자',icon:'settings',adminOnly:true},
 ];
 // ===== PROJECT DETAIL MODE FUNCTIONS =====
 function isProjectMode(){ return S.selPid && PROJECT_VIEW_IDS.has(S.page); }
@@ -501,8 +603,23 @@ function renderGlobalNav(){
   const risks=ps.flatMap(p=>getRisks(p));
   const pendingApprovals=getPendingApprovals().length;
   const unreadNotifs=getUnreadCount();
-  let h='';
+  const admin=isAdmin();
+  // Filter NAV by role
+  const filtered=[];
+  let skipSection=false;
   NAV.forEach(n=>{
+    if(n.section){
+      if(n.adminOnly && !admin){skipSection=true;return;}
+      skipSection=false;
+      filtered.push(n);
+    }else{
+      if(skipSection)return;
+      if(n.adminOnly && !admin)return;
+      filtered.push(n);
+    }
+  });
+  let h='';
+  filtered.forEach(n=>{
     if(n.section){
       h+=`<div class="sb-section"><div class="sb-section-label">${n.section}</div>`;
     }else{
@@ -518,6 +635,19 @@ function renderGlobalNav(){
     }
   });
   document.getElementById('sb-nav').innerHTML=h;
+  // Update user info in sidebar
+  const userEl=document.getElementById('sb-user');
+  if(userEl && _authUser){
+    userEl.innerHTML=`
+      <div class="sb-avatar">${(_authUser.name||_authUser.username||'U').slice(0,1).toUpperCase()}</div>
+      <div class="sb-user-info">
+        <div class="sb-user-name" id="sb-user-name">${_authUser.name||_authUser.username}</div>
+        <div class="sb-user-role">${_authUser.role==='admin'?'관리자':'직원'}</div>
+      </div>
+      <button onclick="doLogout()" title="로그아웃" style="border:none;background:none;cursor:pointer;padding:4px;color:var(--text-muted);margin-left:auto" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>`;
+  }
   if(S.sidebarCollapsed)document.getElementById('sidebar').classList.add('collapsed');
   else document.getElementById('sidebar').classList.remove('collapsed');
 }
@@ -565,6 +695,12 @@ function toggleSidebar(){
 
 // ===== ROUTER (with browser history) =====
 function nav(page,sub=null,pid=null,pushHistory=true){
+  // Block admin-only pages for non-admin users
+  const adminPages=['exec_dash','cashflow','profit_rank','admin'];
+  if(!isAdmin() && adminPages.includes(page)){
+    toast('관리자만 접근할 수 있습니다','error');
+    page='dash'; sub=null;
+  }
   S.page=page;S.subPage=sub;
   if(pid)S.selPid=pid;
   // Push to browser history
@@ -591,6 +727,9 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     <button class="btn btn-ghost btn-icon" style="position:relative;font-size:16px" onclick="toggleNotifPanel()" title="알림">
       🔔<span id="notif-badge" style="position:absolute;top:3px;right:3px;background:var(--danger);color:#fff;font-size:8px;font-weight:700;border-radius:10px;padding:1px 4px;min-width:14px;text-align:center;line-height:1.3;${getUnreadCount()>0?'':'display:none'}">${getUnreadCount()}</span>
     </button>
+    ${_authUser?`<button class="btn btn-ghost btn-icon" onclick="doLogout()" title="로그아웃 (${_authUser.name||_authUser.username})" style="font-size:14px;color:var(--text-muted)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    </button>`:''}
   `;
   const content=document.getElementById('content');
   switch(page){
@@ -884,8 +1023,8 @@ function renderDash(){
   <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
     <div>
       <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">${dateStr}</div>
-      <div style="font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--text)">안녕하세요, ${co.ceo||'김승환'}님</div>
-      <div style="font-size:13px;color:var(--text-muted);margin-top:4px">오늘의 비즈니스 현황을 확인하세요</div>
+      <div style="font-size:22px;font-weight:800;letter-spacing:-.02em;color:var(--text)">안녕하세요, ${_authUser?.name||co.ceo||'김승환'}님</div>
+      <div style="font-size:13px;color:var(--text-muted);margin-top:4px">${isAdmin()?'오늘의 경영 현황을 확인하세요':'오늘의 업무 현황을 확인하세요'}</div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       ${pendingApprovalsCnt>0?`<button class="btn btn-outline btn-sm" onclick="nav('approvals')" style="border-color:var(--warning);color:var(--warning)">
@@ -899,7 +1038,7 @@ function renderDash(){
   </div>
   
   <!-- Cost Flow Pipeline (Pluuug-inspired) -->
-  <div class="cost-flow">
+  ${isAdmin()?`<div class="cost-flow">
     <div class="cost-flow-item">
       <div class="cost-flow-label">총 견적액</div>
       <div class="cost-flow-value">${fmtShort(totalEstimate)}</div>
@@ -925,7 +1064,28 @@ function renderDash(){
       <div class="cost-flow-value" style="color:${profitRate>=10?'var(--success)':profitRate>=0?'var(--warning)':'var(--danger)'}">${fmtShort(totalProfit)}</div>
       <div class="cost-flow-sub">마진율 ${profitRate.toFixed(1)}%</div>
     </div>
-  </div>
+  </div>`:`<div class="cost-flow">
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">전체 프로젝트</div>
+      <div class="cost-flow-value">${ps.length}<span style="font-size:14px">건</span></div>
+      <div class="cost-flow-sub">진행중 ${activeProjects.length}건</div>
+    </div>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">시공중</div>
+      <div class="cost-flow-value" style="color:var(--warning)">${ps.filter(p=>p.status==='시공중').length}<span style="font-size:14px">건</span></div>
+      <div class="cost-flow-sub">활성 프로젝트</div>
+    </div>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">공정 진행률</div>
+      <div class="cost-flow-value" style="color:var(--primary)">${activeProjects.length>0?Math.round(activeProjects.reduce((a,p)=>a+getProg(p),0)/activeProjects.length):0}%</div>
+      <div class="cost-flow-sub">평균 공정률</div>
+    </div>
+    <div class="cost-flow-item">
+      <div class="cost-flow-label">수금률</div>
+      <div class="cost-flow-value" style="color:var(--success)">${collectionRate}%</div>
+      <div class="cost-flow-sub">전체 수금 현황</div>
+    </div>
+  </div>`}
   
   <!-- KPI Cards -->
   <div class="dash-grid" style="margin-bottom:20px">
@@ -939,11 +1099,15 @@ function renderDash(){
       <div class="kpi-value">${todayMeetings.length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
       <div class="kpi-sub">${todayMeetings.slice(0,2).map(m=>m.title).join(', ')||'일정 없음'}</div>
     </div>
-    <div class="kpi-card kpi-danger">
+    ${isAdmin()?`<div class="kpi-card kpi-danger">
       <div class="kpi-label">${svgIcon('dollar',12)} 총 미수금</div>
       <div class="kpi-value">${fmtShort(totalUnpaid)}<span style="font-size:12px;font-weight:400;color:var(--text-muted)">원</span></div>
       <div class="kpi-sub">이번주 수금예정 ${fmtShort(weekCollection)}원</div>
-    </div>
+    </div>`:`<div class="kpi-card kpi-danger">
+      <div class="kpi-label">${svgIcon('alert',12)} 미수금 건수</div>
+      <div class="kpi-value">${ps.filter(p=>getUnpaid(p)>0).length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
+      <div class="kpi-sub">수금 필요 프로젝트</div>
+    </div>`}
     <div class="kpi-card kpi-warning">
       <div class="kpi-label">${svgIcon('alert',12)} 리스크 알림</div>
       <div class="kpi-value">${risks.length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
@@ -963,7 +1127,7 @@ function renderDash(){
         ${activeProjects.length?`<div class="tbl-wrap" style="border:none">
           <table class="tbl">
             <thead><tr>
-              <th>프로젝트</th><th>공정률</th><th>수금률</th><th>마진율</th><th>상태</th>
+              <th>프로젝트</th><th>공정률</th><th>수금률</th>${isAdmin()?'<th>마진율</th>':''}<th>상태</th>
             </tr></thead>
             <tbody>
               ${activeProjects.slice(0,6).map(p=>{
@@ -974,7 +1138,7 @@ function renderDash(){
                   <td><div style="font-weight:600;font-size:13px">${p.nm}</div><div style="font-size:11px;color:var(--text-muted)">${p.client||''}</div></td>
                   <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-primary" style="width:60px;flex-shrink:0"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px;font-weight:600;color:var(--primary)">${prog}%</span></div></td>
                   <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-green" style="width:60px;flex-shrink:0"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px;font-weight:600;color:var(--success)">${paidPct}%</span></div></td>
-                  <td><span style="font-weight:700;font-size:13px;color:${mr<5?'var(--danger)':mr<15?'var(--warning)':'var(--success)'}">${mr.toFixed(1)}%</span></td>
+                  ${isAdmin()?`<td><span style="font-weight:700;font-size:13px;color:${mr<5?'var(--danger)':mr<15?'var(--warning)':'var(--success)'}">${mr.toFixed(1)}%</span></td>`:''}
                   <td>${statusBadge(p.status)}</td>
                 </tr>`;
               }).join('')}
@@ -1009,9 +1173,9 @@ function renderDash(){
         `<div class="empty-state" style="padding:30px"><div class="empty-state-icon">📅</div><div class="empty-state-title">이번주 일정 없음</div></div>`}
       </div>
       
-      <!-- Monthly Sales Chart -->
+      <!-- Monthly Chart -->
       <div class="card">
-        <div class="card-title">${svgIcon('chart',14)} 월별 매출 현황</div>
+        <div class="card-title">${svgIcon('chart',14)} ${isAdmin()?'월별 매출 현황':'월별 프로젝트 현황'}</div>
         <div class="chart-wrap"><canvas id="monthChart"></canvas></div>
       </div>
     </div>
@@ -1100,12 +1264,22 @@ function renderDash(){
     const ctx=document.getElementById('monthChart');
     if(!ctx)return;
     const months=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
-    const vals=months.map((_,i)=>{
-      const m=String(i+1).padStart(2,'0');
-      return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).reduce((a,p)=>a+getTotal(p),0)/10000;
-    });
-    new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)'}]},
-      options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`,color:'#94A3B8'},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
+    if(isAdmin()){
+      const vals=months.map((_,i)=>{
+        const m=String(i+1).padStart(2,'0');
+        return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).reduce((a,p)=>a+getTotal(p),0)/10000;
+      });
+      new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)'}]},
+        options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`,color:'#94A3B8'},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
+    } else {
+      // Staff: show project count per month (no revenue data)
+      const vals=months.map((_,i)=>{
+        const m=String(i+1).padStart(2,'0');
+        return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).length;
+      });
+      new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)',label:'프로젝트'}]},
+        options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${v}건`,color:'#94A3B8',stepSize:1},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
+    }
   },100);
 }
 
@@ -1559,8 +1733,8 @@ function renderProjects(){
           <th onclick="sortTbl('proj','nm')">프로젝트명 <span class="sort-icon">↕</span></th>
           <th onclick="sortTbl('proj','client')">고객사 <span class="sort-icon">↕</span></th>
           <th onclick="sortTbl('proj','area')">면적 <span class="sort-icon">↕</span></th>
-          <th onclick="sortTbl('proj','total')">도급금액 <span class="sort-icon">↕</span></th>
-          <th onclick="sortTbl('proj','mr')">마진율 <span class="sort-icon">↕</span></th>
+          ${isAdmin()?'<th onclick="sortTbl(\'proj\',\'total\')">도급금액 <span class="sort-icon">↕</span></th>':'<th>도급금액</th>'}
+          ${isAdmin()?'<th onclick="sortTbl(\'proj\',\'mr\')">마진율 <span class="sort-icon">↕</span></th>':''}
           <th>공정%</th><th>수금%</th>
           <th onclick="sortTbl('proj','status')">상태 <span class="sort-icon">↕</span></th>
           <th onclick="sortTbl('proj','date')">날짜 <span class="sort-icon">↕</span></th>
@@ -1589,7 +1763,7 @@ function filterProjects(){
   if(mg&&wrap){
     const groups=groupByMonth(ps,'date');
     wrap.innerHTML=monthlyAccordion(groups, p=>renderProjectRowSingle(p),
-      `<tr><th>프로젝트명</th><th>고객사</th><th>면적</th><th>도급금액</th><th>마진율</th><th>공정%</th><th>수금%</th><th>상태</th><th>날짜</th><th>작업</th></tr>`);
+      `<tr><th>프로젝트명</th><th>고객사</th><th>면적</th><th>도급금액</th>${isAdmin()?'<th>마진율</th>':''}<th>공정%</th><th>수금%</th><th>상태</th><th>날짜</th><th>작업</th></tr>`);
   } else {
     const body=document.getElementById('projects-body');
     if(body)body.innerHTML=renderProjectRows(ps);
@@ -1602,8 +1776,8 @@ function renderProjectRowSingle(p){
     <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
     <td><div style="font-size:12.5px">${p.client}</div></td>
     <td>${p.area||'-'}평</td>
-    <td style="font-weight:600">${tot>0?fmt(tot)+'원':'-'}</td>
-    <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
+    <td style="font-weight:600">${isAdmin()?(tot>0?fmt(tot)+'원':'-'):'—'}</td>
+    ${isAdmin()?`<td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>`:''}
     <td><div class="prog prog-blue" style="width:60px"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px">${prog}%</span></td>
     <td><div class="prog prog-green" style="width:60px"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px">${paidPct}%</span></td>
     <td>${statusBadge(p.status)}</td>
@@ -1617,7 +1791,7 @@ function renderProjectRowSingle(p){
   </tr>`;
 }
 function renderProjectRows(ps){
-  if(!ps.length)return`<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--g400)">프로젝트가 없습니다</td></tr>`;
+  if(!ps.length)return`<tr><td colspan="${isAdmin()?10:9}" style="text-align:center;padding:40px;color:var(--g400)">프로젝트가 없습니다</td></tr>`;
   // Apply sort
   const sc=S.sortCol['proj'], sd=S.sortDir['proj'];
   if(sc){
@@ -4774,14 +4948,24 @@ function renderReports(){
   },100);
 }
 
-// ===== ADMIN =====
+// ===== ADMIN (관리자 설정 — 탭 기반) =====
+let _adminTab='company';
 function renderAdmin(){
-  const co=getCompany();
+  const co=getCompany();const team=getTeam();const ps=getProjects();
+  document.getElementById('tb-actions').innerHTML='';
   document.getElementById('content').innerHTML=`
-  <div class="dash-2col">
-    <!-- Company info -->
+  <!-- Admin Tabs -->
+  <div style="display:flex;border-bottom:2px solid var(--g200);margin-bottom:16px">
+    ${[{id:'company',icon:'🏢',label:'회사 정보'},{id:'users',icon:'👥',label:'사용자 관리'},{id:'system',icon:'⚙️',label:'시스템 설정'},{id:'data',icon:'💾',label:'데이터 관리'},{id:'notice',icon:'📢',label:'공지사항'}].map(t=>
+      `<button onclick="_adminTab='${t.id}';renderAdmin()" style="padding:10px 18px;border:none;background:${_adminTab===t.id?'#fff':'transparent'};font-size:12px;font-weight:600;cursor:pointer;border-bottom:${_adminTab===t.id?'2px solid var(--blue)':'2px solid transparent'};margin-bottom:-2px;color:${_adminTab===t.id?'var(--blue)':'var(--g600)'};display:flex;align-items:center;gap:5px">${t.icon} ${t.label}</button>`
+    ).join('')}
+  </div>
+  <div id="admin-content">${_adminTab==='company'?_adminCompany(co):_adminTab==='users'?_adminUsers():_adminTab==='system'?_adminSystem():_adminTab==='data'?_adminData():_adminNotice()}</div>`;
+}
+function _adminCompany(co){
+  return`<div class="dash-2col">
     <div class="card">
-      <div class="card-title">회사 정보</div>
+      <div class="card-title">🏢 회사 기본 정보</div>
       <div class="form-row form-row-2" style="margin-bottom:10px">
         <div><label class="lbl">회사명(영문)</label><input class="inp" id="co_name" value="${co.name||''}"></div>
         <div><label class="lbl">회사명(한글)</label><input class="inp" id="co_nameKo" value="${co.nameKo||''}"></div>
@@ -4799,42 +4983,337 @@ function renderAdmin(){
         <div><label class="lbl">휴대폰</label><input class="inp" id="co_mobile" value="${co.mobile||''}"></div>
         <div><label class="lbl">전문분야</label><input class="inp" id="co_spec" value="${co.specialty||'Office Specialist'}"></div>
       </div>
-      <div><label class="lbl">웹사이트</label><input class="inp" id="co_web" value="${co.website||''}"></div>
-      <div style="margin-top:12px"><button class="btn btn-primary" onclick="saveCompanyInfo()">저장</button></div>
+      <div style="margin-bottom:10px"><label class="lbl">웹사이트</label><input class="inp" id="co_web" value="${co.website||''}"></div>
+      <div style="margin-top:12px"><button class="btn btn-primary" onclick="saveCompanyInfo()">💾 저장</button></div>
     </div>
-    
-    <div style="display:flex;flex-direction:column;gap:14px">
-      <!-- Backup/Restore -->
+    <div>
+      <!-- Preview Card -->
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-title">📋 견적서 표지 미리보기</div>
+        <div style="background:var(--dark);border-radius:var(--radius-lg);padding:20px;color:#fff;min-height:180px;display:flex;flex-direction:column;justify-content:space-between">
+          <div style="font-size:10px;letter-spacing:.3em;color:rgba(255,255,255,.4)">${co.name||'COMPANY NAME'}</div>
+          <div>
+            <div style="font-size:24px;font-weight:700;letter-spacing:.15em;margin-bottom:6px">공사견적서</div>
+            <div style="font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.3)">Construction Estimate</div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:rgba(255,255,255,.4)">
+            <span>${co.nameKo||''}</span><span>${co.tel||''}</span>
+          </div>
+        </div>
+      </div>
+      <!-- Quick Stats -->
       <div class="card">
-        <div class="card-title">데이터 관리</div>
+        <div class="card-title">📊 시스템 현황</div>
+        <div style="display:flex;flex-direction:column;gap:8px;font-size:12px">
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>프로젝트</span><span style="font-weight:700">${getProjects().length}건</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>팀원</span><span style="font-weight:700">${getTeam().length}명</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>거래처</span><span style="font-weight:700">${getVendors().length}곳</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>단가DB</span><span style="font-weight:700">${getPriceDB().length}건</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>세금계산서</span><span style="font-weight:700">${getTaxInvoices().length}건</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>상담</span><span style="font-weight:700">${(_d.consultations||[]).length}건</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0"><span>RFP</span><span style="font-weight:700">${(_d.rfp||[]).length}건</span></div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+// ===== ADMIN: USER MANAGEMENT =====
+let _usersCache=null;
+async function _loadUsers(){ _usersCache=await api('users'); return _usersCache||[]; }
+
+function _adminUsers(){
+  // Load users async and render
+  if(!_usersCache){ _loadUsers().then(()=>{ document.getElementById('admin-content').innerHTML=_adminUsersHTML(); }); return '<div style="padding:40px;text-align:center;color:var(--g500)">사용자 목록 로딩중...</div>'; }
+  return _adminUsersHTML();
+}
+
+function _adminUsersHTML(){
+  const users=_usersCache||[];
+  return`<div style="margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:13px;color:var(--g600)">총 <strong>${users.length}</strong>명의 사용자</div>
+    <button class="btn btn-primary btn-sm" onclick="openAddUser()">+ 사용자 추가</button>
+  </div>
+  <div class="card">
+    <div class="tbl-wrap" style="border:none">
+      <table class="tbl">
+        <thead><tr><th>사용자</th><th>아이디</th><th>역할</th><th>이메일</th><th>연락처</th><th>상태</th><th>최근 로그인</th><th>작업</th></tr></thead>
+        <tbody>
+          ${users.map(u=>`<tr>
+            <td><div style="display:flex;align-items:center;gap:8px">
+              <div style="width:32px;height:32px;border-radius:50%;background:${u.role==='admin'?'var(--primary)':'var(--success)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">${(u.name||u.username||'U')[0].toUpperCase()}</div>
+              <div><div style="font-weight:600;font-size:12px">${u.name||'-'}</div></div>
+            </div></td>
+            <td style="font-family:monospace;font-size:12px">${u.username}</td>
+            <td><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;background:${u.role==='admin'?'var(--primary-light)':'var(--gray-100)'};color:${u.role==='admin'?'var(--primary)':'var(--text-muted)'}">${u.role==='admin'?'관리자':'직원'}</span></td>
+            <td style="font-size:11px">${u.email||'-'}</td>
+            <td style="font-size:11px">${u.phone||'-'}</td>
+            <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${u.active?'var(--success)':'var(--danger)'};margin-right:4px"></span>${u.active?'활성':'비활성'}</td>
+            <td style="font-size:11px;color:var(--g500)">${u.last_login?new Date(u.last_login).toLocaleDateString('ko'):'없음'}</td>
+            <td>
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-ghost btn-sm" onclick="openEditUser('${u.id}')" title="수정">✏️</button>
+                <button class="btn btn-ghost btn-sm" onclick="resetUserPw('${u.id}','${u.username}')" title="비밀번호 변경">🔑</button>
+                ${u.id!=='admin-default'?`<button class="btn btn-ghost btn-sm" onclick="deleteUser('${u.id}','${u.username}')" title="삭제" style="color:var(--danger)">🗑️</button>`:''}
+              </div>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function openAddUser(){
+  openModal('사용자 추가','md',`
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div><label class="lbl">이름</label><input class="inp" id="nu_name" placeholder="홍길동"></div>
+      <div><label class="lbl">아이디 *</label><input class="inp" id="nu_username" placeholder="hong"></div>
+    </div>
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div><label class="lbl">비밀번호 *</label><input class="inp" id="nu_pass" type="password" placeholder="4자 이상"></div>
+      <div><label class="lbl">역할</label><select class="sel" id="nu_role"><option value="staff">직원</option><option value="admin">관리자</option></select></div>
+    </div>
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div><label class="lbl">이메일</label><input class="inp" id="nu_email" type="email"></div>
+      <div><label class="lbl">연락처</label><input class="inp" id="nu_phone"></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveNewUser()">추가</button>
+    </div>
+  `);
+}
+
+async function saveNewUser(){
+  const username=document.getElementById('nu_username').value.trim();
+  const password=document.getElementById('nu_pass').value;
+  if(!username){toast('아이디를 입력하세요','error');return;}
+  if(!password||password.length<4){toast('비밀번호는 4자 이상이어야 합니다','error');return;}
+  const res=await api('users','POST',{
+    id:uid(), username, password,
+    name:document.getElementById('nu_name').value.trim(),
+    role:document.getElementById('nu_role').value,
+    email:document.getElementById('nu_email').value.trim(),
+    phone:document.getElementById('nu_phone').value.trim(),
+    active:1
+  });
+  if(res?.__error||res?.error){toast(res.error||'저장 실패','error');return;}
+  closeModal();toast('사용자가 추가되었습니다','success');
+  _usersCache=null;_adminTab='users';renderAdmin();
+}
+
+function openEditUser(uid_){
+  const u=(_usersCache||[]).find(x=>x.id===uid_);
+  if(!u)return;
+  openModal('사용자 수정','md',`
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div><label class="lbl">이름</label><input class="inp" id="eu_name" value="${u.name||''}"></div>
+      <div><label class="lbl">아이디</label><input class="inp" value="${u.username}" disabled style="background:var(--g100)"></div>
+    </div>
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div><label class="lbl">역할</label><select class="sel" id="eu_role"><option value="staff"${u.role!=='admin'?' selected':''}>직원</option><option value="admin"${u.role==='admin'?' selected':''}>관리자</option></select></div>
+      <div><label class="lbl">상태</label><select class="sel" id="eu_active"><option value="1"${u.active?' selected':''}>활성</option><option value="0"${!u.active?' selected':''}>비활성</option></select></div>
+    </div>
+    <div class="form-row form-row-2" style="margin-bottom:10px">
+      <div><label class="lbl">이메일</label><input class="inp" id="eu_email" value="${u.email||''}"></div>
+      <div><label class="lbl">연락처</label><input class="inp" id="eu_phone" value="${u.phone||''}"></div>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveEditUser('${uid_}','${u.username}')">저장</button>
+    </div>
+  `);
+}
+
+async function saveEditUser(uid_,username){
+  const res=await api('users','POST',{
+    id:uid_, username,
+    name:document.getElementById('eu_name').value.trim(),
+    role:document.getElementById('eu_role').value,
+    email:document.getElementById('eu_email').value.trim(),
+    phone:document.getElementById('eu_phone').value.trim(),
+    active:Number(document.getElementById('eu_active').value),
+    password:(_usersCache||[]).find(x=>x.id===uid_)?.password||'temp1234'
+  });
+  if(res?.__error){toast('저장 실패','error');return;}
+  closeModal();toast('사용자 정보가 수정되었습니다','success');
+  _usersCache=null;_adminTab='users';renderAdmin();
+}
+
+async function resetUserPw(uid_,username){
+  const newPw=prompt(`${username}의 새 비밀번호를 입력하세요 (4자 이상):`);
+  if(!newPw)return;
+  if(newPw.length<4){toast('비밀번호는 4자 이상이어야 합니다','error');return;}
+  const res=await api('users/'+uid_+'/password','PUT',{password:newPw});
+  if(res?.__error||res?.error){toast(res.error||'변경 실패','error');return;}
+  toast('비밀번호가 변경되었습니다','success');
+}
+
+async function deleteUser(uid_,username){
+  if(!confirm(`${username} 사용자를 삭제하시겠습니까?`))return;
+  const res=await api('users/'+uid_,'DELETE');
+  if(res?.__error||res?.error){toast(res.error||'삭제 실패','error');return;}
+  toast('삭제되었습니다','success');
+  _usersCache=null;_adminTab='users';renderAdmin();
+}
+
+function _adminSystem(){
+  const prefs=_d.userPrefs||{};
+  return`<div class="dash-2col">
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <!-- Default Values -->
+      <div class="card">
+        <div class="card-title">📐 기본값 설정</div>
+        <div class="form-row form-row-2" style="margin-bottom:10px">
+          <div><label class="lbl">기본 이윤율(%)</label><input class="inp" id="sys_profit" type="number" value="${prefs.defaultProfit||10}"></div>
+          <div><label class="lbl">기본 단수정리</label><select class="sel" id="sys_round"><option${(prefs.defaultRound||'십만원')==='만원'?' selected':''}>만원</option><option${(prefs.defaultRound||'십만원')==='십만원'?' selected':''}>십만원</option><option${prefs.defaultRound==='직접'?' selected':''}>직접</option></select></div>
+        </div>
+        <div class="form-row form-row-2" style="margin-bottom:10px">
+          <div><label class="lbl">안전관리비(%)</label><input class="inp" id="sys_safety" type="number" step="0.1" value="${prefs.safetyRate||0.7}"></div>
+          <div><label class="lbl">식대·교통비(%)</label><input class="inp" id="sys_meal" type="number" step="0.1" value="${prefs.mealRate||3}"></div>
+        </div>
+        <div class="form-row form-row-2">
+          <div><label class="lbl">기본 계약금(%)</label><input class="inp" id="sys_deposit" type="number" value="${prefs.defaultDeposit||30}"></div>
+          <div><label class="lbl">Gantt 기본 공기(일)</label><input class="inp" id="sys_ganttDays" type="number" value="${prefs.defaultGanttDays||5}"></div>
+        </div>
+      </div>
+      <!-- UI Settings -->
+      <div class="card">
+        <div class="card-title">🎨 UI 설정</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+            <span style="font-size:12px">다크 모드</span>
+            <input type="checkbox" id="sys_dark" ${S.darkMode?'checked':''} onchange="toggleDarkMode()">
+          </label>
+          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+            <span style="font-size:12px">사이드바 축소 모드</span>
+            <input type="checkbox" id="sys_collapsed" ${S.sidebarCollapsed?'checked':''} onchange="toggleSidebar()">
+          </label>
+          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+            <span style="font-size:12px">대시보드 자동 새로고침</span>
+            <input type="checkbox" id="sys_autorefresh" ${prefs.autoRefresh?'checked':''}>
+          </label>
+          <div><label class="lbl">기본 시작 페이지</label>
+            <select class="sel" id="sys_startPage">
+              <option value="dash"${(prefs.startPage||'dash')==='dash'?' selected':''}>대시보드</option>
+              <option value="projects"${prefs.startPage==='projects'?' selected':''}>프로젝트</option>
+              <option value="collection"${prefs.startPage==='collection'?' selected':''}>수금 관리</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <!-- Notification Settings -->
+      <div class="card">
+        <div class="card-title">🔔 알림 설정</div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+            <span style="font-size:12px">수금 연체 알림</span>
+            <input type="checkbox" id="sys_notifOverdue" ${prefs.notifOverdue!==false?'checked':''}>
+          </label>
+          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+            <span style="font-size:12px">결재 요청 알림</span>
+            <input type="checkbox" id="sys_notifApproval" ${prefs.notifApproval!==false?'checked':''}>
+          </label>
+          <label style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+            <span style="font-size:12px">일정 리마인더 알림</span>
+            <input type="checkbox" id="sys_notifMeeting" ${prefs.notifMeeting!==false?'checked':''}>
+          </label>
+          <div><label class="lbl">수금 예정 알림 (N일 전)</label><input class="inp" id="sys_notifDays" type="number" value="${prefs.notifDaysBefore||7}"></div>
+        </div>
+      </div>
+      <!-- Version Info -->
+      <div class="card">
+        <div class="card-title">ℹ️ 시스템 정보</div>
+        <div style="font-size:12px;line-height:2;color:var(--g600)">
+          <div><strong>버전:</strong> v7.0 Full-Stack</div>
+          <div><strong>플랫폼:</strong> Cloudflare Pages + D1</div>
+          <div><strong>프레임워크:</strong> Hono + Vanilla JS</div>
+          <div><strong>데이터:</strong> D1 SQLite (Cloud Sync)</div>
+          <div><strong>최종 업데이트:</strong> ${today()}</div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveSystemSettings()" style="width:100%">💾 설정 저장</button>
+    </div>
+  </div>`;
+}
+function _adminData(){
+  const counts={
+    projects:getProjects().length, vendors:getVendors().length, meetings:getMeetings().length,
+    pricedb:getPriceDB().length, tax:getTaxInvoices().length, team:getTeam().length,
+    notices:getNotices().length, as:getASList().length, labor:(_d.labor||[]).length,
+    expenses:(_d.expenses||[]).length, consultations:(_d.consultations||[]).length, rfp:(_d.rfp||[]).length,
+    notifications:(_d.notifications||[]).length, approvals:(_d.approvals||[]).length
+  };
+  const totalRecords=Object.values(counts).reduce((a,c)=>a+c,0);
+  return`<div class="dash-2col">
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <div class="card-title">📊 데이터 현황</div>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:12px">
+          ${Object.entries(counts).map(([k,v])=>{
+            const labels={projects:'프로젝트',vendors:'거래처',meetings:'회의',pricedb:'단가DB',tax:'세금계산서',
+              team:'팀원',notices:'공지사항',as:'AS',labor:'인건비',expenses:'지출',consultations:'상담',
+              rfp:'RFP',notifications:'알림',approvals:'결재'};
+            return`<div style="display:flex;justify-content:space-between;padding:6px 10px;background:var(--g50);border-radius:4px;font-size:11px">
+              <span style="color:var(--g600)">${labels[k]||k}</span>
+              <span style="font-weight:700">${v}건</span>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="background:var(--blue-l);border-radius:6px;padding:10px;font-size:12px;display:flex;justify-content:space-between;align-items:center">
+          <span style="color:var(--blue);font-weight:700">총 레코드</span>
+          <span style="font-size:16px;font-weight:800;color:var(--blue)">${totalRecords}건</span>
+        </div>
+      </div>
+      <!-- Integrity Check -->
+      <div class="card">
+        <div class="card-title">🔍 데이터 무결성 검사</div>
+        <div id="integrity-result" style="font-size:12px;color:var(--g500)">검사 버튼을 눌러주세요.</div>
+        <button class="btn btn-outline" style="margin-top:10px;width:100%" onclick="runIntegrityCheck()">🔍 검사 실행</button>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <div class="card-title">💾 백업·복구</div>
         <div style="display:flex;flex-direction:column;gap:8px">
           <button class="btn btn-outline" onclick="backupData()">${svgIcon('download',14)} 전체 데이터 백업 (JSON)</button>
-          <button class="btn btn-outline" onclick="document.getElementById('restore-file').click()">${svgIcon('upload',14)} 데이터 복구</button>
+          <button class="btn btn-outline" onclick="document.getElementById('restore-file').click()">${svgIcon('upload',14)} 데이터 복구 (JSON)</button>
           <input type="file" id="restore-file" accept=".json" style="display:none" onchange="restoreData(this)">
           <button class="btn btn-outline" onclick="exportAllCSV()">${svgIcon('download',14)} CSV 내보내기</button>
-          <button class="btn btn-red" onclick="confirmReset()">🔴 전체 데이터 초기화</button>
         </div>
       </div>
-      
-      <!-- Notice management -->
       <div class="card">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-          <div class="card-title" style="margin-bottom:0">공지사항 관리</div>
-          <button class="btn btn-primary btn-sm" onclick="openAddNotice()">+ 추가</button>
-        </div>
-        ${getNotices().map(n=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
-          ${n.pinned?'📌':''} <span style="flex:1;font-size:12.5px">${n.title}</span>
-          <span style="font-size:11px;color:var(--g500)">${n.date}</span>
-          <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteNotice('${n.id}')">${svgIcon('trash',11)}</button>
-        </div>`).join('')}
+        <div class="card-title">⚠️ 위험 영역</div>
+        <div style="font-size:11px;color:var(--g500);margin-bottom:10px">아래 작업은 복구할 수 없습니다. 반드시 백업 후 진행하세요.</div>
+        <button class="btn btn-red" style="width:100%" onclick="confirmReset()">🔴 전체 데이터 초기화</button>
       </div>
-      
-      <!-- Storage -->
       <div class="card">
-        <div class="card-title">스토리지 사용량</div>
-        <div style="font-size:13px;color:var(--g600)">${getStorageSize()}</div>
+        <div class="card-title">🗄️ 스토리지</div>
+        <div style="font-size:12px;color:var(--g600)">D1 Database (Cloud Sync) - 다기기 동기화 지원</div>
       </div>
     </div>
+  </div>`;
+}
+function _adminNotice(){
+  const notices=getNotices();
+  return`<div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div style="font-size:14px;font-weight:700">📢 공지사항 관리 <span style="font-size:12px;color:var(--g500)">(${notices.length}건)</span></div>
+      <button class="btn btn-primary btn-sm" onclick="openAddNotice()">+ 공지 추가</button>
+    </div>
+    ${notices.length?notices.map(n=>`<div class="card" style="margin-bottom:8px;padding:12px 16px">
+      <div style="display:flex;align-items:center;gap:10px">
+        ${n.pinned?'<span style="color:var(--red)">📌</span>':''}
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600">${n.title}</div>
+          ${n.content?`<div style="font-size:11px;color:var(--g500);margin-top:4px">${n.content.slice(0,100)}${n.content.length>100?'...':''}</div>`:''}
+        </div>
+        <span style="font-size:11px;color:var(--g400)">${n.date}</span>
+        <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteNotice('${n.id}')">${svgIcon('trash',12)}</button>
+      </div>
+    </div>`).join(''):`<div style="text-align:center;padding:40px;color:var(--g400)">공지사항 없음</div>`}
   </div>`;
 }
 function saveCompanyInfo(){
@@ -4843,15 +5322,94 @@ function saveCompanyInfo(){
     addr:v('co_addr'),email:v('co_email'),tel:v('co_tel'),mobile:v('co_mobile'),
     specialty:v('co_spec'),website:v('co_web')
   });
-  toast('회사 정보가 저장되었습니다','success');
+  toast('✅ 회사 정보가 저장되었습니다','success');
 }
+async function saveSystemSettings(){
+  const prefs={
+    defaultProfit:Number(document.getElementById('sys_profit')?.value||10),
+    defaultRound:document.getElementById('sys_round')?.value||'십만원',
+    safetyRate:Number(document.getElementById('sys_safety')?.value||0.7),
+    mealRate:Number(document.getElementById('sys_meal')?.value||3),
+    defaultDeposit:Number(document.getElementById('sys_deposit')?.value||30),
+    defaultGanttDays:Number(document.getElementById('sys_ganttDays')?.value||5),
+    autoRefresh:document.getElementById('sys_autorefresh')?.checked||false,
+    startPage:document.getElementById('sys_startPage')?.value||'dash',
+    notifOverdue:document.getElementById('sys_notifOverdue')?.checked!==false,
+    notifApproval:document.getElementById('sys_notifApproval')?.checked!==false,
+    notifMeeting:document.getElementById('sys_notifMeeting')?.checked!==false,
+    notifDaysBefore:Number(document.getElementById('sys_notifDays')?.value||7),
+    dark_mode:S.darkMode
+  };
+  Object.assign(_d.userPrefs||{},prefs);
+  await api('user-prefs','PUT',prefs);
+  toast('✅ 시스템 설정이 저장되었습니다','success');
+}
+function runIntegrityCheck(){
+  const el=document.getElementById('integrity-result');if(!el)return;
+  const issues=[];const ps=getProjects();
+  // Check 1: Projects without items
+  const empty=ps.filter(p=>!p.items||!p.items.length);
+  if(empty.length)issues.push({level:'info',msg:`빈 프로젝트 ${empty.length}건 (항목 0개)`});
+  // Check 2: Projects with invalid payments
+  const badPay=ps.filter(p=>(p.payments||[]).reduce((a,pm)=>a+Number(pm.pct||0),0)>100);
+  if(badPay.length)issues.push({level:'warn',msg:`수금 비율 합계 100% 초과 ${badPay.length}건`});
+  // Check 3: Overdue payments
+  const overdue=[];ps.forEach(p=>(p.payments||[]).forEach(pm=>{if(!pm.paid&&pm.due&&diffDays(today(),pm.due)<0)overdue.push(p.nm);}));
+  if(overdue.length)issues.push({level:'warn',msg:`연체 미수금 ${overdue.length}건`});
+  // Check 4: Gantt without items
+  const noGantt=ps.filter(p=>p.items&&p.items.length>0&&(!p.ganttTasks||!p.ganttTasks.length));
+  if(noGantt.length)issues.push({level:'info',msg:`공정표 미생성 프로젝트 ${noGantt.length}건`});
+  // Check 5: Orphan tax invoices
+  const orphanTax=getTaxInvoices().filter(t=>t.pid&&!getProject(t.pid));
+  if(orphanTax.length)issues.push({level:'warn',msg:`고아 세금계산서 ${orphanTax.length}건 (프로젝트 삭제됨)`});
+  if(!issues.length)issues.push({level:'ok',msg:'모든 데이터가 정상입니다!'});
+  el.innerHTML=issues.map(i=>{
+    const ico=i.level==='ok'?'✅':i.level==='warn'?'⚠️':'ℹ️';
+    const color=i.level==='ok'?'var(--green)':i.level==='warn'?'var(--orange)':'var(--blue)';
+    return`<div style="padding:6px 0;border-bottom:1px solid var(--g100);color:${color}">${ico} ${i.msg}</div>`;
+  }).join('');
+}
+function confirmReset(){
+  openModal(`<div class="modal-bg"><div class="modal modal-sm">
+    <div class="modal-hdr"><span class="modal-title">🔴 전체 데이터 초기화</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="background:var(--red-l);border:1px solid #fca5a5;border-radius:var(--radius-lg);padding:16px;margin-bottom:14px">
+        <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:8px">⚠️ 경고: 이 작업은 되돌릴 수 없습니다!</div>
+        <div style="font-size:12px;color:var(--g700);line-height:1.8">
+          모든 프로젝트, 거래처, 견적, 세금계산서, 팀원 정보 등<br>
+          <strong>전체 데이터가 영구 삭제</strong>됩니다.
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label class="lbl">확인을 위해 "초기화"를 입력하세요</label>
+        <input class="inp" id="reset_confirm" placeholder="초기화">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-red" onclick="doResetAll()">초기화 실행</button>
+    </div>
+  </div></div>`);
+}
+async function doResetAll(){
+  if(v('reset_confirm')!=='초기화'){toast('확인 텍스트가 일치하지 않습니다','error');return;}
+  toast('초기화 진행중...','warning');
+  const tables=['projects','vendors','meetings','pricedb','team','notices','tax','templates','consultations','rfp','labor','expenses','notifications','approvals'];
+  for(const t of tables){
+    const items=await api(t);
+    if(Array.isArray(items)){for(const item of items)await api(t+'/'+item.id,'DELETE');}
+  }
+  closeModal();toast('✅ 전체 데이터가 초기화되었습니다. 새로고침합니다.','success');
+  setTimeout(()=>location.reload(),1500);
+}
+function getStorageSize(){return 'D1 Database (Cloud Sync) - 다기기 동기화 지원';}
 function openAddNotice(){
   openModal(`<div class="modal-bg"><div class="modal modal-sm">
-    <div class="modal-hdr"><span class="modal-title">공지 추가</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-hdr"><span class="modal-title">📢 공지 추가</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
       <div style="margin-bottom:12px"><label class="lbl">제목 *</label><input class="inp" id="nt_title"></div>
-      <div style="margin-bottom:12px"><label class="lbl">내용</label><textarea class="inp" id="nt_content" rows="3"></textarea></div>
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="nt_pin"> 상단 고정</label>
+      <div style="margin-bottom:12px"><label class="lbl">내용</label><textarea class="inp" id="nt_content" rows="4"></textarea></div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" id="nt_pin"> 📌 상단 고정</label>
     </div>
     <div class="modal-footer">
       <button class="btn btn-outline" onclick="closeModal()">취소</button>
@@ -4863,7 +5421,7 @@ function saveNotice(){
   const title=v('nt_title');if(!title){toast('제목을 입력하세요','error');return;}
   const ns=getNotices();
   ns.unshift({id:uid(),title,content:v('nt_content'),pinned:document.getElementById('nt_pin')?.checked||false,date:today(),readBy:[]});
-  saveNotices(ns);closeModal();toast('공지가 추가되었습니다','success');renderAdmin();
+  saveNotices(ns);closeModal();toast('✅ 공지가 추가되었습니다','success');renderAdmin();
 }
 function deleteNotice(id){
   if(!confirm('삭제?'))return;
@@ -4886,6 +5444,12 @@ function importXLSX(type){
 // ===== INIT =====
 // ===== ASYNC INIT =====
 async function boot() {
+  // Check authentication first
+  const authed = await checkAuth();
+  if (!authed) {
+    renderLoginScreen();
+    return;
+  }
   // Show skeleton loading with Pluuug-style shimmer
   document.getElementById('content').innerHTML = `
     <div style="padding:20px;display:flex;flex-direction:column;gap:16px;animation:fadeIn .3s ease">
@@ -5074,9 +5638,6 @@ nav = function(page, sub, pid) {
   if(mnavEl) mnavEl.classList.add('active');
   return __origNavFn(page, sub, pid);
 };
-
-// Fix: getStorageSize for cloud
-function getStorageSizeCloud(){ return 'D1 Database (Cloud Sync) - 다기기 동기화 지원'; }
 
 // ===== CONTRACTS PAGE =====
 function renderContracts(){
@@ -6965,20 +7526,20 @@ function renderErpReport(){
 
     <!-- Executive Summary -->
     <div class="card" style="margin-bottom:16px">
-      <div class="card-title">📊 경영 요약</div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+      <div class="card-title">📊 ${isAdmin()?'경영 요약':'프로젝트 요약'}</div>
+      <div style="display:grid;grid-template-columns:repeat(${isAdmin()?3:1},1fr);gap:12px;margin-bottom:16px">
         <div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">계약 총액</div>
           <div style="font-size:20px;font-weight:800;color:var(--primary)">${fmtShort(f.contractTotal)}</div>
         </div>
-        <div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
+        ${isAdmin()?`<div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">실행 비용</div>
           <div style="font-size:20px;font-weight:800;color:var(--warning)">${fmtShort(f.totalSpent)}</div>
         </div>
         <div style="text-align:center;padding:16px;background:${f.actualProfit>=0?'var(--success-light)':'var(--danger-light)'};border-radius:var(--radius)">
           <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">실행 이익</div>
           <div style="font-size:20px;font-weight:800;color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
-        </div>
+        </div>`:''}
       </div>
 
       <!-- Progress Bars -->
