@@ -274,6 +274,28 @@ const TEAM_MEMBERS=['김승환','박관우','이지현','최민준','정수연',
 // ===== COST TYPES (from v8) =====
 const COST_TYPES = { CONSTRUCTION:'공사비', LABOR:'인건비', EXPENSE:'경비', OTHER_COST:'기타비용' };
 const COST_ICONS = { CONSTRUCTION:'🔨', LABOR:'👷', EXPENSE:'💳', OTHER_COST:'📦' };
+const COST_COLORS = ['var(--warm,#A89070)','var(--text,#1A1A1A)','var(--success,#4A7A4A)','var(--text-muted,#999)'];
+
+// ===== PROJECT DETAIL MODE NAV (v8 PROJECT_NAV) =====
+const PROJECT_NAV = [
+  { section:'ERP', icon:'▣', items:[
+    {id:'erp_overview',label:'Overview',icon:'chart'},
+    {id:'erp_budget',label:'Budget',icon:'dollar'},
+    {id:'erp_attachments',label:'Attachments',icon:'file'},
+    {id:'estimate',label:'견적서',icon:'file'},
+    {id:'erp_report',label:'Report',icon:'chart'},
+  ]},
+  { section:'시공', icon:'🏗️', items:[
+    {id:'gantt',label:'공정표',icon:'activity'},
+    {id:'orders',label:'발주',icon:'truck'},
+    {id:'collection',label:'수금',icon:'dollar'},
+    {id:'labor',label:'노무비',icon:'users'},
+  ]},
+  { section:'문서', icon:'📄', items:[
+    {id:'contracts',label:'계약서',icon:'book'},
+  ]},
+];
+const PROJECT_VIEW_IDS = new Set(PROJECT_NAV.flatMap(g=>g.items.map(i=>i.id)));
 
 // ===== STATE =====
 let S={page:'dash',subPage:null,selPid:null,selOid:null,sidebarCollapsed:false,sortCol:{},sortDir:{},calY:new Date().getFullYear(),calM:new Date().getMonth(),isAdmin:false,notices:[],msgTemplates:[],editingEstPid:null,darkMode:false};
@@ -459,7 +481,17 @@ const NAV=[
   {id:'approvals',label:'결재함',icon:'check'},
   {id:'admin',label:'관리자',icon:'settings'},
 ];
+// ===== PROJECT DETAIL MODE FUNCTIONS =====
+function isProjectMode(){ return S.selPid && PROJECT_VIEW_IDS.has(S.page); }
+function enterProject(pid){ S.selPid=pid; nav('erp_overview'); }
+function backToBoard(){ S.selPid=null; nav('projects'); }
+
 function renderNav(){
+  if(isProjectMode()) return renderProjectNav();
+  renderGlobalNav();
+}
+
+function renderGlobalNav(){
   const ps=getProjects();
   const unpaid=ps.filter(p=>getUnpaid(p)>0).length;
   const risks=ps.flatMap(p=>getRisks(p));
@@ -479,9 +511,45 @@ function renderNav(){
         <span class="sb-icon">${svgIcon(n.icon)}</span>
         <span class="sb-label">${n.label}</span>${badge}
       </div>`;
-      // Close section div if next is section or end
     }
   });
+  document.getElementById('sb-nav').innerHTML=h;
+  if(S.sidebarCollapsed)document.getElementById('sidebar').classList.add('collapsed');
+  else document.getElementById('sidebar').classList.remove('collapsed');
+}
+
+function renderProjectNav(){
+  const p=getProject(S.selPid);
+  if(!p){ backToBoard(); return; }
+  const fin=getFinSummary(p);
+  const progPct=getProg(p);
+  let h=`
+    <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
+      <button class="btn btn-ghost btn-sm" onclick="backToBoard()" style="margin-bottom:8px;font-size:11px;padding:4px 10px;width:100%">
+        ${svgIcon('arrow_left',12)} 프로젝트 목록
+      </button>
+      <div style="background:var(--warm-light,#F3EDE5);border-radius:var(--radius);padding:10px 12px">
+        <div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:2px">${escHtml(p.nm)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escHtml(p.client||'')} · ${p.area||0}평</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+          ${statusBadge(p.status)}
+          <div class="prog" style="flex:1"><div class="prog-bar" style="width:${progPct}%"></div></div>
+          <span style="font-size:10px;color:var(--text-muted)">${progPct}%</span>
+        </div>
+      </div>
+    </div>`;
+  h+=`<div style="padding:6px 8px">`;
+  PROJECT_NAV.forEach(g=>{
+    h+=`<div class="sb-section" style="margin-top:8px"><div class="sb-section-label">${g.icon} ${g.section}</div></div>`;
+    g.items.forEach(item=>{
+      const active=S.page===item.id?'active':'';
+      h+=`<div class="sb-item ${active}" onclick="nav('${item.id}')" title="${item.label}">
+        <span class="sb-icon">${svgIcon(item.icon)}</span>
+        <span class="sb-label">${item.label}</span>
+      </div>`;
+    });
+  });
+  h+=`</div>`;
   document.getElementById('sb-nav').innerHTML=h;
   if(S.sidebarCollapsed)document.getElementById('sidebar').classList.add('collapsed');
   else document.getElementById('sidebar').classList.remove('collapsed');
@@ -501,9 +569,16 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     history.pushState({page,sub,pid}, '', url);
   }
   renderNav();
-  const pageInfo=NAV.find(n=>n.id===page);
-  document.getElementById('tb-title').textContent=pageInfo?.label||page;
-  document.getElementById('tb-sub').textContent='';
+  // Title: project mode shows project name, global mode shows page label
+  const pageInfo=NAV.find(n=>n.id===page)||PROJECT_NAV.flatMap(g=>g.items).find(i=>i.id===page);
+  if(isProjectMode()){
+    const prj=getProject(S.selPid);
+    document.getElementById('tb-title').textContent=prj?prj.nm:'프로젝트';
+    document.getElementById('tb-sub').textContent=pageInfo?.label||page;
+  }else{
+    document.getElementById('tb-title').textContent=pageInfo?.label||page;
+    document.getElementById('tb-sub').textContent='';
+  }
   // Add dark mode toggle + notification bell to topbar
   document.getElementById('tb-actions').innerHTML=`
     <button class="btn btn-ghost btn-icon" onclick="toggleDarkMode()" title="다크모드" style="font-size:16px">
@@ -538,6 +613,10 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'admin':renderAdmin();break;
     case 'notifications':renderNotifications();break;
     case 'approvals':renderApprovals();break;
+    case 'erp_overview':renderErpOverview();break;
+    case 'erp_budget':renderErpBudget();break;
+    case 'erp_attachments':renderErpAttachments();break;
+    case 'erp_report':renderErpReport();break;
     default:content.innerHTML=`<div class="card"><p>${page} 페이지</p></div>`;
   }
   // Close mobile menu on nav
@@ -885,7 +964,7 @@ function renderDash(){
                 const prog=getProg(p);const paid=getPaid(p);const tot=getTotal(p);
                 const paidPct=tot>0?Math.round(paid/tot*100):0;
                 const mr=getMR(p);
-                return `<tr style="cursor:pointer" onclick="S.selPid='${p.id}';nav('estimate')">
+                return `<tr style="cursor:pointer" onclick="enterProject('${p.id}')">
                   <td><div style="font-weight:600;font-size:13px">${p.nm}</div><div style="font-size:11px;color:var(--text-muted)">${p.client||''}</div></td>
                   <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-primary" style="width:60px;flex-shrink:0"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px;font-weight:600;color:var(--primary)">${prog}%</span></div></td>
                   <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-green" style="width:60px;flex-shrink:0"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px;font-weight:600;color:var(--success)">${paidPct}%</span></div></td>
@@ -977,7 +1056,7 @@ function renderDash(){
       ${risks.length?`<div class="card" style="border-color:var(--danger);border-color:rgba(239,68,68,.2)">
         <div class="card-title" style="color:var(--danger)">${svgIcon('alert',14)} 리스크 알림</div>
         <div style="display:flex;flex-direction:column;gap:6px">
-          ${risks.slice(0,5).map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:${r.lv==='high'?'var(--danger-light)':'var(--warning-light)'};border-radius:var(--radius-sm);font-size:12px;cursor:pointer" onclick="S.selPid='${r.pid}';nav('estimate')">
+          ${risks.slice(0,5).map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:${r.lv==='high'?'var(--danger-light)':'var(--warning-light)'};border-radius:var(--radius-sm);font-size:12px;cursor:pointer" onclick="enterProject('${r.pid}')">
             <span style="flex-shrink:0">${r.lv==='high'?'🔴':'🟡'}</span>
             <span style="color:var(--text-secondary)">${r.msg}</span>
           </div>`).join('')}
@@ -1164,7 +1243,7 @@ function renderExecDash(){
   <!-- 예산 초과 경고 + 위험 알림 -->
   ${(budgetAlerts.length>0||alerts.length>0)?`<div style="margin-bottom:14px">
     ${budgetAlerts.map(({p,execPct})=>`
-      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius);background:${execPct>=100?'var(--danger-light)':'var(--warning-light)'};border-left:3px solid ${execPct>=100?'var(--danger)':'var(--warning)'};margin-bottom:4px;font-size:12px;font-weight:700;color:${execPct>=100?'var(--danger)':'var(--warning)'};cursor:pointer" onclick="S.selPid='${p.id}';nav('estimate')">
+      <div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius);background:${execPct>=100?'var(--danger-light)':'var(--warning-light)'};border-left:3px solid ${execPct>=100?'var(--danger)':'var(--warning)'};margin-bottom:4px;font-size:12px;font-weight:700;color:${execPct>=100?'var(--danger)':'var(--warning)'};cursor:pointer" onclick="enterProject('${p.id}')">
         ${execPct>=100?'🚨':'⚠️'} [${p.nm}] 예산 집행률 ${execPct.toFixed(0)}% ${execPct>=100?'— 초과':'— 주의'}
       </div>
     `).join('')}
@@ -1208,7 +1287,7 @@ function renderExecDash(){
           <thead><tr><th>프로젝트</th><th>계약금액</th><th>실집행</th><th>마진율</th><th>집행률</th></tr></thead>
           <tbody>
             ${ranked.slice(0,6).map(({p,f},i)=>`
-              <tr style="cursor:pointer" onclick="S.selPid='${p.id}';nav('estimate')">
+              <tr style="cursor:pointer" onclick="enterProject('${p.id}')">
                 <td><div style="font-weight:700">${i<3?['🥇','🥈','🥉'][i]:''} ${p.nm}</div><div style="font-size:10px;color:var(--text-muted)">${p.client||''}</div></td>
                 <td style="font-weight:700">${fmtShort(f.contractTotal)}</td>
                 <td>${fmtShort(f.totalSpent)}</td>
@@ -1412,7 +1491,7 @@ function renderProfitRank(){
         </tr></thead>
         <tbody>
           ${sorted.map(({p,f},i)=>`
-            <tr style="cursor:pointer;${f.executionRate>=100?'background:var(--danger-light)':''}" onclick="S.selPid='${p.id}';nav('estimate')">
+            <tr style="cursor:pointer;${f.executionRate>=100?'background:var(--danger-light)':''}" onclick="enterProject('${p.id}')">
               <td style="text-align:center;font-weight:800;font-size:13px;color:${i<3?'var(--warning)':'var(--text-muted)'}">${i+1}</td>
               <td><div style="font-weight:700">${p.nm}</div>${statusBadge(p.status)}</td>
               <td style="color:var(--text-muted)">${p.client||''}</td>
@@ -1514,7 +1593,7 @@ function renderProjectRowSingle(p){
   const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
   const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
   return`<tr>
-    <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="openEditProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
+    <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
     <td><div style="font-size:12.5px">${p.client}</div></td>
     <td>${p.area||'-'}평</td>
     <td style="font-weight:600">${tot>0?fmt(tot)+'원':'-'}</td>
@@ -1524,9 +1603,10 @@ function renderProjectRowSingle(p){
     <td>${statusBadge(p.status)}</td>
     <td style="font-size:11px">${p.date||''}</td>
     <td><div style="display:flex;gap:4px">
-      <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditProject('${p.id}')">${svgIcon('edit',13)}</button>
-      <button class="btn btn-ghost btn-sm btn-icon" onclick="navEstimate('${p.id}')">${svgIcon('file',13)}</button>
-      <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteProject('${p.id}')">${svgIcon('trash',13)}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditProject('${p.id}')" title="편집">${svgIcon('edit',13)}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="enterProject('${p.id}')" title="상세">${svgIcon('eye',13)}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" onclick="navEstimate('${p.id}')" title="견적">${svgIcon('file',13)}</button>
+      <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteProject('${p.id}')" title="삭제">${svgIcon('trash',13)}</button>
     </div></td>
   </tr>`;
 }
@@ -1549,7 +1629,7 @@ function renderProjectRows(ps){
     const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
     const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
     return`<tr>
-      <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="openEditProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
+      <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
       <td><div style="font-size:12.5px">${p.client}</div><div style="font-size:11px;color:var(--g500)">${p.contact||''}</div></td>
       <td>${p.area||'-'}평</td>
       <td style="font-weight:600">${tot>0?fmt(tot)+'원':'-'}</td>
@@ -1561,8 +1641,8 @@ function renderProjectRows(ps){
       <td>
         <div style="display:flex;gap:4px">
           <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditProject('${p.id}')" title="편집">${svgIcon('edit',13)}</button>
+          <button class="btn btn-ghost btn-sm btn-icon" onclick="enterProject('${p.id}')" title="상세">${svgIcon('eye',13)}</button>
           <button class="btn btn-ghost btn-sm btn-icon" onclick="navEstimate('${p.id}')" title="견적">${svgIcon('file',13)}</button>
-          <button class="btn btn-ghost btn-sm btn-icon" onclick="previewEst('${p.id}')" title="미리보기">${svgIcon('eye',13)}</button>
           <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteProject('${p.id}')" title="삭제">${svgIcon('trash',13)}</button>
         </div>
       </td>
@@ -5386,6 +5466,598 @@ async function submitExpenseForApproval(expenseId) {
   await api('expenses', 'POST', exp);
   toast('결재 요청이 전송되었습니다', 'success');
   renderExpenses();
+}
+
+// ===== ERP PROJECT DETAIL VIEWS (Phase 2) =====
+
+// ── ERP OVERVIEW ──
+function renderErpOverview(){
+  const p=getProject(S.selPid);
+  if(!p){backToBoard();return;}
+  const f=getFinSummary(p);
+  const c=calcP(p);
+  const prog=getProg(p);
+  const risks=getRisks(p);
+  const orders=(getOrders()||[]).filter(o=>o.pid===p.id);
+  const labor=(getLabor()||[]).filter(l=>l.pid===p.id);
+  const expenses=(getExpenses()||[]).filter(e=>e.pid===p.id);
+
+  // Budget by cost type
+  const orderAmt=orders.reduce((a,o)=>a+Number(o.amount||0),0);
+  const laborAmt=labor.reduce((a,l)=>a+Number(l.daily_rate||0)*Number(l.days||0)+Number(l.meal_cost||0)+Number(l.transport_cost||0)+Number(l.overtime_cost||0)-Number(l.deduction||0),0);
+  const expenseAmt=expenses.filter(e=>e.status==='승인').reduce((a,e)=>a+Number(e.amount||0),0);
+
+  // Category breakdown
+  const catEntries=Object.entries(c.cs).filter(([,v])=>v.t>0).sort((a,b)=>b[1].t-a[1].t);
+  const maxCat=catEntries.length?catEntries[0][1].t:1;
+
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="openEditProject('${p.id}')">${svgIcon('edit',12)} 정보 편집</button>
+    <button class="btn btn-outline btn-sm" onclick="nav('erp_report')">${svgIcon('chart',12)} 리포트</button>`;
+
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <!-- Project Info Header -->
+    <div class="card" style="margin-bottom:16px;padding:18px 22px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">프로젝트 개요</div>
+          <div style="font-size:20px;font-weight:800;color:var(--text);margin-bottom:6px">${escHtml(p.nm)}</div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--text-muted)">
+            <span>👤 ${escHtml(p.client||'-')}</span>
+            <span>📐 ${p.area||'-'}평</span>
+            <span>📅 ${p.date||'-'}</span>
+            <span>👷 ${p.mgr||'-'}</span>
+            ${statusBadge(p.status)}
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <div style="text-align:center;padding:10px 16px;background:var(--primary-light);border-radius:var(--radius)">
+            <div style="font-size:10px;color:var(--primary);font-weight:600">공정률</div>
+            <div style="font-size:22px;font-weight:800;color:var(--primary)">${prog}%</div>
+          </div>
+          <div style="text-align:center;padding:10px 16px;background:${f.actualMargin>=10?'var(--success-light)':f.actualMargin>=0?'var(--warning-light)':'var(--danger-light)'};border-radius:var(--radius)">
+            <div style="font-size:10px;font-weight:600;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">실행 마진</div>
+            <div style="font-size:22px;font-weight:800;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">${f.actualMargin.toFixed(1)}%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPI Cards -->
+    <div class="dash-grid" style="margin-bottom:16px">
+      <div class="kpi-card kpi-primary">
+        <div class="kpi-label">${svgIcon('dollar',12)} 계약 총액</div>
+        <div class="kpi-value">${fmtShort(f.contractTotal)}</div>
+        <div class="kpi-sub">견적원가 ${fmtShort(f.estCost)}</div>
+      </div>
+      <div class="kpi-card kpi-danger">
+        <div class="kpi-label">${svgIcon('activity',12)} 실행 비용</div>
+        <div class="kpi-value">${fmtShort(f.totalSpent)}</div>
+        <div class="kpi-sub">집행률 ${f.executionRate.toFixed(1)}%</div>
+      </div>
+      <div class="kpi-card kpi-info">
+        <div class="kpi-label">${svgIcon('check',12)} 수금 현황</div>
+        <div class="kpi-value">${fmtShort(f.collected)}</div>
+        <div class="kpi-sub">수금률 ${f.collectionRate.toFixed(1)}% · 미수금 ${fmtShort(f.outstanding)}</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid ${f.actualProfit>=0?'var(--success)':'var(--danger)'}">
+        <div class="kpi-label">${svgIcon('chart',12)} 실행 이익</div>
+        <div class="kpi-value" style="color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
+        <div class="kpi-sub">예상이익 ${fmtShort(f.estProfit)} (${f.estMargin.toFixed(1)}%)</div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:3fr 2fr;gap:16px;margin-bottom:16px">
+      <!-- Cost Composition -->
+      <div class="card">
+        <div class="card-title">📊 비용 구성</div>
+        <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">
+          ${[
+            {label:'공사비(자재발주)', amt:orderAmt, color:'var(--primary)', icon:'🔨'},
+            {label:'인건비(노무)', amt:laborAmt, color:'var(--warning)', icon:'👷'},
+            {label:'경비(지출)', amt:expenseAmt, color:'var(--success)', icon:'💳'},
+          ].map(ct=>{
+            const pct=f.totalSpent>0?(ct.amt/f.totalSpent*100):0;
+            return `<div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:3px;font-size:12px">
+                <span style="font-weight:600">${ct.icon} ${ct.label}</span>
+                <span style="font-weight:700">${fmtShort(ct.amt)} <span style="color:var(--text-muted);font-weight:400">(${pct.toFixed(0)}%)</span></span>
+              </div>
+              <div class="prog" style="height:8px"><div class="prog-bar" style="width:${pct}%;background:${ct.color}"></div></div>
+            </div>`;
+          }).join('')}
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:10px;display:flex;justify-content:space-between;font-size:13px;font-weight:700">
+          <span>총 집행액</span>
+          <span>${fmtShort(f.totalSpent)}</span>
+        </div>
+      </div>
+
+      <!-- Risks & Alerts -->
+      <div class="card">
+        <div class="card-title">⚠️ 리스크 & 알림</div>
+        ${risks.length?`<div style="display:flex;flex-direction:column;gap:6px">
+          ${risks.map(r=>`<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:${r.lv==='high'?'var(--danger-light)':'var(--warning-light)'};border-radius:var(--radius-sm);font-size:12px">
+            <span style="flex-shrink:0">${r.lv==='high'?'🔴':'🟡'}</span>
+            <span style="color:var(--text-secondary)">${r.msg}</span>
+          </div>`).join('')}
+        </div>`:
+        `<div style="padding:30px;text-align:center;color:var(--text-muted);font-size:13px">✅ 리스크 없음</div>`}
+
+        <!-- Quick Links -->
+        <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:8px">빠른 이동</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <button class="btn btn-outline btn-sm" onclick="nav('estimate')">📋 견적서</button>
+            <button class="btn btn-outline btn-sm" onclick="nav('orders')">🚚 발주</button>
+            <button class="btn btn-outline btn-sm" onclick="nav('gantt')">📊 공정표</button>
+            <button class="btn btn-outline btn-sm" onclick="nav('erp_budget')">💰 예산</button>
+            <button class="btn btn-outline btn-sm" onclick="nav('collection')">💵 수금</button>
+            <button class="btn btn-outline btn-sm" onclick="nav('labor')">👷 노무비</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Category Breakdown -->
+    <div class="card">
+      <div class="card-title">🏗️ 공종별 견적 현황</div>
+      ${catEntries.length?`<div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>공종</th><th style="text-align:right">자재비</th><th style="text-align:right">노무비</th><th style="text-align:right">경비</th><th style="text-align:right">합계</th><th>비율</th>
+          </tr></thead>
+          <tbody>
+            ${catEntries.map(([cid,cv])=>{
+              const pct=c.direct>0?(cv.t/c.direct*100):0;
+              return `<tr>
+                <td><span style="font-weight:700">${catIcon(cid)} ${catNm(cid)}</span></td>
+                <td style="text-align:right">${fmt(cv.m)}</td>
+                <td style="text-align:right">${fmt(cv.l)}</td>
+                <td style="text-align:right">${fmt(cv.e)}</td>
+                <td style="text-align:right;font-weight:700">${fmt(cv.t)}</td>
+                <td><div style="display:flex;align-items:center;gap:6px"><div class="prog" style="width:60px"><div class="prog-bar" style="width:${pct}%"></div></div><span style="font-size:10px">${pct.toFixed(1)}%</span></div></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot><tr style="font-weight:800;border-top:2px solid var(--border)">
+            <td>합계</td>
+            <td style="text-align:right">${fmt(Object.values(c.cs).reduce((a,v)=>a+v.m,0))}</td>
+            <td style="text-align:right">${fmt(Object.values(c.cs).reduce((a,v)=>a+v.l,0))}</td>
+            <td style="text-align:right">${fmt(Object.values(c.cs).reduce((a,v)=>a+v.e,0))}</td>
+            <td style="text-align:right">${fmt(c.direct)}</td>
+            <td></td>
+          </tr></tfoot>
+        </table>
+      </div>`:
+      `<div class="empty-state" style="padding:30px"><div class="empty-state-icon">📋</div><div class="empty-state-title">견적 항목이 없습니다</div><button class="btn btn-primary btn-sm" onclick="navEstimate('${p.id}')">견적서 작성하기</button></div>`}
+    </div>
+
+    <!-- Payment Schedule -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">💵 수금 일정</div>
+      ${(p.payments||[]).length?`<div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>구분</th><th style="text-align:right">비율</th><th style="text-align:right">금액</th><th>기한</th><th>수금일</th><th>상태</th></tr></thead>
+          <tbody>
+            ${(p.payments||[]).map(pay=>{
+              const amt=f.contractTotal*Number(pay.pct||0)/100;
+              return `<tr>
+                <td style="font-weight:600">${pay.label||'-'}</td>
+                <td style="text-align:right">${pay.pct||0}%</td>
+                <td style="text-align:right;font-weight:700">${fmtShort(amt)}</td>
+                <td style="font-size:12px">${pay.due||'-'}</td>
+                <td style="font-size:12px">${pay.paidDate||'-'}</td>
+                <td>${pay.paid?'<span class="badge badge-green">✅ 수금완료</span>':'<span class="badge badge-orange">⏳ 미수금</span>'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`:
+      `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px">수금 일정이 설정되지 않았습니다</div>`}
+    </div>
+  </div>`;
+}
+
+// ── ERP BUDGET ──
+function renderErpBudget(){
+  const p=getProject(S.selPid);
+  if(!p){backToBoard();return;}
+  const f=getFinSummary(p);
+  const c=calcP(p);
+  const orders=(getOrders()||[]).filter(o=>o.pid===p.id);
+  const labor=(getLabor()||[]).filter(l=>l.pid===p.id);
+  const expenses=(getExpenses()||[]).filter(e=>e.pid===p.id);
+
+  // Category-level budget vs actual
+  const catBudget={};
+  Object.entries(c.cs).forEach(([cid,cv])=>{
+    if(cv.t>0) catBudget[cid]={est:cv.t, estCost:cv.ct, actual:0};
+  });
+  orders.forEach(o=>{
+    if(catBudget[o.cid]) catBudget[o.cid].actual+=Number(o.amount||0);
+    else catBudget[o.cid]={est:0,estCost:0,actual:Number(o.amount||0)};
+  });
+
+  const catBudgetEntries=Object.entries(catBudget).sort((a,b)=>b[1].est-a[1].est);
+  const orderAmt=orders.reduce((a,o)=>a+Number(o.amount||0),0);
+  const laborAmt=labor.reduce((a,l)=>a+Number(l.daily_rate||0)*Number(l.days||0)+Number(l.meal_cost||0)+Number(l.transport_cost||0)+Number(l.overtime_cost||0)-Number(l.deduction||0),0);
+  const expenseAmt=expenses.filter(e=>e.status==='승인').reduce((a,e)=>a+Number(e.amount||0),0);
+
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="exportXLSX('projects')">${svgIcon('download',12)} 엑셀</button>`;
+
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <!-- Budget Summary KPIs -->
+    <div class="dash-grid" style="margin-bottom:16px">
+      <div class="kpi-card kpi-primary">
+        <div class="kpi-label">📋 견적 총액 (도급)</div>
+        <div class="kpi-value">${fmtShort(f.contractTotal)}</div>
+        <div class="kpi-sub">직접비 ${fmtShort(c.direct)} + 간접비 ${fmtShort(c.indirect)}</div>
+      </div>
+      <div class="kpi-card kpi-info">
+        <div class="kpi-label">💰 견적 원가</div>
+        <div class="kpi-value">${fmtShort(f.estCost)}</div>
+        <div class="kpi-sub">예상이익 ${fmtShort(f.estProfit)} (${f.estMargin.toFixed(1)}%)</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid var(--warning)">
+        <div class="kpi-label">🔨 실행 비용</div>
+        <div class="kpi-value" style="color:var(--warning)">${fmtShort(f.totalSpent)}</div>
+        <div class="kpi-sub">집행률 ${f.executionRate.toFixed(1)}%</div>
+      </div>
+      <div class="kpi-card" style="border-left:3px solid ${f.actualProfit>=0?'var(--success)':'var(--danger)'}">
+        <div class="kpi-label">📈 실행 이익</div>
+        <div class="kpi-value" style="color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
+        <div class="kpi-sub">실행마진 ${f.actualMargin.toFixed(1)}%</div>
+      </div>
+    </div>
+
+    <!-- Cost Type Summary -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">💳 비용 유형별 예산 vs 실적</div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>비용 유형</th><th style="text-align:right">예산 (견적원가)</th><th style="text-align:right">실행액</th><th style="text-align:right">차이</th><th>집행률</th>
+          </tr></thead>
+          <tbody>
+            ${[
+              {label:'🔨 공사비 (자재발주)', est:c.costDirect, actual:orderAmt},
+              {label:'👷 인건비 (노무)', est:0, actual:laborAmt},
+              {label:'💳 경비 (지출결의)', est:0, actual:expenseAmt},
+            ].map(ct=>{
+              const diff=ct.est-ct.actual;
+              const execPct=ct.est>0?(ct.actual/ct.est*100):ct.actual>0?100:0;
+              return `<tr>
+                <td style="font-weight:600">${ct.label}</td>
+                <td style="text-align:right">${fmt(ct.est)}</td>
+                <td style="text-align:right;font-weight:700;color:${execPct>=100?'var(--danger)':'var(--text)'}">${fmt(ct.actual)}</td>
+                <td style="text-align:right;color:${diff>=0?'var(--success)':'var(--danger)'};font-weight:600">${diff>=0?'+':''}${fmt(diff)}</td>
+                <td><div style="display:flex;align-items:center;gap:6px">
+                  <div class="prog" style="width:80px"><div class="prog-bar" style="width:${Math.min(100,execPct)}%;background:${execPct>=100?'var(--danger)':execPct>=80?'var(--warning)':'var(--success)'}"></div></div>
+                  <span style="font-size:11px;font-weight:700;color:${execPct>=100?'var(--danger)':'var(--text-muted)'}">${execPct.toFixed(0)}%</span>
+                </div></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot><tr style="font-weight:800;border-top:2px solid var(--border)">
+            <td>합계</td>
+            <td style="text-align:right">${fmt(c.costDirect)}</td>
+            <td style="text-align:right">${fmt(f.totalSpent)}</td>
+            <td style="text-align:right;color:${c.costDirect-f.totalSpent>=0?'var(--success)':'var(--danger)'}">${c.costDirect-f.totalSpent>=0?'+':''}${fmt(c.costDirect-f.totalSpent)}</td>
+            <td><span style="font-weight:700">${f.executionRate.toFixed(1)}%</span></td>
+          </tr></tfoot>
+        </table>
+      </div>
+    </div>
+
+    <!-- Category Budget vs Actual -->
+    <div class="card">
+      <div class="card-title">🏗️ 공종별 예산 vs 실적 (발주 기준)</div>
+      ${catBudgetEntries.length?`<div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr>
+            <th>공종</th><th style="text-align:right">견적 (도급)</th><th style="text-align:right">견적 원가</th><th style="text-align:right">발주 실적</th><th style="text-align:right">차이</th><th>집행률</th>
+          </tr></thead>
+          <tbody>
+            ${catBudgetEntries.map(([cid,bv])=>{
+              const diff=(bv.estCost||bv.est)-bv.actual;
+              const base=bv.estCost||bv.est;
+              const execPct=base>0?(bv.actual/base*100):bv.actual>0?100:0;
+              return `<tr>
+                <td style="font-weight:600">${catIcon(cid)} ${catNm(cid)}</td>
+                <td style="text-align:right">${fmt(bv.est)}</td>
+                <td style="text-align:right;color:var(--text-muted)">${fmt(bv.estCost)}</td>
+                <td style="text-align:right;font-weight:700">${fmt(bv.actual)}</td>
+                <td style="text-align:right;font-weight:600;color:${diff>=0?'var(--success)':'var(--danger)'}">${diff>=0?'+':''}${fmt(diff)}</td>
+                <td><div style="display:flex;align-items:center;gap:6px">
+                  <div class="prog" style="width:60px"><div class="prog-bar" style="width:${Math.min(100,execPct)}%;background:${execPct>=100?'var(--danger)':execPct>=80?'var(--warning)':'var(--success)'}"></div></div>
+                  <span style="font-size:10px;font-weight:700">${execPct.toFixed(0)}%</span>
+                </div></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`:
+      `<div class="empty-state" style="padding:30px"><div class="empty-state-icon">📋</div><div class="empty-state-title">예산 데이터가 없습니다</div></div>`}
+    </div>
+
+    <!-- Indirect Costs Breakdown -->
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">📊 간접비 내역</div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>항목</th><th style="text-align:right">비율</th><th style="text-align:right">금액</th></tr></thead>
+          <tbody>
+            <tr><td>기업이윤</td><td style="text-align:right">${p.profit||10}%</td><td style="text-align:right;font-weight:600">${fmt(c.profitAmt)}</td></tr>
+            <tr><td>안전관리비</td><td style="text-align:right">0.7%</td><td style="text-align:right;font-weight:600">${fmt(c.safetyAmt)}</td></tr>
+            <tr><td>식대비</td><td style="text-align:right">3%</td><td style="text-align:right;font-weight:600">${fmt(c.mealAmt)}</td></tr>
+            <tr style="font-weight:800;border-top:2px solid var(--border)"><td>간접비 합계</td><td></td><td style="text-align:right">${fmt(c.indirect)}</td></tr>
+            <tr style="font-weight:800"><td>반올림 조정</td><td style="text-align:right">${p.roundUnit||'십만원'}</td><td style="text-align:right;color:${c.adj>=0?'var(--success)':'var(--danger)'}">${c.adj>=0?'+':''}${fmt(c.adj)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── ERP ATTACHMENTS ──
+function renderErpAttachments(){
+  const p=getProject(S.selPid);
+  if(!p){backToBoard();return;}
+  const erp=p.erp||{};
+  const attachments=erp.attachments||[];
+  const folders=[...new Set(attachments.map(a=>a.folder||'기타'))];
+
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-primary btn-sm" onclick="addAttachmentFolder()">+ 폴더 추가</button>`;
+
+  // Group attachments by folder
+  const grouped={};
+  attachments.forEach(a=>{
+    const f=a.folder||'기타';
+    if(!grouped[f])grouped[f]=[];
+    grouped[f].push(a);
+  });
+
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="card-title" style="margin-bottom:0">📁 프로젝트 첨부파일</div>
+        <div style="font-size:12px;color:var(--text-muted)">${attachments.length}개 파일 · ${folders.length}개 폴더</div>
+      </div>
+
+      ${Object.keys(grouped).length?Object.entries(grouped).map(([folder,files])=>`
+        <div style="margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding:8px 12px;background:var(--gray-50);border-radius:var(--radius);cursor:pointer" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+            <span style="font-size:14px">📂</span>
+            <span style="font-weight:700;font-size:13px;flex:1">${escHtml(folder)}</span>
+            <span class="badge badge-gray">${files.length}</span>
+            <span style="color:var(--text-muted);font-size:10px">${svgIcon('chevron_down',12)}</span>
+          </div>
+          <div style="padding-left:12px">
+            ${files.map(file=>`
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border-light);transition:background .15s;border-radius:var(--radius-sm)" onmouseover="this.style.background='var(--gray-50)'" onmouseout="this.style.background=''">
+                <span style="font-size:16px">${getFileIcon(file.name||file.nm||'')}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(file.name||file.nm||'파일')}</div>
+                  <div style="font-size:11px;color:var(--text-muted)">
+                    ${file.amount?'금액: '+fmt(file.amount)+'원':''} 
+                    ${file.vat?'· VAT: '+fmt(file.vat)+'원':''}
+                    ${file.date||file.created_at||''}
+                  </div>
+                </div>
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="toast('다운로드 준비중','info')" title="다운로드">${svgIcon('download',13)}</button>
+                <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="removeAttachment('${p.id}','${file.id||''}')" title="삭제">${svgIcon('trash',13)}</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join(''):
+      `<div class="empty-state" style="padding:50px">
+        <div class="empty-state-icon">📁</div>
+        <div class="empty-state-title">첨부파일이 없습니다</div>
+        <div class="empty-state-desc">세금계산서, 견적서, 계약서 등을 관리할 수 있습니다</div>
+      </div>`}
+    </div>
+
+    <!-- Related Documents Summary -->
+    <div class="card">
+      <div class="card-title">📄 관련 문서 현황</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px">
+        ${[
+          {icon:'📋',label:'견적서',count:(p.items||[]).length?1:0,fn:"nav('estimate')"},
+          {icon:'📝',label:'계약서',count:p.contractStatus!=='미생성'?1:0,fn:"nav('contracts')"},
+          {icon:'🚚',label:'발주서',count:(getOrders()||[]).filter(o=>o.pid===p.id).length,fn:"nav('orders')"},
+          {icon:'💰',label:'세금계산서',count:(_d.tax||[]).filter(t=>t.pid===p.id).length,fn:"nav('tax')"},
+          {icon:'👷',label:'노무비 기록',count:(getLabor()||[]).filter(l=>l.pid===p.id).length,fn:"nav('labor')"},
+          {icon:'💳',label:'지출결의서',count:(getExpenses()||[]).filter(e=>e.pid===p.id).length,fn:"nav('expenses')"},
+        ].map(d=>`
+          <div style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--gray-50);border-radius:var(--radius);cursor:pointer;transition:background .15s" onmouseover="this.style.background='var(--primary-light)'" onmouseout="this.style.background='var(--gray-50)'" onclick="${d.fn}">
+            <span style="font-size:20px">${d.icon}</span>
+            <div>
+              <div style="font-size:12px;font-weight:600">${d.label}</div>
+              <div style="font-size:18px;font-weight:800;color:var(--primary)">${d.count}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function getFileIcon(name){
+  const ext=(name.split('.').pop()||'').toLowerCase();
+  const map={pdf:'📕',doc:'📘',docx:'📘',xls:'📗',xlsx:'📗',jpg:'🖼️',jpeg:'🖼️',png:'🖼️',gif:'🖼️',zip:'📦',rar:'📦',txt:'📄'};
+  return map[ext]||'📄';
+}
+function addAttachmentFolder(){
+  toast('첨부파일 폴더 관리 기능은 추후 업데이트 예정입니다','info');
+}
+function removeAttachment(pid,fileId){
+  toast('파일 삭제 기능은 추후 업데이트 예정입니다','info');
+}
+
+// ── ERP REPORT ──
+function renderErpReport(){
+  const p=getProject(S.selPid);
+  if(!p){backToBoard();return;}
+  const f=getFinSummary(p);
+  const c=calcP(p);
+  const prog=getProg(p);
+  const risks=getRisks(p);
+  const orders=(getOrders()||[]).filter(o=>o.pid===p.id);
+  const labor=(getLabor()||[]).filter(l=>l.pid===p.id);
+  const expenses=(getExpenses()||[]).filter(e=>e.pid===p.id);
+  const co=getCompany();
+
+  const catEntries=Object.entries(c.cs).filter(([,v])=>v.t>0).sort((a,b)=>b[1].t-a[1].t);
+  const statusEmoji={'작성중':'📝','견적완료':'📋','계약완료':'📝','시공중':'🏗️','완료':'✅','보류':'⏸️'};
+
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="printPage()">${svgIcon('print',12)} 인쇄</button>
+    <button class="btn btn-outline btn-sm" onclick="exportXLSX('projects')">${svgIcon('download',12)} 엑셀</button>`;
+
+  const todayStr=today();
+  const now=new Date();
+  const dateStr=now.getFullYear()+'년 '+(now.getMonth()+1)+'월 '+now.getDate()+'일';
+
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease" id="report-content">
+    <!-- Report Header -->
+    <div class="card" style="margin-bottom:16px;background:linear-gradient(135deg,var(--primary) 0%,var(--primary-dark,#5a4a3a) 100%);color:#fff;padding:24px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
+        <div>
+          <div style="font-size:11px;opacity:.7;margin-bottom:4px">PROJECT REPORT</div>
+          <div style="font-size:22px;font-weight:800;margin-bottom:6px">${escHtml(p.nm)}</div>
+          <div style="font-size:13px;opacity:.8">
+            ${escHtml(p.client||'')} · ${p.area||'-'}평 · ${statusEmoji[p.status]||''} ${p.status}
+          </div>
+        </div>
+        <div style="text-align:right;font-size:12px;opacity:.7">
+          <div>${co.nameKo||co.name||'Frame Plus'}</div>
+          <div>보고일: ${dateStr}</div>
+          <div>담당: ${p.mgr||'-'}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Executive Summary -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">📊 경영 요약</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+        <div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">계약 총액</div>
+          <div style="font-size:20px;font-weight:800;color:var(--primary)">${fmtShort(f.contractTotal)}</div>
+        </div>
+        <div style="text-align:center;padding:16px;background:var(--gray-50);border-radius:var(--radius)">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">실행 비용</div>
+          <div style="font-size:20px;font-weight:800;color:var(--warning)">${fmtShort(f.totalSpent)}</div>
+        </div>
+        <div style="text-align:center;padding:16px;background:${f.actualProfit>=0?'var(--success-light)':'var(--danger-light)'};border-radius:var(--radius)">
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">실행 이익</div>
+          <div style="font-size:20px;font-weight:800;color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmtShort(f.actualProfit)}</div>
+        </div>
+      </div>
+
+      <!-- Progress Bars -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span style="font-weight:600">공정 진행률</span>
+            <span style="font-weight:800;color:var(--primary)">${prog}%</span>
+          </div>
+          <div class="prog" style="height:10px"><div class="prog-bar" style="width:${prog}%;background:var(--primary)"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span style="font-weight:600">예산 집행률</span>
+            <span style="font-weight:800;color:${f.executionRate>=100?'var(--danger)':'var(--warning)'}">${f.executionRate.toFixed(1)}%</span>
+          </div>
+          <div class="prog" style="height:10px"><div class="prog-bar" style="width:${Math.min(100,f.executionRate)}%;background:${f.executionRate>=100?'var(--danger)':'var(--warning)'}"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span style="font-weight:600">수금률</span>
+            <span style="font-weight:800;color:var(--success)">${f.collectionRate.toFixed(1)}%</span>
+          </div>
+          <div class="prog" style="height:10px"><div class="prog-bar" style="width:${f.collectionRate}%;background:var(--success)"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span style="font-weight:600">실행 마진율</span>
+            <span style="font-weight:800;color:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}">${f.actualMargin.toFixed(1)}%</span>
+          </div>
+          <div class="prog" style="height:10px"><div class="prog-bar" style="width:${Math.max(0,Math.min(100,f.actualMargin*2))}%;background:${f.actualMargin>=10?'var(--success)':f.actualMargin>=0?'var(--warning)':'var(--danger)'}"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Financial Details -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">💰 재무 상세</div>
+      <div class="tbl-wrap">
+        <table class="tbl">
+          <tbody>
+            <tr><td style="font-weight:600;width:40%">계약 총액 (도급금액)</td><td style="text-align:right;font-weight:800">${fmt(f.contractTotal)}</td></tr>
+            <tr><td style="font-weight:600;color:var(--text-muted)">└ 직접비</td><td style="text-align:right">${fmt(c.direct)}</td></tr>
+            <tr><td style="font-weight:600;color:var(--text-muted)">└ 간접비 (이윤+안전+식대)</td><td style="text-align:right">${fmt(c.indirect)}</td></tr>
+            <tr style="background:var(--gray-50)"><td style="font-weight:600">견적 원가</td><td style="text-align:right;font-weight:700">${fmt(f.estCost)}</td></tr>
+            <tr style="background:var(--gray-50)"><td style="font-weight:600">견적 이익 (예상)</td><td style="text-align:right;font-weight:700;color:var(--success)">${fmt(f.estProfit)} (${f.estMargin.toFixed(1)}%)</td></tr>
+            <tr><td colspan="2" style="height:8px;background:var(--border-light)"></td></tr>
+            <tr><td style="font-weight:600">발주 비용 (공사비)</td><td style="text-align:right">${fmt(f.orderCost)}</td></tr>
+            <tr><td style="font-weight:600">인건비 (노무비)</td><td style="text-align:right">${fmt(f.laborCost)}</td></tr>
+            <tr><td style="font-weight:600">경비 (지출결의)</td><td style="text-align:right">${fmt(f.expenseCost)}</td></tr>
+            <tr style="background:var(--warning-light)"><td style="font-weight:800">실행 비용 합계</td><td style="text-align:right;font-weight:800">${fmt(f.totalSpent)}</td></tr>
+            <tr style="background:${f.actualProfit>=0?'var(--success-light)':'var(--danger-light)'}"><td style="font-weight:800">실행 이익</td><td style="text-align:right;font-weight:800;color:${f.actualProfit>=0?'var(--success)':'var(--danger)'}">${fmt(f.actualProfit)} (${f.actualMargin.toFixed(1)}%)</td></tr>
+            <tr><td colspan="2" style="height:8px;background:var(--border-light)"></td></tr>
+            <tr><td style="font-weight:600">수금 완료</td><td style="text-align:right;color:var(--success);font-weight:700">${fmt(f.collected)}</td></tr>
+            <tr><td style="font-weight:600">미수금</td><td style="text-align:right;color:${f.outstanding>0?'var(--danger)':'var(--text-muted)'};font-weight:700">${fmt(f.outstanding)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Cost by Category -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">🏗️ 공종별 견적 비용</div>
+      ${catEntries.length?`<div class="tbl-wrap">
+        <table class="tbl">
+          <thead><tr><th>공종</th><th style="text-align:right">도급금액</th><th style="text-align:right">원가</th><th>비율</th></tr></thead>
+          <tbody>
+            ${catEntries.map(([cid,cv])=>{
+              const pct=c.direct>0?(cv.t/c.direct*100):0;
+              return `<tr>
+                <td>${catIcon(cid)} ${catNm(cid)}</td>
+                <td style="text-align:right;font-weight:700">${fmt(cv.t)}</td>
+                <td style="text-align:right;color:var(--text-muted)">${fmt(cv.ct)}</td>
+                <td><div style="display:flex;align-items:center;gap:4px"><div class="prog" style="width:50px"><div class="prog-bar" style="width:${pct}%"></div></div><span style="font-size:10px">${pct.toFixed(1)}%</span></div></td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`:'<div style="text-align:center;padding:20px;color:var(--text-muted)">견적 항목 없음</div>'}
+    </div>
+
+    <!-- Risks -->
+    ${risks.length?`<div class="card" style="margin-bottom:16px">
+      <div class="card-title">⚠️ 리스크 분석 (${risks.length}건)</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${risks.map(r=>`<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:${r.lv==='high'?'var(--danger-light)':'var(--warning-light)'};border-radius:var(--radius-sm);font-size:12px">
+          <span>${r.lv==='high'?'🔴':'🟡'}</span>
+          <span>${r.msg}</span>
+        </div>`).join('')}
+      </div>
+    </div>`:''}
+
+    <!-- Footer -->
+    <div style="text-align:center;padding:20px;color:var(--text-muted);font-size:11px">
+      ${co.nameKo||'Frame Plus'} · 프로젝트 리포트 · ${dateStr} 생성
+    </div>
+  </div>`;
 }
 
 // ===== VERSION BADGE UPDATE =====
