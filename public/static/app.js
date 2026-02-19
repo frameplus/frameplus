@@ -40,18 +40,20 @@ async function initData() {
   if (_initializing) return;
   _initializing = true;
   try {
-    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs] = await Promise.all([
+    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList] = await Promise.all([
       api('projects'), api('vendors'), api('meetings'), api('pricedb'),
       api('orders'), api('as'), api('notices'), api('tax'),
       api('templates'), api('team'), api('company'),
       api('labor'), api('expenses'), api('presets'),
-      api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs')
+      api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs'),
+      api('consultations'), api('rfp')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],
       tax: tax||[], templates: templates||[], team: team||[], company: company||{},
       labor: labor||[], expenses: expenses||[], presets: presets||[],
       notifications: notifications||[], estTemplates: estTemplates||[], approvals: approvals||[],
+      consultations: consultations||[], rfpList: rfpList||[],
       userPrefs: (Array.isArray(userPrefs)?userPrefs[0]:userPrefs)||{} };
     // Apply dark mode from saved prefs
     if (_d.userPrefs?.dark_mode) applyDarkMode(true);
@@ -466,6 +468,8 @@ const NAV=[
   {id:'labor',label:'인건비·노무비',icon:'users'},
   {id:'expenses',label:'지출결의서',icon:'file'},
   {section:'영업 관리'},
+  {id:'consult',label:'상담 관리',icon:'phone'},
+  {id:'rfp',label:'RFP·제안',icon:'clipboard'},
   {id:'meetings',label:'미팅 캘린더',icon:'calendar'},
   {id:'crm',label:'고객 CRM',icon:'users'},
   {section:'데이터'},
@@ -601,6 +605,8 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'collection':renderCollection();break;
     case 'contracts':sub==='detail'?renderContractDetail():renderContracts();break;
     case 'meetings':renderMeetings();break;
+    case 'consult':renderConsult();break;
+    case 'rfp':renderRfp();break;
     case 'crm':renderCRM();break;
     case 'pricedb':renderPriceDB();break;
     case 'vendors':renderVendors();break;
@@ -5466,6 +5472,435 @@ async function submitExpenseForApproval(expenseId) {
   await api('expenses', 'POST', exp);
   toast('결재 요청이 전송되었습니다', 'success');
   renderExpenses();
+}
+
+// ===== CONSULTATION & RFP DATA ACCESSORS =====
+function getConsultations(){ return _d.consultations||[]; }
+function getRfpList(){ return _d.rfpList||[]; }
+async function saveConsultation(c){ await api('consultations','POST',c); const idx=(_d.consultations||[]).findIndex(x=>x.id===c.id); if(idx>=0)_d.consultations[idx]=c; else (_d.consultations=_d.consultations||[]).unshift(c); }
+async function deleteConsultation(id){ await api('consultations/'+id,'DELETE'); _d.consultations=(_d.consultations||[]).filter(x=>x.id!==id); renderConsult(); toast('삭제되었습니다'); }
+async function saveRfpItem(r){ await api('rfp','POST',r); const idx=(_d.rfpList||[]).findIndex(x=>x.id===r.id); if(idx>=0)_d.rfpList[idx]=r; else (_d.rfpList=_d.rfpList||[]).unshift(r); }
+async function deleteRfpItem(id){ await api('rfp/'+id,'DELETE'); _d.rfpList=(_d.rfpList||[]).filter(x=>x.id!==id); renderRfp(); toast('삭제되었습니다'); }
+
+// ===== CONSULTATION VIEW (상담 관리) =====
+const CONSULT_STATUSES=['신규','상담중','견적발송','계약완료','보류','실패'];
+const CONSULT_STATUS_COLORS={'신규':'var(--info)','상담중':'var(--primary)','견적발송':'var(--warning)','계약완료':'var(--success)','보류':'var(--gray-400)','실패':'var(--danger)'};
+const CONSULT_SOURCES=['온라인 문의','전화','소개','SNS','블로그','직접 방문','기타'];
+const PROJECT_TYPES=['사무실','카페·식당','매장·리테일','주거','병원·의원','학원·교육','기타'];
+
+function renderConsult(){
+  const cs=getConsultations();
+  const statusCounts={};
+  CONSULT_STATUSES.forEach(s=>statusCounts[s]=cs.filter(c=>c.status===s).length);
+
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="exportConsultXLSX()">${svgIcon('download',12)} 엑셀</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddConsult()">+ 신규 상담</button>`;
+
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <!-- Pipeline KPIs -->
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+      ${CONSULT_STATUSES.map(s=>{
+        const cnt=statusCounts[s]||0;
+        const active=s==='전체'?true:false;
+        return `<button class="btn btn-sm ${cnt>0?'btn-outline':'btn-ghost'}" style="border-color:${CONSULT_STATUS_COLORS[s]};color:${CONSULT_STATUS_COLORS[s]};position:relative" onclick="filterConsultByStatus('${s}')">
+          ${s} <span style="background:${CONSULT_STATUS_COLORS[s]};color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px">${cnt}</span>
+        </button>`;
+      }).join('')}
+      <button class="btn btn-sm btn-ghost" onclick="filterConsultByStatus('')" style="color:var(--text-muted)">전체 ${cs.length}</button>
+    </div>
+
+    ${filterBar({searchId:'cs-search',statuses:CONSULT_STATUSES,statusId:'cs-status',placeholder:'고객명, 연락처 검색...',showDate:true,dateId:'cs-from',dateToId:'cs-to',onFilter:'filterConsultList()'})}
+
+    <div id="consult-list">
+      ${renderConsultCards(cs)}
+    </div>
+  </div>`;
+}
+
+function renderConsultCards(cs){
+  if(!cs.length) return '<div class="empty-state" style="padding:50px"><div class="empty-state-icon">📞</div><div class="empty-state-title">상담 내역이 없습니다</div><div class="empty-state-desc">새 상담을 등록하여 영업 파이프라인을 관리하세요</div><button class="btn btn-primary btn-sm" onclick="openAddConsult()">+ 신규 상담</button></div>';
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px">
+    ${cs.map(c=>{
+      const stColor=CONSULT_STATUS_COLORS[c.status]||'var(--gray-400)';
+      const priorityIcon={'긴급':'🔴','높음':'🟠','보통':'🟡','낮음':'🟢'}[c.priority]||'🟡';
+      return `<div class="card" style="padding:14px;border-left:3px solid ${stColor};cursor:pointer;transition:var(--transition)" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='var(--shadow-md)'" onmouseout="this.style.transform='';this.style.boxShadow=''" onclick="openEditConsult('${c.id}')">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--text)">${escHtml(c.client_name||'(미입력)')}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${c.client_phone||''} ${c.client_email?'· '+c.client_email:''}</div>
+          </div>
+          <span style="background:${stColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${c.status}</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          ${c.project_type?`<span class="badge badge-blue">${c.project_type}</span>`:''}
+          ${c.area?`<span class="badge badge-gray">${c.area}평</span>`:''}
+          ${c.budget?`<span class="badge badge-green">${c.budget}</span>`:''}
+          ${c.source?`<span class="badge badge-purple">${c.source}</span>`:''}
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted)">
+          <span>${priorityIcon} ${c.date||'-'} ${c.assignee?'· '+c.assignee:''}</span>
+          <div style="display:flex;gap:4px">
+            ${c.next_date?`<span style="background:var(--warning-light);color:var(--warning);padding:1px 6px;border-radius:8px;font-size:10px">다음: ${c.next_date}</span>`:''}
+          </div>
+        </div>
+        ${c.notes?`<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(c.notes)}</div>`:''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function filterConsultByStatus(st){
+  if(document.getElementById('cs-status'))document.getElementById('cs-status').value=st;
+  filterConsultList();
+}
+function filterConsultList(){
+  const q=(document.getElementById('cs-search')?.value||'').toLowerCase();
+  const st=document.getElementById('cs-status')?.value||'';
+  const df=document.getElementById('cs-from')?.value||'';
+  const dt=document.getElementById('cs-to')?.value||'';
+  let cs=getConsultations().filter(c=>{
+    const text=!q||(c.client_name+c.client_phone+c.client_email+c.notes+c.location).toLowerCase().includes(q);
+    const status=!st||c.status===st;
+    const dateOk=(!df||c.date>=df)&&(!dt||c.date<=dt);
+    return text&&status&&dateOk;
+  });
+  document.getElementById('consult-list').innerHTML=renderConsultCards(cs);
+}
+
+function openAddConsult(){
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">📞 신규 상담 등록</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">고객명 *</label><input class="inp" id="cs_client" placeholder="홍길동"></div>
+        <div><label class="lbl">연락처</label><input class="inp" id="cs_phone" placeholder="010-0000-0000"></div>
+        <div><label class="lbl">이메일</label><input class="inp" id="cs_email" type="email"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">유입경로</label><select class="sel" id="cs_source">${CONSULT_SOURCES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+        <div><label class="lbl">프로젝트 유형</label><select class="sel" id="cs_type">${PROJECT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">면적(평)</label><input class="inp" id="cs_area" type="number" placeholder="38"></div>
+        <div><label class="lbl">예산 범위</label><input class="inp" id="cs_budget" placeholder="5천만~1억"></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">위치</label><input class="inp" id="cs_loc" placeholder="강남구 역삼동"></div>
+        <div><label class="lbl">상담일</label><input class="inp" id="cs_date" type="date" value="${today()}"></div>
+        <div><label class="lbl">담당자</label><select class="sel" id="cs_assign">${TEAM_MEMBERS.map(m=>`<option>${m}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">우선순위</label><select class="sel" id="cs_priority"><option>보통</option><option>긴급</option><option>높음</option><option>낮음</option></select></div>
+        <div><label class="lbl">상태</label><select class="sel" id="cs_status">${CONSULT_STATUSES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      </div>
+      <div style="margin-bottom:12px"><label class="lbl">상담 내용</label><textarea class="inp" id="cs_notes" rows="3" placeholder="상담 내용을 기록하세요..."></textarea></div>
+      <div class="form-row form-row-2">
+        <div><label class="lbl">다음 액션</label><input class="inp" id="cs_next" placeholder="견적서 발송, 현장미팅 등"></div>
+        <div><label class="lbl">다음 일정</label><input class="inp" id="cs_next_date" type="date"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveNewConsult()">등록</button>
+    </div>
+  </div></div>`);
+}
+async function saveNewConsult(){
+  const name=document.getElementById('cs_client')?.value?.trim();
+  if(!name){toast('고객명을 입력하세요','error');return;}
+  const c={
+    id:uid(), client_name:name, client_phone:v('cs_phone'), client_email:v('cs_email'),
+    source:v('cs_source'), project_type:v('cs_type'), area:Number(v('cs_area')||0),
+    budget:v('cs_budget'), location:v('cs_loc'), date:v('cs_date'),
+    assignee:v('cs_assign'), status:v('cs_status')||'신규', notes:v('cs_notes'),
+    next_action:v('cs_next'), next_date:v('cs_next_date'), priority:v('cs_priority')||'보통',
+    created_at:new Date().toISOString(), updated_at:new Date().toISOString()
+  };
+  await saveConsultation(c);closeModal();toast('상담이 등록되었습니다','success');renderConsult();
+}
+
+function openEditConsult(id){
+  const c=getConsultations().find(x=>x.id===id);if(!c)return;
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">📞 상담 편집 — ${escHtml(c.client_name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">고객명 *</label><input class="inp" id="ec_client" value="${escHtml(c.client_name||'')}"></div>
+        <div><label class="lbl">연락처</label><input class="inp" id="ec_phone" value="${c.client_phone||''}"></div>
+        <div><label class="lbl">이메일</label><input class="inp" id="ec_email" value="${c.client_email||''}"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">유입경로</label><select class="sel" id="ec_source">${CONSULT_SOURCES.map(s=>`<option${c.source===s?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div><label class="lbl">프로젝트 유형</label><select class="sel" id="ec_type">${PROJECT_TYPES.map(t=>`<option${c.project_type===t?' selected':''}>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">면적(평)</label><input class="inp" id="ec_area" type="number" value="${c.area||''}"></div>
+        <div><label class="lbl">예산 범위</label><input class="inp" id="ec_budget" value="${c.budget||''}"></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">위치</label><input class="inp" id="ec_loc" value="${c.location||''}"></div>
+        <div><label class="lbl">상담일</label><input class="inp" id="ec_date" type="date" value="${c.date||''}"></div>
+        <div><label class="lbl">담당자</label><select class="sel" id="ec_assign">${TEAM_MEMBERS.map(m=>`<option${c.assignee===m?' selected':''}>${m}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">우선순위</label><select class="sel" id="ec_priority"><option${c.priority==='보통'?' selected':''}>보통</option><option${c.priority==='긴급'?' selected':''}>긴급</option><option${c.priority==='높음'?' selected':''}>높음</option><option${c.priority==='낮음'?' selected':''}>낮음</option></select></div>
+        <div><label class="lbl">상태</label><select class="sel" id="ec_status">${CONSULT_STATUSES.map(s=>`<option${c.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+      </div>
+      <div style="margin-bottom:12px"><label class="lbl">상담 내용</label><textarea class="inp" id="ec_notes" rows="3">${c.notes||''}</textarea></div>
+      <div class="form-row form-row-2">
+        <div><label class="lbl">다음 액션</label><input class="inp" id="ec_next" value="${c.next_action||''}"></div>
+        <div><label class="lbl">다음 일정</label><input class="inp" id="ec_next_date" type="date" value="${c.next_date||''}"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn" style="background:var(--danger);color:#fff" onclick="deleteConsultation('${c.id}');closeModal()">삭제</button>
+      <button class="btn btn-primary" onclick="saveEditConsultItem('${c.id}')">저장</button>
+    </div>
+  </div></div>`);
+}
+async function saveEditConsultItem(id){
+  const c=getConsultations().find(x=>x.id===id);if(!c)return;
+  Object.assign(c,{
+    client_name:v('ec_client'),client_phone:v('ec_phone'),client_email:v('ec_email'),
+    source:v('ec_source'),project_type:v('ec_type'),area:Number(v('ec_area')||0),
+    budget:v('ec_budget'),location:v('ec_loc'),date:v('ec_date'),
+    assignee:v('ec_assign'),status:v('ec_status'),notes:v('ec_notes'),
+    next_action:v('ec_next'),next_date:v('ec_next_date'),priority:v('ec_priority'),
+    updated_at:new Date().toISOString()
+  });
+  await saveConsultation(c);closeModal();toast('저장되었습니다','success');renderConsult();
+}
+function exportConsultXLSX(){
+  if(typeof XLSX==='undefined'){toast('SheetJS 로딩중...','warning');return;}
+  const data=getConsultations().map(c=>({'고객명':c.client_name,'연락처':c.client_phone,'이메일':c.client_email,'유입경로':c.source,'유형':c.project_type,'면적':c.area,'예산':c.budget,'위치':c.location,'상담일':c.date,'담당자':c.assignee,'상태':c.status,'메모':c.notes}));
+  const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'상담');XLSX.writeFile(wb,'상담관리_'+today()+'.xlsx');
+}
+
+// ===== RFP VIEW (제안·입찰 관리) =====
+const RFP_STATUSES=['접수','검토중','제안서작성','제출완료','선정대기','수주','탈락','취소'];
+const RFP_STATUS_COLORS={'접수':'var(--info)','검토중':'var(--primary)','제안서작성':'var(--warning)','제출완료':'var(--purple)','선정대기':'var(--teal,#14b8a6)','수주':'var(--success)','탈락':'var(--danger)','취소':'var(--gray-400)'};
+
+function renderRfp(){
+  const rs=getRfpList();
+  const total=rs.length;
+  const active=rs.filter(r=>!['수주','탈락','취소'].includes(r.status)).length;
+  const won=rs.filter(r=>r.status==='수주');
+  const totalBudget=won.reduce((a,r)=>a+(Number(r.budget_max)||Number(r.budget_min)||0),0);
+  const avgWin=rs.length>0?(won.length/rs.filter(r=>['수주','탈락'].includes(r.status)).length*100||0):0;
+
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="exportRfpXLSX()">${svgIcon('download',12)} 엑셀</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddRfp()">+ RFP 등록</button>`;
+
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <!-- KPIs -->
+    <div class="dash-grid" style="margin-bottom:16px">
+      <div class="kpi-card kpi-primary">
+        <div class="kpi-label">${svgIcon('clipboard',12)} 전체 RFP</div>
+        <div class="kpi-value">${total}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
+        <div class="kpi-sub">${active}건 진행중</div>
+      </div>
+      <div class="kpi-card kpi-info">
+        <div class="kpi-label">${svgIcon('check',12)} 수주</div>
+        <div class="kpi-value" style="color:var(--success)">${won.length}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">건</span></div>
+        <div class="kpi-sub">수주금액 ${fmtShort(totalBudget)}</div>
+      </div>
+      <div class="kpi-card kpi-warning">
+        <div class="kpi-label">${svgIcon('chart',12)} 수주율</div>
+        <div class="kpi-value">${isFinite(avgWin)?avgWin.toFixed(0):'–'}<span style="font-size:14px;font-weight:400;color:var(--text-muted)">%</span></div>
+        <div class="kpi-sub">완료 기준</div>
+      </div>
+    </div>
+
+    ${filterBar({searchId:'rfp-search',statuses:RFP_STATUSES,statusId:'rfp-status',placeholder:'프로젝트명, 고객명 검색...',showDate:true,dateId:'rfp-from',dateToId:'rfp-to',onFilter:'filterRfpList()'})}
+
+    <div id="rfp-list">
+      ${renderRfpTable(rs)}
+    </div>
+  </div>`;
+}
+
+function renderRfpTable(rs){
+  if(!rs.length) return '<div class="empty-state" style="padding:50px"><div class="empty-state-icon">📋</div><div class="empty-state-title">RFP 내역이 없습니다</div><div class="empty-state-desc">입찰·제안 요청을 등록하여 영업 성과를 추적하세요</div><button class="btn btn-primary btn-sm" onclick="openAddRfp()">+ RFP 등록</button></div>';
+  return `<div class="tbl-wrap">
+    <table class="tbl">
+      <thead><tr>
+        <th>프로젝트명</th><th>고객사</th><th>예산 범위</th><th>면적</th><th>마감일</th><th>수주확률</th><th>담당</th><th>상태</th><th>작업</th>
+      </tr></thead>
+      <tbody>
+        ${rs.map(r=>{
+          const stColor=RFP_STATUS_COLORS[r.status]||'var(--gray-400)';
+          const daysLeft=r.deadline?diffDays(today(),r.deadline):null;
+          const urgent=daysLeft!==null&&daysLeft<=3&&daysLeft>=0&&!['수주','탈락','취소'].includes(r.status);
+          return `<tr style="${urgent?'background:var(--warning-light)':''}" onclick="openEditRfp('${r.id}')" class="cursor-pointer">
+            <td>
+              <div style="font-weight:700;font-size:13px">${escHtml(r.title||'(미입력)')}</div>
+              <div style="font-size:11px;color:var(--text-muted)">${r.project_type||''} ${r.location?'· '+r.location:''}</div>
+            </td>
+            <td>${escHtml(r.client_name||'-')}</td>
+            <td style="font-weight:600;font-size:12px">${r.budget_min||r.budget_max?fmtShort(r.budget_min||0)+' ~ '+fmtShort(r.budget_max||0):'-'}</td>
+            <td>${r.area?r.area+'평':'-'}</td>
+            <td>
+              <div style="font-size:12px">${r.deadline||'-'}</div>
+              ${daysLeft!==null&&!['수주','탈락','취소'].includes(r.status)?`<div style="font-size:10px;color:${daysLeft<=3?'var(--danger)':daysLeft<=7?'var(--warning)':'var(--text-muted)'};font-weight:600">${daysLeft<0?'마감 초과':daysLeft===0?'오늘 마감':'D-'+daysLeft}</div>`:''}
+            </td>
+            <td>
+              <div style="display:flex;align-items:center;gap:4px">
+                <div class="prog" style="width:40px"><div class="prog-bar" style="width:${r.win_probability||0}%;background:${(r.win_probability||0)>=70?'var(--success)':(r.win_probability||0)>=40?'var(--warning)':'var(--danger)'}"></div></div>
+                <span style="font-size:11px;font-weight:700">${r.win_probability||0}%</span>
+              </div>
+            </td>
+            <td style="font-size:12px">${r.assignee||'-'}</td>
+            <td><span style="background:${stColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${r.status}</span></td>
+            <td onclick="event.stopPropagation()">
+              <div style="display:flex;gap:4px">
+                <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditRfp('${r.id}')" title="편집">${svgIcon('edit',12)}</button>
+                <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteRfpItem('${r.id}')" title="삭제">${svgIcon('trash',12)}</button>
+              </div>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function filterRfpList(){
+  const q=(document.getElementById('rfp-search')?.value||'').toLowerCase();
+  const st=document.getElementById('rfp-status')?.value||'';
+  const df=document.getElementById('rfp-from')?.value||'';
+  const dt=document.getElementById('rfp-to')?.value||'';
+  let rs=getRfpList().filter(r=>{
+    const text=!q||(r.title+r.client_name+r.location+r.notes).toLowerCase().includes(q);
+    const status=!st||r.status===st;
+    const dateOk=(!df||(r.deadline||'')>=df)&&(!dt||(r.deadline||'')<=dt);
+    return text&&status&&dateOk;
+  });
+  document.getElementById('rfp-list').innerHTML=renderRfpTable(rs);
+}
+
+function openAddRfp(){
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">📋 RFP 등록</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트명 *</label><input class="inp" id="rf_title" placeholder="강남 OO빌딩 인테리어"></div>
+        <div><label class="lbl">고객사</label><input class="inp" id="rf_client" placeholder="고객사명"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">예산 하한</label><input class="inp" id="rf_bmin" type="number" placeholder="50000000"></div>
+        <div><label class="lbl">예산 상한</label><input class="inp" id="rf_bmax" type="number" placeholder="100000000"></div>
+        <div><label class="lbl">면적(평)</label><input class="inp" id="rf_area" type="number"></div>
+        <div><label class="lbl">위치</label><input class="inp" id="rf_loc"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트 유형</label><select class="sel" id="rf_type">${PROJECT_TYPES.map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">마감일</label><input class="inp" id="rf_deadline" type="date"></div>
+        <div><label class="lbl">담당자</label><select class="sel" id="rf_assign">${TEAM_MEMBERS.map(m=>`<option>${m}</option>`).join('')}</select></div>
+        <div><label class="lbl">수주확률(%)</label><input class="inp" id="rf_prob" type="number" value="30" min="0" max="100"></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">우선순위</label><select class="sel" id="rf_priority"><option>보통</option><option>긴급</option><option>높음</option><option>낮음</option></select></div>
+        <div><label class="lbl">상태</label><select class="sel" id="rf_status">${RFP_STATUSES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+      </div>
+      <div style="margin-bottom:12px"><label class="lbl">요구사항</label><textarea class="inp" id="rf_req" rows="3" placeholder="고객 요구사항, 프로젝트 범위 등"></textarea></div>
+      <div><label class="lbl">메모</label><textarea class="inp" id="rf_notes" rows="2"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveNewRfpItem()">등록</button>
+    </div>
+  </div></div>`);
+}
+async function saveNewRfpItem(){
+  const title=document.getElementById('rf_title')?.value?.trim();
+  if(!title){toast('프로젝트명을 입력하세요','error');return;}
+  const r={
+    id:uid(), title, client_name:v('rf_client'), client_contact:'',
+    budget_min:Number(v('rf_bmin')||0), budget_max:Number(v('rf_bmax')||0),
+    area:Number(v('rf_area')||0), location:v('rf_loc'), project_type:v('rf_type'),
+    deadline:v('rf_deadline'), assignee:v('rf_assign'), status:v('rf_status')||'접수',
+    requirements:v('rf_req'), notes:v('rf_notes'), priority:v('rf_priority')||'보통',
+    win_probability:Number(v('rf_prob')||30),
+    created_at:new Date().toISOString(), updated_at:new Date().toISOString()
+  };
+  await saveRfpItem(r);closeModal();toast('RFP가 등록되었습니다','success');renderRfp();
+}
+
+function openEditRfp(id){
+  const r=getRfpList().find(x=>x.id===id);if(!r)return;
+  openModal(`<div class="modal-bg"><div class="modal modal-lg">
+    <div class="modal-hdr"><span class="modal-title">📋 RFP 편집 — ${escHtml(r.title)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트명 *</label><input class="inp" id="er_title" value="${escHtml(r.title||'')}"></div>
+        <div><label class="lbl">고객사</label><input class="inp" id="er_client" value="${escHtml(r.client_name||'')}"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">예산 하한</label><input class="inp" id="er_bmin" type="number" value="${r.budget_min||''}"></div>
+        <div><label class="lbl">예산 상한</label><input class="inp" id="er_bmax" type="number" value="${r.budget_max||''}"></div>
+        <div><label class="lbl">면적(평)</label><input class="inp" id="er_area" type="number" value="${r.area||''}"></div>
+        <div><label class="lbl">위치</label><input class="inp" id="er_loc" value="${r.location||''}"></div>
+      </div>
+      <div class="form-row form-row-4" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트 유형</label><select class="sel" id="er_type">${PROJECT_TYPES.map(t=>`<option${r.project_type===t?' selected':''}>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">마감일</label><input class="inp" id="er_deadline" type="date" value="${r.deadline||''}"></div>
+        <div><label class="lbl">담당자</label><select class="sel" id="er_assign">${TEAM_MEMBERS.map(m=>`<option${r.assignee===m?' selected':''}>${m}</option>`).join('')}</select></div>
+        <div><label class="lbl">수주확률(%)</label><input class="inp" id="er_prob" type="number" value="${r.win_probability||0}" min="0" max="100"></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">우선순위</label><select class="sel" id="er_priority"><option${r.priority==='보통'?' selected':''}>보통</option><option${r.priority==='긴급'?' selected':''}>긴급</option><option${r.priority==='높음'?' selected':''}>높음</option><option${r.priority==='낮음'?' selected':''}>낮음</option></select></div>
+        <div><label class="lbl">상태</label><select class="sel" id="er_status">${RFP_STATUSES.map(s=>`<option${r.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">제출일</label><input class="inp" id="er_submitted" type="date" value="${r.submitted_date||''}"></div>
+        <div><label class="lbl">결과</label><input class="inp" id="er_result" value="${r.result||''}" placeholder="수주, 2순위 탈락 등"></div>
+      </div>
+      <div style="margin-bottom:12px"><label class="lbl">요구사항</label><textarea class="inp" id="er_req" rows="3">${r.requirements||''}</textarea></div>
+      <div><label class="lbl">메모</label><textarea class="inp" id="er_notes" rows="2">${r.notes||''}</textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn" style="background:var(--danger);color:#fff" onclick="deleteRfpItem('${r.id}');closeModal()">삭제</button>
+      ${r.status!=='수주'?`<button class="btn" style="background:var(--success);color:#fff" onclick="convertRfpToProject('${r.id}')">→ 프로젝트 전환</button>`:''}
+      <button class="btn btn-primary" onclick="saveEditRfpItem('${r.id}')">저장</button>
+    </div>
+  </div></div>`);
+}
+async function saveEditRfpItem(id){
+  const r=getRfpList().find(x=>x.id===id);if(!r)return;
+  Object.assign(r,{
+    title:v('er_title'),client_name:v('er_client'),
+    budget_min:Number(v('er_bmin')||0),budget_max:Number(v('er_bmax')||0),
+    area:Number(v('er_area')||0),location:v('er_loc'),project_type:v('er_type'),
+    deadline:v('er_deadline'),assignee:v('er_assign'),status:v('er_status'),
+    requirements:v('er_req'),notes:v('er_notes'),priority:v('er_priority'),
+    win_probability:Number(v('er_prob')||0),submitted_date:v('er_submitted'),result:v('er_result'),
+    updated_at:new Date().toISOString()
+  });
+  await saveRfpItem(r);closeModal();toast('저장되었습니다','success');renderRfp();
+}
+
+async function convertRfpToProject(rfpId){
+  const r=getRfpList().find(x=>x.id===rfpId);if(!r)return;
+  const p={
+    id:uid(), nm:r.title, client:r.client_name, contact:r.client_contact||'',
+    email:'', loc:r.location, mgr:r.assignee, date:today(), status:'작성중',
+    area:r.area, profit:10, roundUnit:'십만원', memo:'RFP 전환: '+r.notes,
+    region:'', items:[], ganttTasks:[], contractStatus:'미생성',
+    payments:[{label:'계약금',pct:30,due:'',paid:false,paidDate:''},{label:'중도금',pct:40,due:'',paid:false,paidDate:''},{label:'잔금',pct:30,due:'',paid:false,paidDate:''}],
+    createdAt:today()
+  };
+  await saveProject(p);
+  r.status='수주';r.result='프로젝트 전환완료';r.updated_at=new Date().toISOString();
+  await saveRfpItem(r);
+  closeModal();toast('프로젝트로 전환되었습니다!','success');renderRfp();
+}
+
+function exportRfpXLSX(){
+  if(typeof XLSX==='undefined'){toast('SheetJS 로딩중...','warning');return;}
+  const data=getRfpList().map(r=>({'프로젝트명':r.title,'고객사':r.client_name,'예산하한':r.budget_min,'예산상한':r.budget_max,'면적':r.area,'위치':r.location,'마감일':r.deadline,'수주확률':r.win_probability+'%','담당자':r.assignee,'상태':r.status,'결과':r.result}));
+  const ws=XLSX.utils.json_to_sheet(data);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'RFP');XLSX.writeFile(wb,'RFP관리_'+today()+'.xlsx');
 }
 
 // ===== ERP PROJECT DETAIL VIEWS (Phase 2) =====

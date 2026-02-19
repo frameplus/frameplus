@@ -41,6 +41,8 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS estimate_template_sets (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT DEFAULT '', category TEXT DEFAULT '', tags TEXT DEFAULT '[]', items TEXT DEFAULT '[]', usage_count INTEGER DEFAULT 0, last_used_at DATETIME DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS approvals (id TEXT PRIMARY KEY, type TEXT DEFAULT '', related_id TEXT DEFAULT '', title TEXT DEFAULT '', amount REAL DEFAULT 0, requester TEXT DEFAULT '', approver TEXT DEFAULT '', status TEXT DEFAULT '대기', request_date TEXT DEFAULT '', approve_date TEXT DEFAULT '', reject_reason TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS user_prefs (id TEXT PRIMARY KEY, dark_mode INTEGER DEFAULT 0, sidebar_collapsed INTEGER DEFAULT 0, default_view TEXT DEFAULT 'dash', notification_enabled INTEGER DEFAULT 1, language TEXT DEFAULT 'ko', updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS consultations (id TEXT PRIMARY KEY, client_name TEXT DEFAULT '', client_contact TEXT DEFAULT '', client_email TEXT DEFAULT '', client_phone TEXT DEFAULT '', source TEXT DEFAULT '', project_type TEXT DEFAULT '', area REAL DEFAULT 0, budget TEXT DEFAULT '', location TEXT DEFAULT '', date TEXT DEFAULT '', time TEXT DEFAULT '', assignee TEXT DEFAULT '', status TEXT DEFAULT '신규', notes TEXT DEFAULT '', next_action TEXT DEFAULT '', next_date TEXT DEFAULT '', priority TEXT DEFAULT '보통', tags TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS rfp (id TEXT PRIMARY KEY, title TEXT NOT NULL, client_name TEXT DEFAULT '', client_contact TEXT DEFAULT '', deadline TEXT DEFAULT '', budget_min REAL DEFAULT 0, budget_max REAL DEFAULT 0, area REAL DEFAULT 0, location TEXT DEFAULT '', project_type TEXT DEFAULT '', requirements TEXT DEFAULT '', status TEXT DEFAULT '접수', assignee TEXT DEFAULT '', submitted_date TEXT DEFAULT '', result TEXT DEFAULT '', notes TEXT DEFAULT '', attachments TEXT DEFAULT '[]', priority TEXT DEFAULT '보통', win_probability REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
 }
 
@@ -121,6 +123,8 @@ app.route('/api/pricedb-history', crud('pricedb_history'))
 app.route('/api/estimate-templates', crud('estimate_template_sets'))
 app.route('/api/approvals', crud('approvals'))
 app.route('/api/user-prefs', crud('user_prefs'))
+app.route('/api/consultations', crud('consultations'))
+app.route('/api/rfp', crud('rfp'))
 
 // Company (singleton)
 app.get('/api/company', async (c) => {
