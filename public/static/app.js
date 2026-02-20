@@ -3991,13 +3991,12 @@ function openAddMeeting(){
     </div>
   </div></div>`);
 }
-function saveNewMeeting(){
+async function saveNewMeeting(){
   const title=v('mt_title');if(!title){toast('제목을 입력하세요','error');return;}
-  const meetings=getMeetings();
-  meetings.push({id:uid(),title,client:v('mt_client'),date:v('mt_date'),time:v('mt_time'),
+  const m={id:uid(),title,client:v('mt_client'),date:v('mt_date'),time:v('mt_time'),
     loc:v('mt_loc'),assignee:v('mt_assignee'),status:v('mt_status')||'예정',
-    pid:v('mt_pid'),memo:v('mt_memo')});
-  saveMeetings(meetings);closeModal();toast('미팅이 추가되었습니다','success');renderMeetings();
+    pid:v('mt_pid'),memo:v('mt_memo')};
+  await saveMeeting(m);closeModal();toast('미팅이 추가되었습니다','success');renderMeetings();
 }
 function openEditMeeting(mid){
   const meetings=getMeetings();const m=meetings.find(x=>x.id===mid);if(!m)return;
@@ -4026,15 +4025,15 @@ function openEditMeeting(mid){
     </div>
   </div></div>`);
 }
-function saveEditMeeting(mid){
+async function saveEditMeeting(mid){
   const meetings=getMeetings();const i=meetings.findIndex(x=>x.id===mid);if(i<0)return;
-  meetings[i]={...meetings[i],title:v('emt_title'),client:v('emt_client'),date:v('emt_date'),
+  const updated={...meetings[i],title:v('emt_title'),client:v('emt_client'),date:v('emt_date'),
     time:v('emt_time'),loc:v('emt_loc'),assignee:v('emt_assignee'),status:v('emt_status'),pid:v('emt_pid')};
-  saveMeetings(meetings);closeModal();toast('저장되었습니다','success');renderMeetings();
+  await saveMeeting(updated);closeModal();toast('저장되었습니다','success');renderMeetings();
 }
-function deleteMeeting(mid){
+async function deleteMeeting(mid){
   if(!confirm('삭제하시겠습니까?'))return;
-  saveMeetings(getMeetings().filter(m=>m.id!==mid));toast('삭제되었습니다');renderMeetings();
+  await deleteMeetingRemote(mid);toast('삭제되었습니다');renderMeetings();
 }
 function openDayMeetings(dateStr){
   const meetings=getMeetings().filter(m=>m.date===dateStr);
@@ -4165,14 +4164,16 @@ function addMsgTemplate(){
     </div>
   </div></div>`);
 }
-function saveMsgTemplate(){
-  const ts=getMsgTemplates();
-  ts.push({id:uid(),cat:v('tpl_cat'),title:v('tpl_title'),content:v('tpl_content')});
-  saveMsgTemplates(ts);closeModal();toast('템플릿이 저장되었습니다','success');
+async function saveMsgTemplate(){
+  const t={id:uid(),cat:v('tpl_cat'),title:v('tpl_title'),content:v('tpl_content')};
+  await api('templates','POST',t);
+  (_d.templates=_d.templates||[]).push(t);
+  closeModal();toast('템플릿이 저장되었습니다','success');
 }
-function deleteMsgTemplate(tid){
+async function deleteMsgTemplate(tid){
   if(!confirm('삭제?'))return;
-  saveMsgTemplates(getMsgTemplates().filter(t=>t.id!==tid));closeModal();
+  await api('templates/'+tid,'DELETE');
+  _d.templates=(_d.templates||[]).filter(t=>t.id!==tid);closeModal();
   openMsgTemplate();
 }
 // ===== CRM =====
@@ -4547,13 +4548,12 @@ function openAddPriceItem(){
     </div>
   </div></div>`);
 }
-function savePriceItemForm(){
+async function savePriceItemForm(){
   const nm=v('pi_nm');if(!nm){toast('품명을 입력하세요','error');return;}
-  const db=getPriceDB();
-  db.push({id:uid(),cid:v('pi_cid'),nm,spec:v('pi_spec'),unit:v('pi_unit')||'m²',
+  const item={id:uid(),cid:v('pi_cid'),nm,spec:v('pi_spec'),unit:v('pi_unit')||'m²',
     mp:Number(v('pi_mp')||0),lp:Number(v('pi_lp')||0),ep:Number(v('pi_ep')||0),
-    cmp:Number(v('pi_cmp')||0),clp:Number(v('pi_clp')||0),cep:0});
-  savePriceDB(db);closeModal();toast('추가되었습니다','success');renderPriceDB();
+    cmp:Number(v('pi_cmp')||0),clp:Number(v('pi_clp')||0),cep:0};
+  await savePriceItem(item);closeModal();toast('추가되었습니다','success');renderPriceDB();
 }
 function openEditPriceItem(did){
   const db=getPriceDB();const d=db.find(x=>x.id===did);if(!d)return;
@@ -4584,16 +4584,17 @@ function openEditPriceItem(did){
     </div>
   </div></div>`);
 }
-function saveEditPriceItem(did){
+async function saveEditPriceItem(did){
   const db=getPriceDB();const i=db.findIndex(x=>x.id===did);if(i<0)return;
-  db[i]={...db[i],cid:v('epi_cid'),nm:v('epi_nm'),spec:v('epi_spec'),unit:v('epi_unit'),
+  const updated={...db[i],cid:v('epi_cid'),nm:v('epi_nm'),spec:v('epi_spec'),unit:v('epi_unit'),
     mp:Number(v('epi_mp')||0),lp:Number(v('epi_lp')||0),ep:Number(v('epi_ep')||0),
     cmp:Number(v('epi_cmp')||0),clp:Number(v('epi_clp')||0)};
-  savePriceDB(db);closeModal();toast('저장되었습니다','success');renderPriceDB();
+  await savePriceItem(updated);closeModal();toast('저장되었습니다','success');renderPriceDB();
 }
-function deletePriceItem(did){
+async function deletePriceItem(did){
   if(!confirm('삭제?'))return;
-  savePriceDB(getPriceDB().filter(d=>d.id!==did));toast('삭제됨');renderPriceDB();
+  await api('pricedb/'+did,'DELETE');
+  _d.pricedb=(_d.pricedb||[]).filter(d=>d.id!==did);toast('삭제됨');renderPriceDB();
 }
 
 // ===== VENDORS =====
@@ -4650,12 +4651,11 @@ function openAddVendor(){
     </div>
   </div></div>`);
 }
-function saveNewVendor(){
+async function saveNewVendor(){
   const nm=v('vd_nm');if(!nm){toast('업체명을 입력하세요','error');return;}
-  const vs=getVendors();
-  vs.push({id:uid(),nm,cid:v('vd_cid'),contact:v('vd_contact'),phone:v('vd_phone'),
-    email:v('vd_email'),addr:v('vd_addr'),rating:Number(v('vd_rating')||3),memo:v('vd_memo')});
-  saveVendors(vs);closeModal();toast('추가되었습니다','success');renderVendors();
+  const vd={id:uid(),nm,cid:v('vd_cid'),contact:v('vd_contact'),phone:v('vd_phone'),
+    email:v('vd_email'),addr:v('vd_addr'),rating:Number(v('vd_rating')||3),memo:v('vd_memo')};
+  await saveVendor(vd);closeModal();toast('추가되었습니다','success');renderVendors();
 }
 function openEditVendor(vid){
   const vs=getVendors();const vd=vs.find(x=>x.id===vid);if(!vd)return;
@@ -4682,14 +4682,14 @@ function openEditVendor(vid){
     </div>
   </div></div>`);
 }
-function saveEditVendor(vid){
+async function saveEditVendor(vid){
   const vs=getVendors();const i=vs.findIndex(x=>x.id===vid);if(i<0)return;
-  vs[i]={...vs[i],nm:v('evd_nm'),cid:v('evd_cid'),contact:v('evd_contact'),phone:v('evd_phone'),email:v('evd_email'),addr:v('evd_addr'),rating:Number(v('evd_rating')||3)};
-  saveVendors(vs);closeModal();toast('저장되었습니다','success');renderVendors();
+  const updated={...vs[i],nm:v('evd_nm'),cid:v('evd_cid'),contact:v('evd_contact'),phone:v('evd_phone'),email:v('evd_email'),addr:v('evd_addr'),rating:Number(v('evd_rating')||3)};
+  await saveVendor(updated);closeModal();toast('저장되었습니다','success');renderVendors();
 }
-function deleteVendor(vid){
+async function deleteVendor(vid){
   if(!confirm('삭제?'))return;
-  saveVendors(getVendors().filter(x=>x.id!==vid));toast('삭제됨');renderVendors();
+  await deleteVendorRemote(vid);toast('삭제됨');renderVendors();
 }
 
 // ===== TAX (세금계산서·매입 관리 강화) =====
@@ -4852,18 +4852,19 @@ function calcTaxAmt(){
   const supply=Number(document.getElementById('tx_supply')?.value||0);
   const taxEl=document.getElementById('tx_tax');if(taxEl)taxEl.value=Math.round(supply*0.1);
 }
-function saveTax(isPurchase){
-  const taxes=getTaxInvoices();
+async function saveTax(isPurchase){
   const tx={id:uid(),pid:v('tx_pid'),date:v('tx_date'),supplyAmt:Number(v('tx_supply')||0),
     taxAmt:Number(v('tx_tax')||0),buyerBiz:v('tx_buyerbiz'),status:v('tx_status')||'미발행',
     item:v('tx_item')||'공사',memo:v('tx_memo')||'',type:isPurchase?'매입':'매출'};
   if(isPurchase){tx.vendorNm=document.getElementById('tx_vendor')?.value||'';tx.vendorBiz=document.getElementById('tx_vendorbiz')?.value||'';}
-  taxes.push(tx);
-  saveTaxInvoices(taxes);closeModal();toast('✅ 저장되었습니다','success');renderTax();
+  await api('tax','POST',tx);
+  (_d.tax=_d.tax||[]).push(tx);
+  closeModal();toast('✅ 저장되었습니다','success');renderTax();
 }
-function deleteTax(id){
+async function deleteTax(id){
   if(!confirm('삭제?'))return;
-  saveTaxInvoices(getTaxInvoices().filter(t=>t.id!==id));renderTax();
+  await api('tax/'+id,'DELETE');
+  _d.tax=(_d.tax||[]).filter(t=>t.id!==id);renderTax();
 }
 function openTaxPreview(id){
   const t=getTaxInvoices().find(x=>x.id===id);if(!t)return;
@@ -4963,13 +4964,14 @@ function openAddAS(){
     </div>
   </div></div>`);
 }
-function saveNewAS(){
+async function saveNewAS(){
   const content=v('as_content');if(!content){toast('내용을 입력하세요','error');return;}
-  const list=getASList();
-  list.push({id:uid(),pid:v('as_pid'),date:v('as_date'),content,
+  const a={id:uid(),pid:v('as_pid'),date:v('as_date'),content,
     priority:v('as_priority')||'보통',assignee:v('as_assignee'),
-    status:v('as_status')||'접수',doneDate:''});
-  saveASList(list);closeModal();toast('AS 접수되었습니다','success');renderAS();
+    status:v('as_status')||'접수',doneDate:''};
+  await api('as','POST',a);
+  (_d.as_list=_d.as_list||[]).push(a);
+  closeModal();toast('AS 접수되었습니다','success');renderAS();
 }
 function openEditAS(aid){
   const list=getASList();const a=list.find(x=>x.id===aid);if(!a)return;
@@ -4992,12 +4994,14 @@ function openEditAS(aid){
     </div>
   </div></div>`);
 }
-function saveEditAS(aid){
+async function saveEditAS(aid){
   const list=getASList();const i=list.findIndex(x=>x.id===aid);if(i<0)return;
-  list[i]={...list[i],priority:v('eas_priority'),status:v('eas_status'),assignee:v('eas_assignee'),doneDate:v('eas_done'),content:v('eas_content')};
-  saveASList(list);closeModal();toast('저장되었습니다','success');renderAS();
+  const updated={...list[i],priority:v('eas_priority'),status:v('eas_status'),assignee:v('eas_assignee'),doneDate:v('eas_done'),content:v('eas_content')};
+  await api('as','POST',updated);
+  list[i]=updated;_d.as_list=list;
+  closeModal();toast('저장되었습니다','success');renderAS();
 }
-function deleteAS(aid){if(!confirm('삭제?'))return;saveASList(getASList().filter(a=>a.id!==aid));renderAS();}
+async function deleteAS(aid){if(!confirm('삭제?'))return;await api('as/'+aid,'DELETE');_d.as_list=(_d.as_list||[]).filter(a=>a.id!==aid);renderAS();}
 function filterAS(){renderAS();}
 
 // ===== TEAM =====
@@ -5049,11 +5053,12 @@ function openAddTeam(){
     </div>
   </div></div>`);
 }
-function saveNewTeam(){
+async function saveNewTeam(){
   const nm=v('tm_name');if(!nm){toast('이름을 입력하세요','error');return;}
-  const team=getTeam();
-  team.push({id:uid(),name:nm,role:v('tm_role'),dept:v('tm_dept'),email:v('tm_email'),phone:v('tm_phone')});
-  saveTeam(team);closeModal();toast('팀원이 추가되었습니다','success');renderTeam();
+  const m={id:uid(),name:nm,role:v('tm_role'),dept:v('tm_dept'),email:v('tm_email'),phone:v('tm_phone')};
+  await api('team','POST',m);
+  (_d.team=_d.team||[]).push(m);
+  closeModal();toast('팀원이 추가되었습니다','success');renderTeam();
 }
 function openEditTeam(tid){
   const team=getTeam();const m=team.find(x=>x.id===tid);if(!m)return;
@@ -5076,10 +5081,12 @@ function openEditTeam(tid){
     </div>
   </div></div>`);
 }
-function saveEditTeam(tid){
+async function saveEditTeam(tid){
   const team=getTeam();const i=team.findIndex(x=>x.id===tid);if(i<0)return;
-  team[i]={...team[i],name:v('etm_name'),role:v('etm_role'),dept:v('etm_dept'),email:v('etm_email'),phone:v('etm_phone')};
-  saveTeam(team);closeModal();toast('저장되었습니다','success');renderTeam();
+  const updated={...team[i],name:v('etm_name'),role:v('etm_role'),dept:v('etm_dept'),email:v('etm_email'),phone:v('etm_phone')};
+  await api('team','POST',updated);
+  team[i]=updated;_d.team=team;
+  closeModal();toast('저장되었습니다','success');renderTeam();
 }
 // ===== REPORTS =====
 function renderReports(){
@@ -5758,15 +5765,17 @@ function openAddNotice(){
     </div>
   </div></div>`);
 }
-function saveNotice(){
+async function saveNotice(){
   const title=v('nt_title');if(!title){toast('제목을 입력하세요','error');return;}
-  const ns=getNotices();
-  ns.unshift({id:uid(),title,content:v('nt_content'),pinned:document.getElementById('nt_pin')?.checked||false,date:today(),readBy:[]});
-  saveNotices(ns);closeModal();toast('✅ 공지가 추가되었습니다','success');renderAdmin();
+  const n={id:uid(),title,content:v('nt_content'),pinned:document.getElementById('nt_pin')?.checked||false,date:today(),readBy:[]};
+  await api('notices','POST',n);
+  (_d.notices=_d.notices||[]).unshift(n);
+  closeModal();toast('✅ 공지가 추가되었습니다','success');renderAdmin();
 }
-function deleteNotice(id){
+async function deleteNotice(id){
   if(!confirm('삭제?'))return;
-  saveNotices(getNotices().filter(n=>n.id!==id));renderAdmin();
+  await api('notices/'+id,'DELETE');
+  _d.notices=(_d.notices||[]).filter(n=>n.id!==id);renderAdmin();
 }
 
 // ===== UTIL =====
@@ -6876,14 +6885,6 @@ function addOrderItem(){
   o.amount=o.items.reduce((a,i)=>a+(i.amount||0),0);
   api('orders_manual/'+o.id,'PUT',{...o,items:JSON.stringify(o.items),amount:o.amount});
   renderOrderDetail();
-}
-function updateOrder(field,val){
-  const orders=getOrders();
-  const o=orders.find(x=>x.id===S.selOid);if(!o)return;
-  if(field==='date'){o.orderDate=val;o.order_date=val;}
-  else if(field==='taxInvoice'||field==='paid'){o[field]=val;}
-  else o[field]=val;
-  api('orders_manual/'+o.id,'PUT',o);
 }
 
 // ===== MONTHLY ACCORDION (unified) =====

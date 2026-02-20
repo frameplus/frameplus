@@ -30,7 +30,7 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS orders_manual (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', cid TEXT DEFAULT '', status TEXT DEFAULT '대기', order_date TEXT DEFAULT '', deliv_date TEXT DEFAULT '', vendor TEXT DEFAULT '', tax_invoice INTEGER DEFAULT 0, paid INTEGER DEFAULT 0, memo TEXT DEFAULT '', amount REAL DEFAULT 0, items TEXT DEFAULT '[]', assignee TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS as_list (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', content TEXT DEFAULT '', priority TEXT DEFAULT '보통', assignee TEXT DEFAULT '', status TEXT DEFAULT '접수', done_date TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS notices (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT DEFAULT '', pinned INTEGER DEFAULT 0, date TEXT DEFAULT '', read_by TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE IF NOT EXISTS tax_invoices (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', supply_amt REAL DEFAULT 0, tax_amt REAL DEFAULT 0, buyer_biz TEXT DEFAULT '', status TEXT DEFAULT '미발행', item TEXT DEFAULT '공사', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS tax_invoices (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', supply_amt REAL DEFAULT 0, tax_amt REAL DEFAULT 0, buyer_biz TEXT DEFAULT '', status TEXT DEFAULT '미발행', item TEXT DEFAULT '공사', type TEXT DEFAULT '매출', memo TEXT DEFAULT '', vendor_nm TEXT DEFAULT '', vendor_biz TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS msg_templates (id TEXT PRIMARY KEY, cat TEXT DEFAULT '', title TEXT NOT NULL, content TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS labor_costs (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', worker_name TEXT DEFAULT '', worker_type TEXT DEFAULT '', daily_rate REAL DEFAULT 0, days REAL DEFAULT 0, total REAL DEFAULT 0, meal_cost REAL DEFAULT 0, transport_cost REAL DEFAULT 0, overtime_cost REAL DEFAULT 0, deduction REAL DEFAULT 0, net_amount REAL DEFAULT 0, paid INTEGER DEFAULT 0, paid_date TEXT DEFAULT '', payment_method TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS expenses (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', date TEXT DEFAULT '', category TEXT DEFAULT '', title TEXT NOT NULL, amount REAL DEFAULT 0, tax_amount REAL DEFAULT 0, vendor TEXT DEFAULT '', payment_method TEXT DEFAULT '', receipt_type TEXT DEFAULT '', receipt_no TEXT DEFAULT '', receipt_image TEXT DEFAULT '', requester TEXT DEFAULT '', approver TEXT DEFAULT '', status TEXT DEFAULT '대기', approved_date TEXT DEFAULT '', reject_reason TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
@@ -48,6 +48,16 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT '', company TEXT DEFAULT '', address TEXT DEFAULT '', biz_no TEXT DEFAULT '', source TEXT DEFAULT '', grade TEXT DEFAULT 'B', tags TEXT DEFAULT '[]', memo TEXT DEFAULT '', total_amount REAL DEFAULT 0, project_count INTEGER DEFAULT 0, last_project_date TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS erp_attachments (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', folder TEXT DEFAULT '기타', file_name TEXT NOT NULL, file_type TEXT DEFAULT '', file_size INTEGER DEFAULT 0, file_data TEXT DEFAULT '', uploader TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
+  // Auto-migrate: add missing columns to existing tables
+  const alterStmts = [
+    "ALTER TABLE tax_invoices ADD COLUMN type TEXT DEFAULT '매출'",
+    "ALTER TABLE tax_invoices ADD COLUMN memo TEXT DEFAULT ''",
+    "ALTER TABLE tax_invoices ADD COLUMN vendor_nm TEXT DEFAULT ''",
+    "ALTER TABLE tax_invoices ADD COLUMN vendor_biz TEXT DEFAULT ''",
+  ]
+  for (const stmt of alterStmts) {
+    try { await db.prepare(stmt).run() } catch(e) { /* column already exists */ }
+  }
   // Seed default admin if no users
   try {
     const cnt = await db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>()
@@ -81,7 +91,10 @@ function crud<T>(tableName: string, idField = 'id') {
   router.post('/', async (c) => {
     const db = c.env.DB
     const body = await c.req.json()
-    const keys = Object.keys(body)
+    // Get actual table columns to filter out non-existent fields
+    const tableInfo = await db.prepare(`PRAGMA table_info(${tableName})`).all()
+    const validCols = new Set((tableInfo.results || []).map((r: any) => r.name))
+    const keys = Object.keys(body).filter(k => validCols.has(k))
     const placeholders = keys.map(() => '?').join(',')
     const cols = keys.join(',')
     const vals = keys.map(k => body[k])
@@ -94,7 +107,10 @@ function crud<T>(tableName: string, idField = 'id') {
     const db = c.env.DB
     const id = c.req.param('id')
     const body = await c.req.json()
-    const keys = Object.keys(body).filter(k => k !== idField)
+    // Get actual table columns to filter out non-existent fields
+    const tableInfo = await db.prepare(`PRAGMA table_info(${tableName})`).all()
+    const validCols = new Set((tableInfo.results || []).map((r: any) => r.name))
+    const keys = Object.keys(body).filter(k => k !== idField && validCols.has(k))
     if (!keys.length) return c.json({ error: 'No fields to update' }, 400)
     const sets = keys.map(k => `${k} = ?`).join(', ')
     const vals = keys.map(k => body[k])
