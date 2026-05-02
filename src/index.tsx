@@ -47,6 +47,13 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT DEFAULT 'staff', expires_at DATETIME NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, contact TEXT DEFAULT '', phone TEXT DEFAULT '', email TEXT DEFAULT '', company TEXT DEFAULT '', address TEXT DEFAULT '', biz_no TEXT DEFAULT '', source TEXT DEFAULT '', grade TEXT DEFAULT 'B', tags TEXT DEFAULT '[]', memo TEXT DEFAULT '', total_amount REAL DEFAULT 0, project_count INTEGER DEFAULT 0, last_project_date TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS erp_attachments (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', folder TEXT DEFAULT '기타', file_name TEXT NOT NULL, file_type TEXT DEFAULT '', file_size INTEGER DEFAULT 0, file_data TEXT DEFAULT '', uploader TEXT DEFAULT '', memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_projects (id TEXT PRIMARY KEY, name TEXT NOT NULL, client TEXT DEFAULT '', manager TEXT DEFAULT '', contract_date TEXT DEFAULT '', end_date TEXT DEFAULT '', settlement_date TEXT DEFAULT '', supplier_name TEXT DEFAULT '프레임플러스', supplier_reg TEXT DEFAULT '', supplier_ceo TEXT DEFAULT '', contract_amt REAL DEFAULT 0, year_month TEXT DEFAULT '', status TEXT DEFAULT 'estimate', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_labor_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', work_type TEXT DEFAULT '', job TEXT DEFAULT '', days REAL DEFAULT 1, daily_rate REAL DEFAULT 0, workers REAL DEFAULT 1, surcharge REAL DEFAULT 0, sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_material_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', category TEXT DEFAULT '', name TEXT DEFAULT '', vendor TEXT DEFAULT '', qty REAL DEFAULT 1, unit TEXT DEFAULT '식', price REAL DEFAULT 0, vat_override REAL DEFAULT -1, sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_sub_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', work_type TEXT DEFAULT '', content TEXT DEFAULT '', contractor TEXT DEFAULT '', contract_no TEXT DEFAULT '', amount REAL DEFAULT 0, vat_override REAL DEFAULT -1, sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_expense_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', category TEXT DEFAULT '', name TEXT DEFAULT '', qty REAL DEFAULT 1, unit TEXT DEFAULT '식', price REAL DEFAULT 0, vat_override REAL DEFAULT -1, sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_transport_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', origin TEXT DEFAULT '', destination TEXT DEFAULT '', item TEXT DEFAULT '', qty REAL DEFAULT 1, unit TEXT DEFAULT '회', price REAL DEFAULT 0, vat_override REAL DEFAULT -1, vehicle TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS stl_payments (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', description TEXT DEFAULT '', amount REAL DEFAULT 0, method TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
   // Auto-migrate: add missing columns to existing tables
   const alterStmts = [
@@ -154,6 +161,56 @@ app.route('/api/consultations', crud('consultations'))
 app.route('/api/rfp', crud('rfp'))
 app.route('/api/clients', crud('clients'))
 app.route('/api/erp-attachments', crud('erp_attachments'))
+// Settlement module
+app.route('/api/stl/projects', crud('stl_projects'))
+app.route('/api/stl/labor', crud('stl_labor_costs'))
+app.route('/api/stl/material', crud('stl_material_costs'))
+app.route('/api/stl/sub', crud('stl_sub_costs'))
+app.route('/api/stl/expense', crud('stl_expense_costs'))
+app.route('/api/stl/transport', crud('stl_transport_costs'))
+app.route('/api/stl/payments', crud('stl_payments'))
+
+// Settlement bulk save: delete all costs for a project, then re-insert
+app.post('/api/stl/bulk-save/:pid', async (c) => {
+  const db = c.env.DB
+  await ensureTables(db)
+  const pid = c.req.param('pid')
+  const body = await c.req.json()
+  const tables = ['stl_labor_costs','stl_material_costs','stl_sub_costs','stl_expense_costs','stl_transport_costs','stl_payments']
+  // Delete all existing costs for this project
+  for (const t of tables) {
+    await db.prepare(`DELETE FROM ${t} WHERE project_id = ?`).bind(pid).run()
+  }
+  // Insert new rows
+  const insertRows = async (table: string, rows: any[]) => {
+    for (const row of rows) {
+      const keys = Object.keys(row)
+      const placeholders = keys.map(() => '?').join(',')
+      const vals = keys.map(k => row[k])
+      await db.prepare(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`).bind(...vals).run()
+    }
+  }
+  if (body.labor?.length)     await insertRows('stl_labor_costs', body.labor)
+  if (body.material?.length)  await insertRows('stl_material_costs', body.material)
+  if (body.sub?.length)       await insertRows('stl_sub_costs', body.sub)
+  if (body.expense?.length)   await insertRows('stl_expense_costs', body.expense)
+  if (body.transport?.length) await insertRows('stl_transport_costs', body.transport)
+  if (body.payment?.length)   await insertRows('stl_payments', body.payment)
+  return c.json({ success: true })
+})
+
+// Settlement bulk delete: remove project + all costs
+app.delete('/api/stl/bulk-delete/:pid', async (c) => {
+  const db = c.env.DB
+  await ensureTables(db)
+  const pid = c.req.param('pid')
+  const tables = ['stl_labor_costs','stl_material_costs','stl_sub_costs','stl_expense_costs','stl_transport_costs','stl_payments']
+  for (const t of tables) {
+    await db.prepare(`DELETE FROM ${t} WHERE project_id = ?`).bind(pid).run()
+  }
+  await db.prepare('DELETE FROM stl_projects WHERE id = ?').bind(pid).run()
+  return c.json({ success: true })
+})
 
 // Company (singleton)
 app.get('/api/company', async (c) => {

@@ -567,6 +567,7 @@ const NAV=[
   {id:'collection',label:'수금 관리',icon:'dollar'},
   {id:'contracts',label:'계약서',icon:'book'},
   {section:'비용 관리'},
+  {id:'settlement',label:'정산관리',icon:'dollar'},
   {id:'labor',label:'인건비·노무비',icon:'users'},
   {id:'expenses',label:'지출결의서',icon:'file'},
   {section:'영업 관리'},
@@ -762,6 +763,7 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'erp_budget':renderErpBudget();break;
     case 'erp_attachments':renderErpAttachments();break;
     case 'erp_report':renderErpReport();break;
+    case 'settlement':renderSettlement();break;
     default:content.innerHTML=`<div class="card"><p>${page} 페이지</p></div>`;
   }
   // Close mobile menu on nav
@@ -8301,7 +8303,891 @@ function renderErpReport(){
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.0 Full-Stack · D1 Database · RBAC';
+  if(badge) badge.textContent = 'v8.1 Full-Stack · D1 Database · RBAC';
 })();
+
+// ================================================================
+//  FRAME PLUS ERP — 정산관리 모듈 (stl prefix)
+//  Supabase → D1 API 변환 완료
+//  DB 테이블: stl_projects, stl_labor_costs, stl_material_costs,
+//             stl_sub_costs, stl_expense_costs, stl_transport_costs, stl_payments
+// ================================================================
+
+/* ── D1 REST 헬퍼 ──────────────────────────────────── */
+async function stlApi(endpoint, method='GET', body=null) {
+  const opts = { method, headers: {'Content-Type':'application/json'} };
+  if (body !== null && method !== 'GET') opts.body = JSON.stringify(body);
+  const r = await fetch('/api/' + endpoint, opts);
+  if (!r.ok) { const txt = await r.text().catch(()=>String(r.status)); throw new Error(txt.slice(0,120)); }
+  return r.json();
+}
+
+/* ── 유틸 (stl 전용 - 기존 ERP 함수와 충돌 방지) ─── */
+const stlN  = s => parseFloat(String(s||0).replace(/,/g,''))||0;
+const stlF  = n => Math.round(n).toLocaleString('ko-KR');
+const stlEl = id => document.getElementById(id);
+const stlTx = (id,v) => { const e=stlEl(id); if(e) e.textContent=v; };
+const stlEsc= s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+
+/* ── 앱 상태 ────────────────────────────────────── */
+let _stlProjs = [];
+let _stlCurId = null;
+let _stlDirty = false;
+let _stlStatus = 'estimate';
+let _stlShowAll = false;
+let _stlYm = (()=>{ const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; })();
+
+const SD = { labor:[], material:[], sub:[], expense:[], transport:[], payment:[] };
+
+const SFS = {
+  labor:{q:'',cat:''},material:{q:'',cat:''},sub:{q:'',cat:''},
+  expense:{q:'',cat:''},transport:{q:''}
+};
+
+const SDEF = {
+  labor:{date:'',wt:'',job:'',days:1,daily:0,ppl:1,sur:0},
+  material:{date:'',cat:'',nm:'',vendor:'',qty:1,unit:'식',price:0,vat:null},
+  sub:{date:'',work:'',content:'',vendor:'',cno:'',amt:0,vat:null},
+  expense:{date:'',cat:'',nm:'',qty:1,unit:'식',price:0,vat:null},
+  transport:{date:'',from:'',to:'',item:'',qty:1,unit:'회',price:0,vehicle:'',vat:null},
+  payment:{date:'',type:'',content:'',amt:0,note:''}
+};
+
+const STL_STS = {
+  estimate:{lbl:'견적중',cls:'badge-blue'},contracted:{lbl:'계약완료',cls:'badge-orange'},
+  ongoing:{lbl:'진행중',cls:'badge-green'},settled:{lbl:'정산완료',cls:'badge-purple'},
+  completed:{lbl:'수금완료',cls:'badge-gray'}
+};
+const stlSBadge = s => { const m=STL_STS[s]||{lbl:s,cls:'badge-gray'}; return `<span class="badge ${m.cls}">${m.lbl}</span>`; };
+
+/* ── 메인 렌더러 (ERP nav()에서 호출) ─────────────── */
+function renderSettlement() {
+  const content = document.getElementById('content');
+  content.innerHTML = buildSettlementHTML();
+  stlInit();
+}
+
+function buildSettlementHTML() {
+  return `
+<div id="stl-wrap">
+<div id="stl-toast-area"></div>
+
+<!-- topbar -->
+<div class="stl-top">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span style="font-size:15px;font-weight:700">정산관리</span>
+  </div>
+  <div class="stl-bc" id="stl-bc">
+    <a onclick="stlGoList()">정산목록</a><span>›</span>
+    <span class="stl-bc-nm" id="stl-bc-nm"></span>
+  </div>
+  <div style="position:relative">
+    <button class="stl-sts-chip" id="stl-sts-chip" onclick="stlStsToggle(event)" data-s="estimate">● 견적중 ▾</button>
+    <div class="stl-sts-pop" id="stl-sts-pop">
+      <div class="stl-sts-opt" onclick="stlStsSet('estimate')"><span class="stl-sts-dot" style="background:var(--info)"></span>견적중</div>
+      <div class="stl-sts-opt" onclick="stlStsSet('contracted')"><span class="stl-sts-dot" style="background:var(--warning)"></span>계약완료</div>
+      <div class="stl-sts-opt" onclick="stlStsSet('ongoing')"><span class="stl-sts-dot" style="background:var(--success)"></span>진행중</div>
+      <div class="stl-sts-opt" onclick="stlStsSet('settled')"><span class="stl-sts-dot" style="background:var(--purple)"></span>정산완료</div>
+      <div class="stl-sts-opt" onclick="stlStsSet('completed')"><span class="stl-sts-dot" style="background:var(--gray-400)"></span>수금완료</div>
+    </div>
+  </div>
+  <div class="stl-top-right">
+    <span class="stl-sbadge idle" id="stl-badge">● D1</span>
+    <button class="btn btn-outline btn-sm" id="stl-btn-back" style="display:none" onclick="stlGoList()">← 목록</button>
+    <button class="btn btn-primary btn-sm" id="stl-btn-save" style="display:none" onclick="stlSave()">저장</button>
+    <button class="btn btn-outline btn-sm" onclick="stlOpenNew()">＋ 새 정산서</button>
+  </div>
+</div>
+
+<!-- 목록 -->
+<div id="stl-list">
+  <div class="stl-toolbar">
+    <div class="stl-ym" style="position:relative">
+      <button class="stl-ymb" onclick="stlMonth(-1)">‹</button>
+      <button class="stl-yml" id="stl-ym-btn" onclick="stlYmpToggle(event)">2026-05</button>
+      <button class="stl-ymb" onclick="stlMonth(1)">›</button>
+      <button class="stl-ymb" id="stl-btn-all" onclick="stlToggleAll()">전체</button>
+      <div class="stl-ymp" id="stl-ymp">
+        <div class="stl-ymp-yr">
+          <button class="stl-ymp-yb" onclick="stlYmpYear(-1)">‹</button>
+          <span class="stl-ymp-yrn" id="stl-ymp-yn">2026</span>
+          <button class="stl-ymp-yb" onclick="stlYmpYear(1)">›</button>
+        </div>
+        <div class="stl-ymp-grid" id="stl-ymp-grid"></div>
+      </div>
+    </div>
+    <div class="stl-srch">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input class="inp" id="stl-q" placeholder="현장명 · 발주처 검색…" oninput="stlRenderList()">
+    </div>
+    <div class="stl-stats">
+      <div class="stl-stat">현장 <strong id="stl-cnt">0</strong>건</div>
+      <div class="stl-stat">계약 <strong id="stl-tot-amt">—</strong></div>
+    </div>
+  </div>
+  <div class="stl-list-body" id="stl-list-body">
+    <div class="stl-empty"><div style="font-size:36px">🔄</div><div>불러오는 중…</div></div>
+  </div>
+</div>
+
+<!-- 편집기 -->
+<div id="stl-editor">
+  <div class="stl-shell">
+    <div class="stl-sidebar">
+      <div class="stl-sb-nav">
+        <div class="stl-sb-item on" onclick="stlTab('dashboard',this)">📊 <span>대시보드</span></div>
+        <div class="stl-sb-item" onclick="stlTab('info',this)">📋 <span>기본정보</span></div>
+        <div class="stl-sb-sep"></div>
+        <div class="stl-sb-item" onclick="stlTab('labor',this)">👷 <span>노무비</span><span class="stl-sb-cnt" id="stl-cn-labor">0</span></div>
+        <div class="stl-sb-item" onclick="stlTab('material',this)">🧱 <span>자재비</span><span class="stl-sb-cnt" id="stl-cn-material">0</span></div>
+        <div class="stl-sb-item" onclick="stlTab('sub',this)">🏗 <span>하도급비</span><span class="stl-sb-cnt" id="stl-cn-sub">0</span></div>
+        <div class="stl-sb-item" onclick="stlTab('expense',this)">🗂 <span>경비</span><span class="stl-sb-cnt" id="stl-cn-expense">0</span></div>
+        <div class="stl-sb-item" onclick="stlTab('transport',this)">🚚 <span>운송비</span><span class="stl-sb-cnt" id="stl-cn-transport">0</span></div>
+        <div class="stl-sb-sep"></div>
+        <div class="stl-sb-item" onclick="stlTab('payment',this)">💳 <span>수금내역</span><span class="stl-sb-cnt" id="stl-cn-payment">0</span></div>
+      </div>
+      <div class="stl-sb-totals">
+        <div class="stl-sb-trow"><span class="stl-sb-tlbl">실행원가</span><span class="stl-sb-tval" id="stl-sb-cost">0원</span></div>
+        <div class="stl-sb-trow"><span class="stl-sb-tlbl">수금</span><span class="stl-sb-tval" id="stl-sb-pay">0원</span></div>
+        <div class="stl-sb-trow"><span class="stl-sb-tlbl">순이익</span><span class="stl-sb-tval" id="stl-sb-profit" style="color:var(--success)">0원</span></div>
+      </div>
+    </div>
+    <div class="stl-content" id="stl-content">
+      <!-- 대시보드 -->
+      <div class="stl-view on" id="stl-view-dashboard">
+        <div class="stl-kpi-grid" id="stl-kpi"></div>
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px">비용 구성 분석</div>
+        <div class="stl-agg-grid" id="stl-agg"></div>
+        <div class="stl-sum-bar" id="stl-sum"></div>
+      </div>
+      <!-- 기본정보 -->
+      <div class="stl-view" id="stl-view-info">
+        <div class="card">
+          <div style="font-size:14px;font-weight:700;margin-bottom:14px">📋 프로젝트 정보</div>
+          <div class="stl-fgrid">
+            <div class="stl-fg stl-full"><label class="lbl">프로젝트명</label><input class="inp" id="stl-pNm" placeholder="○○빌딩 12층 사무실 인테리어" oninput="stlDirty()"></div>
+            <div class="stl-fg"><label class="lbl">발주처</label><input class="inp" id="stl-pCl" oninput="stlDirty()"></div>
+            <div class="stl-fg"><label class="lbl">담당자</label><input class="inp" id="stl-pMg" oninput="stlDirty()"></div>
+            <div class="stl-fg"><label class="lbl">계약일자</label><input class="inp" id="stl-pCd" type="date" oninput="stlDirty()"></div>
+            <div class="stl-fg"></div>
+            <div class="stl-fg stl-full">
+              <label class="lbl">공사기간 (시작일 → 종료일)</label>
+              <input type="hidden" id="stl-pPd">
+              <div class="stl-drp" id="stl-drp">
+                <button type="button" class="stl-drp-btn" id="stl-drp-btn" onclick="stlDrpToggle()">
+                  <span style="font-size:14px;opacity:.7">📅</span>
+                  <span class="stl-drp-lbl placeholder" id="stl-drp-lbl">날짜 선택</span>
+                  <span style="font-size:11px;color:var(--text-muted);margin-left:auto">▾</span>
+                </button>
+                <div class="stl-drp-pop" id="stl-drp-pop">
+                  <div class="stl-drp-nav">
+                    <button class="stl-drp-nb" onclick="stlDrpNav(-1)">‹</button>
+                    <span class="stl-drp-title" id="stl-drp-title"></span>
+                    <button class="stl-drp-nb" onclick="stlDrpNav(1)">›</button>
+                  </div>
+                  <div class="stl-drp-wd">
+                    <div class="stl-drp-wdn">일</div><div class="stl-drp-wdn">월</div>
+                    <div class="stl-drp-wdn">화</div><div class="stl-drp-wdn">수</div>
+                    <div class="stl-drp-wdn">목</div><div class="stl-drp-wdn">금</div>
+                    <div class="stl-drp-wdn">토</div>
+                  </div>
+                  <div class="stl-drp-grid" id="stl-drp-grid"></div>
+                  <div class="stl-drp-status">
+                    <div class="stl-drp-st"><span>시작일</span><strong id="stl-drp-s-lbl">—</strong></div>
+                    <span style="font-size:14px;color:var(--text-muted)">→</span>
+                    <div class="stl-drp-st"><span>종료일</span><strong id="stl-drp-e-lbl">—</strong></div>
+                    <button class="stl-drp-reset" onclick="stlDrpReset()">초기화</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="stl-fg"><label class="lbl">정산일자</label><input class="inp" id="stl-pSd" type="date" oninput="stlDirty()"></div>
+            <div class="stl-fg stl-full"><div style="height:1px;background:var(--border-light);margin:4px 0"></div></div>
+            <div class="stl-fg"><label class="lbl">공급자 상호</label><input class="inp" id="stl-pSn" placeholder="프레임플러스" oninput="stlDirty()"></div>
+            <div class="stl-fg"><label class="lbl">사업자번호</label><input class="inp" id="stl-pSr" oninput="stlDirty()"></div>
+            <div class="stl-fg"><label class="lbl">대표자명</label><input class="inp" id="stl-pSc" oninput="stlDirty()"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div style="font-size:14px;font-weight:700;margin-bottom:14px">💰 계약금액</div>
+          <div class="stl-ca-bar">
+            <div class="stl-ca-item"><div class="stl-ca-lbl">계약 공급가액</div>
+              <input class="inp inp-r" id="stl-cAmt" value="0" style="font-size:15px;font-weight:700;border:1.5px solid var(--border);max-width:180px" oninput="stlRecalc()">
+            </div>
+            <div class="stl-ca-sep"></div>
+            <div class="stl-ca-item"><div class="stl-ca-lbl">부가세 (10%)</div><div class="stl-ca-val" id="stl-cVat" style="color:var(--warning)">0원</div></div>
+            <div class="stl-ca-sep"></div>
+            <div class="stl-ca-item"><div class="stl-ca-lbl">계약 총액</div><div class="stl-ca-val" id="stl-cTot" style="color:var(--primary);font-size:20px">0원</div></div>
+          </div>
+        </div>
+      </div>
+      <!-- 노무비 -->
+      <div class="stl-view" id="stl-view-labor">
+        <div class="stl-th"><span class="stl-th-title">👷 노무비 명세</span><span class="stl-th-badge" id="stl-bg-labor">0원</span><span class="badge badge-green" style="font-size:11px">VAT 면세</span></div>
+        <div class="stl-fbar">
+          <div class="stl-srch" style="max-width:220px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input class="inp" placeholder="공종 · 직종 검색…" oninput="stlFilter('labor',this.value)"></div>
+          <select class="sel" id="stl-cat-labor" onchange="stlFilterCat('labor',this.value)" style="font-size:12.5px;width:auto"><option value="">전체 공종</option></select>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th class="c" style="width:28px">NO</th><th style="min-width:88px">날짜</th><th style="min-width:66px">공종</th><th style="min-width:140px">직종 · 작업내용</th>
+          <th class="r" style="min-width:44px">일수</th><th class="r" style="min-width:88px">단가 (원/일)</th><th class="r" style="min-width:44px">인원</th>
+          <th class="r" style="min-width:90px">기본노무비</th><th class="r" style="min-width:44px">할증%</th><th class="r" style="min-width:80px">할증액</th>
+          <th class="r" style="min-width:96px">합 계</th><th style="width:28px"></th>
+        </tr></thead><tbody id="stl-bd-labor"></tbody>
+        <tfoot><tr><td colspan="10" style="color:var(--text-muted);font-size:11.5px">합계 (면세)</td><td class="r" id="stl-ft-labor" style="font-family:var(--font-mono)">0</td><td></td></tr></tfoot>
+        </table><button class="stl-add-row" onclick="stlAdd('labor')">＋ 행 추가</button></div>
+      </div>
+      <!-- 자재비 -->
+      <div class="stl-view" id="stl-view-material">
+        <div class="stl-th"><span class="stl-th-title">🧱 자재비 명세</span><span class="stl-th-badge" id="stl-bg-material">0원</span></div>
+        <div class="stl-fbar">
+          <div class="stl-srch" style="max-width:220px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input class="inp" placeholder="분류 · 품명 검색…" oninput="stlFilter('material',this.value)"></div>
+          <select class="sel" id="stl-cat-material" onchange="stlFilterCat('material',this.value)" style="font-size:12.5px;width:auto"><option value="">전체 분류</option></select>
+          <span class="stl-hint">VAT 셀 직접 수정 가능 (기본 10%)</span>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th class="c" style="width:28px">NO</th><th style="min-width:88px">날짜</th><th style="min-width:66px">분류</th><th style="min-width:130px">품명 · 규격</th>
+          <th style="min-width:88px">업체명</th><th class="r" style="min-width:44px">수량</th><th class="c" style="min-width:40px">단위</th>
+          <th class="r" style="min-width:84px">단가</th><th class="r" style="min-width:94px">공급가액</th>
+          <th class="r" style="min-width:84px;color:var(--warning)">VAT ✎</th><th class="r" style="min-width:96px">합 계</th><th style="width:28px"></th>
+        </tr></thead><tbody id="stl-bd-material"></tbody>
+        <tfoot><tr><td colspan="8" style="color:var(--text-muted);font-size:11.5px">공급가액 합계</td>
+          <td class="r" id="stl-ft-ms">0</td><td class="r" id="stl-ft-mv" style="color:var(--warning)">0</td><td class="r" id="stl-ft-mt">0</td><td></td>
+        </tr></tfoot></table><button class="stl-add-row" onclick="stlAdd('material')">＋ 행 추가</button></div>
+      </div>
+      <!-- 하도급 -->
+      <div class="stl-view" id="stl-view-sub">
+        <div class="stl-th"><span class="stl-th-title">🏗 하도급비 명세</span><span class="stl-th-badge" id="stl-bg-sub">0원</span></div>
+        <div class="stl-fbar">
+          <div class="stl-srch" style="max-width:220px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input class="inp" placeholder="공종 · 업체 검색…" oninput="stlFilter('sub',this.value)"></div>
+          <select class="sel" id="stl-cat-sub" onchange="stlFilterCat('sub',this.value)" style="font-size:12.5px;width:auto"><option value="">전체 공종</option></select>
+          <span class="stl-hint">VAT 셀 직접 수정 가능</span>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th class="c" style="width:28px">NO</th><th style="min-width:88px">날짜</th><th style="min-width:66px">공종</th><th style="min-width:130px">작업내용</th>
+          <th style="min-width:108px">하도급업체</th><th style="min-width:90px">계약번호</th><th class="r" style="min-width:100px">공급가액</th>
+          <th class="r" style="min-width:84px;color:var(--warning)">VAT ✎</th><th class="r" style="min-width:96px">합 계</th><th style="width:28px"></th>
+        </tr></thead><tbody id="stl-bd-sub"></tbody>
+        <tfoot><tr><td colspan="6" style="color:var(--text-muted);font-size:11.5px">공급가액 합계</td>
+          <td class="r" id="stl-ft-ss">0</td><td class="r" id="stl-ft-sv" style="color:var(--warning)">0</td><td class="r" id="stl-ft-st">0</td><td></td>
+        </tr></tfoot></table><button class="stl-add-row" onclick="stlAdd('sub')">＋ 행 추가</button></div>
+      </div>
+      <!-- 경비 -->
+      <div class="stl-view" id="stl-view-expense">
+        <div class="stl-th"><span class="stl-th-title">🗂 경비 명세</span><span class="stl-th-badge" id="stl-bg-expense">0원</span></div>
+        <div class="stl-fbar">
+          <div class="stl-srch" style="max-width:220px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input class="inp" placeholder="분류 · 항목 검색…" oninput="stlFilter('expense',this.value)"></div>
+          <select class="sel" id="stl-cat-expense" onchange="stlFilterCat('expense',this.value)" style="font-size:12.5px;width:auto"><option value="">전체 분류</option></select>
+          <span class="stl-hint">VAT 셀 직접 수정 가능</span>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th class="c" style="width:28px">NO</th><th style="min-width:88px">날짜</th><th style="min-width:66px">분류</th><th style="min-width:130px">항목명</th>
+          <th class="r" style="min-width:44px">수량</th><th class="c" style="min-width:40px">단위</th><th class="r" style="min-width:84px">단가</th>
+          <th class="r" style="min-width:94px">공급가액</th><th class="r" style="min-width:84px;color:var(--warning)">VAT ✎</th><th class="r" style="min-width:96px">합 계</th><th style="width:28px"></th>
+        </tr></thead><tbody id="stl-bd-expense"></tbody>
+        <tfoot><tr><td colspan="7" style="color:var(--text-muted);font-size:11.5px">공급가액 합계</td>
+          <td class="r" id="stl-ft-es">0</td><td class="r" id="stl-ft-ev" style="color:var(--warning)">0</td><td class="r" id="stl-ft-et">0</td><td></td>
+        </tr></tfoot></table><button class="stl-add-row" onclick="stlAdd('expense')">＋ 행 추가</button></div>
+      </div>
+      <!-- 운송비 -->
+      <div class="stl-view" id="stl-view-transport">
+        <div class="stl-th"><span class="stl-th-title">🚚 운송비 명세</span><span class="stl-th-badge" id="stl-bg-transport">0원</span></div>
+        <div class="stl-fbar">
+          <div class="stl-srch" style="max-width:220px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><input class="inp" placeholder="품목 · 업체 검색…" oninput="stlFilter('transport',this.value)"></div>
+          <span class="stl-hint">VAT 셀 직접 수정 가능</span>
+        </div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th class="c" style="width:28px">NO</th><th style="min-width:80px">일자</th><th style="min-width:70px">출발지</th><th style="min-width:70px">도착지</th>
+          <th style="min-width:120px">품목 · 내용</th><th class="r" style="min-width:44px">수량</th><th class="c" style="min-width:40px">단위</th>
+          <th class="r" style="min-width:84px">단가</th><th class="r" style="min-width:94px">공급가액</th>
+          <th class="r" style="min-width:84px;color:var(--warning)">VAT ✎</th><th class="r" style="min-width:96px">합 계</th>
+          <th style="min-width:72px">차량 · 업체</th><th style="width:28px"></th>
+        </tr></thead><tbody id="stl-bd-transport"></tbody>
+        <tfoot><tr><td colspan="8" style="color:var(--text-muted);font-size:11.5px">공급가액 합계</td>
+          <td class="r" id="stl-ft-ts">0</td><td class="r" id="stl-ft-tv" style="color:var(--warning)">0</td><td class="r" id="stl-ft-tt">0</td><td></td><td></td>
+        </tr></tfoot></table><button class="stl-add-row" onclick="stlAdd('transport')">＋ 행 추가</button></div>
+      </div>
+      <!-- 수금 -->
+      <div class="stl-view" id="stl-view-payment">
+        <div class="stl-th"><span class="stl-th-title">💳 수금 내역</span><span class="stl-th-badge" id="stl-bg-payment">0원</span></div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr>
+          <th class="c" style="width:28px">NO</th><th style="min-width:88px">입금일자</th><th style="min-width:74px">구분</th>
+          <th style="min-width:160px">입금 내용</th><th class="r" style="min-width:120px">입금금액</th><th style="min-width:108px">비고</th><th style="width:28px"></th>
+        </tr></thead><tbody id="stl-bd-payment"></tbody>
+        <tfoot><tr><td colspan="4" style="color:var(--text-muted);font-size:11.5px">수금 합계</td>
+          <td class="r" id="stl-ft-pay">0</td><td><span id="stl-pay-smry" style="font-size:11px;color:var(--text-muted)"></span></td><td></td>
+        </tr></tfoot></table><button class="stl-add-row" onclick="stlAdd('payment')">＋ 행 추가</button></div>
+      </div>
+    </div>
+  </div>
+  <!-- FAB -->
+  <div class="stl-fab-overlay" id="stl-fab-overlay" onclick="stlFabClose()"></div>
+  <div class="stl-fab-wrap" id="stl-fab-wrap">
+    <div class="stl-fab-menu" id="stl-fab-menu">
+      <div class="stl-fab-item" onclick="stlFabGo('dashboard')"><span class="stl-fab-lbl">대시보드</span><div class="stl-fab-icon">📊</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('info')"><span class="stl-fab-lbl">기본정보</span><div class="stl-fab-icon">📋</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('labor')"><span class="stl-fab-lbl">노무비</span><div class="stl-fab-icon">👷</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('material')"><span class="stl-fab-lbl">자재비</span><div class="stl-fab-icon">🧱</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('sub')"><span class="stl-fab-lbl">하도급비</span><div class="stl-fab-icon">🏗</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('expense')"><span class="stl-fab-lbl">경비</span><div class="stl-fab-icon">🗂</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('transport')"><span class="stl-fab-lbl">운송비</span><div class="stl-fab-icon">🚚</div></div>
+      <div class="stl-fab-item" onclick="stlFabGo('payment')"><span class="stl-fab-lbl">수금내역</span><div class="stl-fab-icon">💳</div></div>
+    </div>
+    <button class="stl-fab" id="stl-fab" onclick="stlFabToggle()">☰</button>
+  </div>
+</div>
+</div>
+
+<!-- 새 정산서 모달 -->
+<div class="modal-bg" id="stl-modal-new">
+  <div class="modal">
+    <div class="modal-hdr"><span class="modal-title">새 정산서</span><button class="modal-close" onclick="stlCloseModal('stl-modal-new')">✕</button></div>
+    <div class="modal-body">
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="stl-fg"><label class="lbl">프로젝트명 *</label><input class="inp" id="stl-new-nm" placeholder="강남구 ○○빌딩 12층 인테리어"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div class="stl-fg"><label class="lbl">발주처</label><input class="inp" id="stl-new-cl"></div>
+          <div class="stl-fg"><label class="lbl">담당자</label><input class="inp" id="stl-new-mg"></div>
+          <div class="stl-fg"><label class="lbl">계약일자</label><input class="inp" id="stl-new-cd" type="date"></div>
+          <div class="stl-fg"><label class="lbl">계약 공급가액</label><input class="inp inp-r" id="stl-new-amt" value="0"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="stlCloseModal('stl-modal-new')">취소</button>
+      <button class="btn btn-primary" onclick="stlCreate()">만들기</button>
+    </div>
+  </div>
+</div>`;
+}
+
+/* ── 초기화 ─────────────────────────────────────── */
+async function stlInit() {
+  stlYmBtnUpdate();
+  await stlLoadList();
+}
+
+/* ── 목록 로드 (D1 API) ─────────────────────────── */
+async function stlLoadList() {
+  stlSetBadge('saving','● 연결중…');
+  try {
+    const rows = await stlApi('stl/projects');
+    _stlProjs = rows || [];
+    stlRenderList();
+    stlSetBadge('ok','● D1 연결됨');
+  } catch(e) {
+    console.error('stlLoadList:', e);
+    stlSetBadge('err','✕ ' + e.message.slice(0,40));
+    _stlProjs = [];
+    stlRenderList();
+  }
+}
+
+/* ── 목록 렌더 ──────────────────────────────────── */
+function stlRenderList() {
+  const q = (stlEl('stl-q')?.value||'').toLowerCase();
+  let items = _stlProjs;
+  if (q) items = items.filter(p=>((p.name||'')+(p.client||'')).toLowerCase().includes(q));
+  if (!_stlShowAll) items = items.filter(p=>p.year_month===_stlYm);
+
+  stlTx('stl-cnt', items.length);
+  const tot = items.reduce((s,p)=>s+(p.contract_amt||0),0);
+  stlTx('stl-tot-amt', tot>0 ? stlF(tot)+'원' : '—');
+
+  const body = stlEl('stl-list-body');
+  if (!items.length) {
+    body.innerHTML=`<div class="stl-empty"><div style="font-size:36px">📄</div>
+      <div style="font-size:13.5px;font-weight:500">${_stlShowAll?'정산서가 없습니다':_stlYm+' 정산서가 없습니다'}</div>
+      <button class="btn btn-primary btn-sm" onclick="stlOpenNew()" style="margin-top:8px">＋ 새 정산서</button></div>`;
+    return;
+  }
+  body.innerHTML = items.map(p=>{
+    const amt=p.contract_amt||0, vat=Math.round(amt*.1);
+    const nm=stlEsc(p.name||'—'), cl=stlEsc(p.client||'');
+    return `<div class="stl-pcard" onclick="stlOpen('${p.id}')">
+      <div class="stl-pcard-nm"><span>${nm}</span>${stlSBadge(p.status)}</div>
+      <div class="stl-pcard-meta">
+        ${cl?`<span>🏢 ${cl}</span>`:''}${p.manager?`<span>👤 ${p.manager}</span>`:''}${p.contract_date?`<span>📅 ${p.contract_date}</span>`:''}
+      </div>
+      <div class="stl-pcard-row">
+        <div class="stl-pcard-amt"><div class="stl-pcard-albl">공급가액</div><div class="stl-pcard-aval" style="color:var(--primary)">${amt>0?stlF(amt)+'원':'—'}</div></div>
+        <div class="stl-pcard-amt"><div class="stl-pcard-albl">부가세</div><div class="stl-pcard-aval" style="color:var(--warning)">${amt>0?stlF(vat)+'원':'—'}</div></div>
+        <div class="stl-pcard-amt"><div class="stl-pcard-albl">계약총액</div><div class="stl-pcard-aval">${amt>0?stlF(amt+vat)+'원':'—'}</div></div>
+      </div>
+      <div class="stl-pcard-actions">
+        <button class="btn btn-ghost btn-xs" style="color:var(--danger)" onclick="event.stopPropagation();stlDelProj('${p.id}','${nm.replace(/'/g,'')}')">삭제</button>
+        <button class="btn btn-primary btn-xs" onclick="event.stopPropagation();stlOpen('${p.id}')">열기 →</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ── 월 이동 / 월 피커 ─────────────────────────── */
+function stlYmBtnUpdate() { const btn=stlEl('stl-ym-btn'); if(btn) btn.textContent=_stlYm; }
+function stlMonth(dir) {
+  _stlShowAll=false; stlEl('stl-btn-all')?.classList.remove('on');
+  const [y,m]=_stlYm.split('-').map(Number), d=new Date(y,m-1+dir,1);
+  _stlYm=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  stlYmBtnUpdate(); stlRenderList();
+}
+function stlToggleAll() {
+  _stlShowAll=!_stlShowAll; stlEl('stl-btn-all')?.classList.toggle('on',_stlShowAll); stlRenderList();
+}
+
+let _stlYmpY = new Date().getFullYear();
+function stlYmpToggle(e) {
+  e.stopPropagation();
+  const pop=stlEl('stl-ymp'), btn=stlEl('stl-ym-btn');
+  const isOpen=pop?.classList.contains('open');
+  stlYmpClose();
+  if(!isOpen&&pop&&btn) {
+    _stlYmpY=parseInt(_stlYm.split('-')[0]);
+    stlYmpRender();
+    const rect=btn.getBoundingClientRect();
+    pop.style.left=rect.left+'px'; pop.style.top=(rect.bottom+6)+'px';
+    pop.classList.add('open'); btn.classList.add('open');
+  }
+}
+function stlYmpClose() { stlEl('stl-ymp')?.classList.remove('open'); stlEl('stl-ym-btn')?.classList.remove('open'); }
+function stlYmpYear(dir) { _stlYmpY+=dir; stlYmpRender(); }
+function stlYmpRender() {
+  stlTx('stl-ymp-yn', _stlYmpY+'년');
+  const curY=parseInt(_stlYm.split('-')[0]), curM=parseInt(_stlYm.split('-')[1]);
+  const MONS=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  const g=stlEl('stl-ymp-grid'); if(g) g.innerHTML=MONS.map((mn,i)=>{
+    const isCur=_stlYmpY===curY&&(i+1)===curM;
+    return `<div class="stl-ymp-m${isCur?' cur':''}" onclick="stlYmpPick(${i+1})">${mn}</div>`;
+  }).join('');
+}
+function stlYmpPick(m) {
+  _stlShowAll=false; stlEl('stl-btn-all')?.classList.remove('on');
+  _stlYm=`${_stlYmpY}-${String(m).padStart(2,'0')}`;
+  stlYmBtnUpdate(); stlYmpClose(); stlRenderList();
+}
+
+/* ── 날짜범위 피커 ────────────────────────────────── */
+let _stlDrpY=new Date().getFullYear(), _stlDrpM=new Date().getMonth(), _stlDrpS='', _stlDrpE='';
+
+function stlDrpToggle() {
+  const pop=stlEl('stl-drp-pop'), btn=stlEl('stl-drp-btn');
+  if(!pop||!btn) return;
+  const isOpen=pop.classList.contains('open');
+  if(isOpen){ pop.classList.remove('open'); btn.classList.remove('open'); return; }
+  if(_stlDrpS){ const d=new Date(_stlDrpS); _stlDrpY=d.getFullYear(); _stlDrpM=d.getMonth(); }
+  stlDrpRender();
+  const rect=btn.getBoundingClientRect();
+  pop.style.left=Math.min(rect.left,window.innerWidth-280)+'px';
+  pop.style.top=(rect.bottom+6)+'px';
+  pop.classList.add('open'); btn.classList.add('open');
+}
+function stlDrpClose() { stlEl('stl-drp-pop')?.classList.remove('open'); stlEl('stl-drp-btn')?.classList.remove('open'); }
+function stlDrpNav(dir) { _stlDrpM+=dir; if(_stlDrpM>11){_stlDrpM=0;_stlDrpY++;} if(_stlDrpM<0){_stlDrpM=11;_stlDrpY--;} stlDrpRender(); }
+function stlDrpRender() {
+  const MN=['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'];
+  stlTx('stl-drp-title',`${_stlDrpY}년 ${MN[_stlDrpM]}`);
+  const first=new Date(_stlDrpY,_stlDrpM,1).getDay(), last=new Date(_stlDrpY,_stlDrpM+1,0).getDate();
+  let html='';
+  for(let i=0;i<first;i++) html+='<div class="stl-drp-day empty"></div>';
+  for(let d=1;d<=last;d++){
+    const ds=`${_stlDrpY}-${String(_stlDrpM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const dow=new Date(_stlDrpY,_stlDrpM,d).getDay();
+    let cls='stl-drp-day'; if(dow===0) cls+=' sun'; if(dow===6) cls+=' sat';
+    if(ds===_stlDrpS) cls+=' start'; else if(ds===_stlDrpE) cls+=' end';
+    else if(_stlDrpS&&_stlDrpE&&ds>_stlDrpS&&ds<_stlDrpE) cls+=' inrange';
+    html+=`<div class="${cls}" onclick="stlDrpPick('${ds}')">${d}</div>`;
+  }
+  const g=stlEl('stl-drp-grid'); if(g) g.innerHTML=html;
+  const fmt=s=>s?s.replace(/-/g,'.'):'—';
+  stlTx('stl-drp-s-lbl',fmt(_stlDrpS)); stlTx('stl-drp-e-lbl',fmt(_stlDrpE));
+}
+function stlDrpPick(ds) {
+  if(!_stlDrpS||(_stlDrpS&&_stlDrpE)){ _stlDrpS=ds; _stlDrpE=''; }
+  else { if(ds<_stlDrpS){_stlDrpE=_stlDrpS;_stlDrpS=ds;} else if(ds===_stlDrpS){_stlDrpS='';_stlDrpE='';} else {_stlDrpE=ds;}
+    if(_stlDrpS&&_stlDrpE){ stlDrpCommit(); setTimeout(stlDrpClose,200); }
+  }
+  stlDrpRender();
+}
+function stlDrpCommit() {
+  const val=(_stlDrpS&&_stlDrpE)?`${_stlDrpS}~${_stlDrpE}`:(_stlDrpS||'');
+  const h=stlEl('stl-pPd'); if(h) h.value=val;
+  const lbl=stlEl('stl-drp-lbl');
+  if(lbl){ if(_stlDrpS&&_stlDrpE){lbl.textContent=`${_stlDrpS.replace(/-/g,'.')} ~ ${_stlDrpE.replace(/-/g,'.')}`;lbl.classList.remove('placeholder');}
+    else if(_stlDrpS){lbl.textContent=`${_stlDrpS.replace(/-/g,'.')} ~`;lbl.classList.remove('placeholder');}
+    else {lbl.textContent='날짜 선택';lbl.classList.add('placeholder');}
+  }
+  stlDirty();
+}
+function stlDrpReset() { _stlDrpS=''; _stlDrpE=''; stlDrpRender(); stlDrpCommit(); }
+function stlDrpSetRange(s,e) { _stlDrpS=s||''; _stlDrpE=e||''; stlDrpCommit(); }
+
+/* ── 새 정산서 ──────────────────────────────────── */
+function stlOpenNew() { stlEl('stl-modal-new')?.classList.add('open'); setTimeout(()=>stlEl('stl-new-nm')?.focus(),50); }
+
+async function stlCreate() {
+  const nm=stlEl('stl-new-nm')?.value.trim();
+  if(!nm){ stlToast('프로젝트명을 입력해주세요','error'); stlEl('stl-new-nm')?.focus(); return; }
+  const cd=stlEl('stl-new-cd')?.value||'';
+  const ym=cd?cd.slice(0,7):_stlYm;
+  const body={
+    id:crypto.randomUUID(), name:nm, client:stlEl('stl-new-cl')?.value.trim()||'',
+    manager:stlEl('stl-new-mg')?.value.trim()||'', contract_date:cd,
+    year_month:ym, contract_amt:stlN(stlEl('stl-new-amt')?.value),
+    status:'estimate', supplier_name:'프레임플러스',
+    created_at:new Date().toISOString(), updated_at:new Date().toISOString()
+  };
+  try {
+    await stlApi('stl/projects','POST',body);
+    stlCloseModal('stl-modal-new');
+    ['stl-new-nm','stl-new-cl','stl-new-mg'].forEach(id=>{const e=stlEl(id);if(e)e.value='';});
+    const cd2=stlEl('stl-new-cd');if(cd2)cd2.value=''; const am=stlEl('stl-new-amt');if(am)am.value='0';
+    stlToast('정산서가 생성되었습니다 ✓','success');
+    await stlOpen(body.id);
+  } catch(e){ console.error('stlCreate:',e); stlToast('생성 실패: '+e.message,'error'); }
+}
+
+/* ── 프로젝트 열기 (D1 API) ────────────────────── */
+async function stlOpen(id) {
+  _stlCurId=id;
+  stlEl('stl-list').style.display='none';
+  stlEl('stl-editor').style.display='flex';
+  stlEl('stl-bc').style.display='flex';
+  stlEl('stl-btn-back').style.display='inline-flex';
+  stlEl('stl-btn-save').style.display='inline-flex';
+  stlSetBadge('saving','↑ 불러오는 중…');
+  try {
+    const p = await stlApi(`stl/projects/${id}`);
+    if(!p||p.error) throw new Error('프로젝트를 찾을 수 없습니다');
+
+    stlTx('stl-bc-nm', p.name||'');
+    stlEl('stl-pNm').value=p.name||''; stlEl('stl-pCl').value=p.client||'';
+    stlEl('stl-pMg').value=p.manager||''; stlEl('stl-pCd').value=p.contract_date||'';
+    const pd=p.end_date||'';
+    stlEl('stl-pPd').value=pd;
+    if(pd.includes('~')){const[ps,pe]=pd.split('~');stlDrpSetRange(ps.trim(),pe.trim());}
+    else if(pd){stlDrpSetRange('',pd.trim());}else{stlDrpSetRange('','');}
+    stlEl('stl-pSd').value=p.settlement_date||''; stlEl('stl-pSn').value=p.supplier_name||'';
+    stlEl('stl-pSr').value=p.supplier_reg||''; stlEl('stl-pSc').value=p.supplier_ceo||'';
+    stlEl('stl-cAmt').value=p.contract_amt||0; _stlStatus=p.status||'estimate';
+
+    const [labor,material,sub,expense,transport,payment] = await Promise.all([
+      stlApi('stl/labor'), stlApi('stl/material'), stlApi('stl/sub'),
+      stlApi('stl/expense'), stlApi('stl/transport'), stlApi('stl/payments')
+    ]);
+
+    // Filter by project_id
+    const fl=r=>r.project_id===id;
+    SD.labor    =(labor||[]).filter(fl).map(r=>({date:r.date||'',wt:r.work_type||'',job:r.job||'',days:r.days||1,daily:r.daily_rate||0,ppl:r.workers||1,sur:r.surcharge||0}));
+    SD.material =(material||[]).filter(fl).map(r=>({date:r.date||'',cat:r.category||'',nm:r.name||'',vendor:r.vendor||'',qty:r.qty||1,unit:r.unit||'식',price:r.price||0,vat:r.vat_override<0?null:r.vat_override}));
+    SD.sub      =(sub||[]).filter(fl).map(r=>({date:r.date||'',work:r.work_type||'',content:r.content||'',vendor:r.contractor||'',cno:r.contract_no||'',amt:r.amount||0,vat:r.vat_override<0?null:r.vat_override}));
+    SD.expense  =(expense||[]).filter(fl).map(r=>({date:r.date||'',cat:r.category||'',nm:r.name||'',qty:r.qty||1,unit:r.unit||'식',price:r.price||0,vat:r.vat_override<0?null:r.vat_override}));
+    SD.transport=(transport||[]).filter(fl).map(r=>({date:r.date||'',from:r.origin||'',to:r.destination||'',item:r.item||'',qty:r.qty||1,unit:r.unit||'회',price:r.price||0,vehicle:r.vehicle||'',vat:r.vat_override<0?null:r.vat_override}));
+    SD.payment  =(payment||[]).filter(fl).map(r=>({date:r.date||'',type:r.description||'',content:'',amt:r.amount||0,note:r.method||''}));
+
+    stlRenderAll(); stlRecalc(); stlTabGo('dashboard');
+    stlSetBadge('ok','● 저장됨'); _stlDirty=false;
+    stlEl('stl-sts-chip')?.classList.add('visible'); stlStsRender(_stlStatus);
+    stlEl('stl-fab-wrap')?.classList.add('visible'); stlFabRender('dashboard');
+  } catch(e){ console.error('stlOpen:',e); stlToast('로딩 실패: '+e.message,'error'); stlSetBadge('err','✕ 로딩 실패'); stlGoList(); }
+}
+
+/* ── 진행상태 칩 ─────────────────────────────────── */
+const STL_STS_LBL={estimate:'견적중',contracted:'계약완료',ongoing:'진행중',settled:'정산완료',completed:'수금완료'};
+function stlStsRender(s){ const chip=stlEl('stl-sts-chip'); if(chip){chip.dataset.s=s;chip.textContent='● '+(STL_STS_LBL[s]||s)+' ▾';} }
+function stlStsToggle(e){ e.stopPropagation(); stlEl('stl-sts-pop')?.classList.toggle('open'); }
+function stlStsSet(s){ _stlStatus=s; stlStsRender(s); stlEl('stl-sts-pop')?.classList.remove('open'); stlDirty(); stlToast(STL_STS_LBL[s]+'(으)로 변경됨'); }
+
+/* ── FAB ─────────────────────────────────────────── */
+let _stlFabOpen=false;
+function stlFabToggle(){ _stlFabOpen=!_stlFabOpen; stlEl('stl-fab')?.classList.toggle('open',_stlFabOpen); stlEl('stl-fab-menu')?.classList.toggle('open',_stlFabOpen); stlEl('stl-fab-overlay')?.classList.toggle('open',_stlFabOpen); const f=stlEl('stl-fab'); if(f) f.textContent=_stlFabOpen?'✕':'☰'; }
+function stlFabClose(){ _stlFabOpen=false; stlEl('stl-fab')?.classList.remove('open'); stlEl('stl-fab-menu')?.classList.remove('open'); stlEl('stl-fab-overlay')?.classList.remove('open'); const f=stlEl('stl-fab'); if(f) f.textContent='☰'; }
+function stlFabGo(id){ stlFabClose(); stlTab(id); document.querySelectorAll('.stl-fab-item').forEach(it=>it.classList.toggle('on',it.getAttribute('onclick')?.includes("'"+id+"'"))); }
+function stlFabRender(activeId){ document.querySelectorAll('.stl-fab-item').forEach(it=>it.classList.toggle('on',it.getAttribute('onclick')?.includes("'"+activeId+"'"))); }
+
+/* ── 목록으로 ────────────────────────────────────── */
+function stlGoList() {
+  if(_stlDirty&&!confirm('저장하지 않은 변경사항이 있습니다. 목록으로 돌아가시겠습니까?')) return;
+  _stlCurId=null; _stlDirty=false;
+  stlEl('stl-editor').style.display='none'; stlEl('stl-list').style.display='flex';
+  stlEl('stl-bc').style.display='none'; stlEl('stl-btn-back').style.display='none';
+  stlEl('stl-btn-save').style.display='none'; stlEl('stl-sts-chip')?.classList.remove('visible');
+  stlEl('stl-fab-wrap')?.classList.remove('visible'); stlFabClose();
+  stlLoadList();
+}
+
+/* ── 탭 전환 ─────────────────────────────────────── */
+function stlTab(id,sideEl) {
+  stlSync();
+  document.querySelectorAll('.stl-sb-item').forEach(b=>b.classList.remove('on'));
+  if(sideEl) sideEl.classList.add('on');
+  else { const f=document.querySelector(`.stl-sb-item[onclick*="'${id}'"]`); if(f) f.classList.add('on'); }
+  stlTabGo(id); stlFabRender(id);
+}
+function stlTabGo(id) {
+  document.querySelectorAll('.stl-view').forEach(v=>v.classList.remove('on'));
+  const v=stlEl(`stl-view-${id}`); if(v) v.classList.add('on');
+  stlEl('stl-content')?.scrollTo(0,0);
+}
+
+/* ── DOM → SD 동기화 ──────────────────────────────── */
+function stlSync() {
+  const gv=(tr,k)=>tr.querySelector(`[data-k="${k}"]`)?.value??'';
+  SD.labor    =[...document.querySelectorAll('#stl-bd-labor tr')].map(tr=>({date:gv(tr,'date'),wt:gv(tr,'wt'),job:gv(tr,'job'),days:stlN(gv(tr,'days')),daily:stlN(gv(tr,'daily')),ppl:stlN(gv(tr,'ppl')),sur:stlN(gv(tr,'sur'))}));
+  SD.material =[...document.querySelectorAll('#stl-bd-material tr')].map(tr=>({date:gv(tr,'date'),cat:gv(tr,'cat'),nm:gv(tr,'nm'),vendor:gv(tr,'vendor'),qty:stlN(gv(tr,'qty')),unit:gv(tr,'unit'),price:stlN(gv(tr,'price')),vat:gv(tr,'vat')===''?null:stlN(gv(tr,'vat'))}));
+  SD.sub      =[...document.querySelectorAll('#stl-bd-sub tr')].map(tr=>({date:gv(tr,'date'),work:gv(tr,'work'),content:gv(tr,'content'),vendor:gv(tr,'vendor'),cno:gv(tr,'cno'),amt:stlN(gv(tr,'amt')),vat:gv(tr,'vat')===''?null:stlN(gv(tr,'vat'))}));
+  SD.expense  =[...document.querySelectorAll('#stl-bd-expense tr')].map(tr=>({date:gv(tr,'date'),cat:gv(tr,'cat'),nm:gv(tr,'nm'),qty:stlN(gv(tr,'qty')),unit:gv(tr,'unit'),price:stlN(gv(tr,'price')),vat:gv(tr,'vat')===''?null:stlN(gv(tr,'vat'))}));
+  SD.transport=[...document.querySelectorAll('#stl-bd-transport tr')].map(tr=>({date:gv(tr,'date'),from:gv(tr,'from'),to:gv(tr,'to'),item:gv(tr,'item'),qty:stlN(gv(tr,'qty')),unit:gv(tr,'unit'),price:stlN(gv(tr,'price')),vehicle:gv(tr,'vehicle'),vat:gv(tr,'vat')===''?null:stlN(gv(tr,'vat'))}));
+  SD.payment  =[...document.querySelectorAll('#stl-bd-payment tr')].map(tr=>({date:gv(tr,'date'),type:gv(tr,'type'),content:gv(tr,'content'),amt:stlN(gv(tr,'amt')),note:gv(tr,'note')}));
+}
+
+/* ── 행 추가/삭제 ────────────────────────────────── */
+function stlAdd(type) { stlSync(); SD[type].push({...SDEF[type]}); SRF[type](); stlRecalc(); stlDirty(); setTimeout(()=>{const rows=document.querySelectorAll(`#stl-bd-${type} tr`);rows[rows.length-1]?.querySelector('input')?.focus();},50); }
+function stlDelRow(type,i) { stlSync(); SD[type].splice(i,1); SRF[type](); stlRecalc(); stlDirty(); }
+
+/* ── 필터 ────────────────────────────────────────── */
+function stlFilter(type,q) { stlSync(); SFS[type].q=q; SRF[type](); stlRecalc(); }
+function stlFilterCat(type,v) { stlSync(); SFS[type].cat=v; SRF[type](); stlRecalc(); }
+function stlPopCat(type,field) {
+  const s=stlEl(`stl-cat-${type}`); if(!s) return;
+  const vals=[...new Set(SD[type].map(r=>r[field]).filter(Boolean))].sort();
+  const cur=s.value;
+  s.innerHTML='<option value="">전체</option>'+vals.map(v=>`<option${v===cur?' selected':''}>${v}</option>`).join('');
+}
+function stlApplyF(rows,type,fields,catField) {
+  const {q='',cat=''}=SFS[type]||{};
+  return rows.map(r=>({...r,_show:(!q||fields.some(f=>String(r[f]||'').toLowerCase().includes(q.toLowerCase())))&&(!cat||r[catField]===cat)}));
+}
+
+/* ── 인풋 헬퍼 ───────────────────────────────────── */
+const smi    = (k,v,cls='') => `<input data-k="${k}" class="inp inp-sm ${cls}" value="${String(v??'').replace(/"/g,'&quot;')}" oninput="stlRecalc();stlDirty()">`;
+const smiVat = v            => `<input data-k="vat" class="inp inp-sm inp-r vat-inp" value="${v??''}" placeholder="자동" oninput="stlRecalc();stlDirty()">`;
+const sno    = i            => `<td class="c" style="font-size:11px;color:var(--text-muted)">${i+1}</td>`;
+const sdelBtn= (type,i)     => `<td><button class="stl-del" onclick="stlDelRow('${type}',${i})">✕</button></td>`;
+
+/* ── 렌더러 ──────────────────────────────────────── */
+function srLabor() {
+  stlPopCat('labor','wt');
+  const rows=stlApplyF(SD.labor,'labor',['date','wt','job'],'wt');
+  const bd=stlEl('stl-bd-labor'); if(bd) bd.innerHTML=rows.map((r,i)=>{
+    const b=Math.round(r.days*r.daily*r.ppl),sa=Math.round(b*r.sur/100);
+    return `<tr style="${r._show?'':'display:none'}">${sno(i)}
+      <td>${smi('date',r.date)}</td><td>${smi('wt',r.wt)}</td><td>${smi('job',r.job)}</td>
+      <td>${smi('days',r.days,'inp-r')}</td><td>${smi('daily',stlF(r.daily),'inp-r')}</td>
+      <td>${smi('ppl',r.ppl,'inp-r')}</td><td class="num">${stlF(b)}</td>
+      <td>${smi('sur',r.sur,'inp-r')}</td><td class="num">${stlF(sa)}</td>
+      <td class="num" style="font-weight:700">${stlF(b+sa)}</td>${sdelBtn('labor',i)}</tr>`;
+  }).join('');
+  stlUpdCnt('labor');
+}
+function srMaterial() {
+  stlPopCat('material','cat');
+  const rows=stlApplyF(SD.material,'material',['date','cat','nm','vendor'],'cat');
+  const bd=stlEl('stl-bd-material'); if(bd) bd.innerHTML=rows.map((r,i)=>{
+    const sup=Math.round(r.qty*r.price),vv=r.vat===null?Math.round(sup*.1):stlN(r.vat);
+    return `<tr style="${r._show?'':'display:none'}">${sno(i)}
+      <td>${smi('date',r.date)}</td><td>${smi('cat',r.cat)}</td><td>${smi('nm',r.nm)}</td>
+      <td>${smi('vendor',r.vendor)}</td><td>${smi('qty',r.qty,'inp-r')}</td>
+      <td>${smi('unit',r.unit)}</td><td>${smi('price',stlF(r.price),'inp-r')}</td>
+      <td class="num">${stlF(sup)}</td><td>${smiVat(r.vat===null?'':stlF(vv))}</td>
+      <td class="num" style="font-weight:700">${stlF(sup+vv)}</td>${sdelBtn('material',i)}</tr>`;
+  }).join('');
+  stlUpdCnt('material');
+}
+function srSub() {
+  stlPopCat('sub','work');
+  const rows=stlApplyF(SD.sub,'sub',['date','work','content','vendor'],'work');
+  const bd=stlEl('stl-bd-sub'); if(bd) bd.innerHTML=rows.map((r,i)=>{
+    const vv=r.vat===null?Math.round(r.amt*.1):stlN(r.vat);
+    return `<tr style="${r._show?'':'display:none'}">${sno(i)}
+      <td>${smi('date',r.date)}</td><td>${smi('work',r.work)}</td>
+      <td>${smi('content',r.content)}</td><td>${smi('vendor',r.vendor)}</td>
+      <td>${smi('cno',r.cno)}</td><td>${smi('amt',stlF(r.amt),'inp-r')}</td>
+      <td>${smiVat(r.vat===null?'':stlF(vv))}</td>
+      <td class="num" style="font-weight:700">${stlF(r.amt+vv)}</td>${sdelBtn('sub',i)}</tr>`;
+  }).join('');
+  stlUpdCnt('sub');
+}
+function srExpense() {
+  stlPopCat('expense','cat');
+  const rows=stlApplyF(SD.expense,'expense',['date','cat','nm'],'cat');
+  const bd=stlEl('stl-bd-expense'); if(bd) bd.innerHTML=rows.map((r,i)=>{
+    const sup=Math.round(r.qty*r.price),vv=r.vat===null?Math.round(sup*.1):stlN(r.vat);
+    return `<tr style="${r._show?'':'display:none'}">${sno(i)}
+      <td>${smi('date',r.date)}</td><td>${smi('cat',r.cat)}</td><td>${smi('nm',r.nm)}</td>
+      <td>${smi('qty',r.qty,'inp-r')}</td><td>${smi('unit',r.unit)}</td>
+      <td>${smi('price',stlF(r.price),'inp-r')}</td><td class="num">${stlF(sup)}</td>
+      <td>${smiVat(r.vat===null?'':stlF(vv))}</td>
+      <td class="num" style="font-weight:700">${stlF(sup+vv)}</td>${sdelBtn('expense',i)}</tr>`;
+  }).join('');
+  stlUpdCnt('expense');
+}
+function srTransport() {
+  const rows=stlApplyF(SD.transport,'transport',['date','item','from','to','vehicle'],null);
+  const bd=stlEl('stl-bd-transport'); if(bd) bd.innerHTML=rows.map((r,i)=>{
+    const sup=Math.round(r.qty*r.price),vv=r.vat===null?Math.round(sup*.1):stlN(r.vat);
+    return `<tr style="${r._show?'':'display:none'}">${sno(i)}
+      <td>${smi('date',r.date)}</td><td>${smi('from',r.from)}</td><td>${smi('to',r.to)}</td>
+      <td>${smi('item',r.item)}</td><td>${smi('qty',r.qty,'inp-r')}</td>
+      <td>${smi('unit',r.unit)}</td><td>${smi('price',stlF(r.price),'inp-r')}</td>
+      <td class="num">${stlF(sup)}</td><td>${smiVat(r.vat===null?'':stlF(vv))}</td>
+      <td class="num" style="font-weight:700">${stlF(sup+vv)}</td>
+      <td>${smi('vehicle',r.vehicle)}</td>${sdelBtn('transport',i)}</tr>`;
+  }).join('');
+  stlUpdCnt('transport');
+}
+function srPayment() {
+  const bd=stlEl('stl-bd-payment'); if(bd) bd.innerHTML=SD.payment.map((r,i)=>`<tr>${sno(i)}
+    <td>${smi('date',r.date)}</td><td>${smi('type',r.type)}</td>
+    <td>${smi('content',r.content)}</td><td>${smi('amt',stlF(r.amt),'inp-r')}</td>
+    <td>${smi('note',r.note)}</td>${sdelBtn('payment',i)}</tr>`).join('');
+  stlUpdCnt('payment');
+}
+
+const SRF={labor:srLabor,material:srMaterial,sub:srSub,expense:srExpense,transport:srTransport,payment:srPayment};
+function stlRenderAll(){ Object.values(SRF).forEach(fn=>fn()); }
+function stlUpdCnt(type){ const n=SD[type].length; stlTx(`stl-cn-${type}`,n); }
+
+/* ── 재계산 ──────────────────────────────────────── */
+function stlRecalc() {
+  let TL=0,TMs=0,TMv=0,TSs=0,TSv=0,TEs=0,TEv=0,TTs=0,TTv=0,PAY=0;
+  const aggL={},aggM={},aggS={},aggE={},aggT={};
+  const gv=(tr,k)=>tr.querySelector(`[data-k="${k}"]`)?.value??'';
+
+  document.querySelectorAll('#stl-bd-labor tr').forEach(tr=>{
+    const b=Math.round(stlN(gv(tr,'days'))*stlN(gv(tr,'daily'))*stlN(gv(tr,'ppl')));
+    const t=b+Math.round(b*stlN(gv(tr,'sur'))/100); TL+=t;
+    const wt=gv(tr,'wt')||'기타'; aggL[wt]=(aggL[wt]||0)+t;
+  });
+  document.querySelectorAll('#stl-bd-material tr').forEach(tr=>{
+    const sup=Math.round(stlN(gv(tr,'qty'))*stlN(gv(tr,'price')));
+    const rv=gv(tr,'vat'),vv=rv===''?Math.round(sup*.1):stlN(rv);
+    TMs+=sup;TMv+=vv; const c=gv(tr,'cat')||'기타'; aggM[c]=(aggM[c]||0)+sup;
+  });
+  document.querySelectorAll('#stl-bd-sub tr').forEach(tr=>{
+    const sup=stlN(gv(tr,'amt')),rv=gv(tr,'vat'),vv=rv===''?Math.round(sup*.1):stlN(rv);
+    TSs+=sup;TSv+=vv; const w=gv(tr,'work')||'기타'; aggS[w]=(aggS[w]||0)+sup;
+  });
+  document.querySelectorAll('#stl-bd-expense tr').forEach(tr=>{
+    const sup=Math.round(stlN(gv(tr,'qty'))*stlN(gv(tr,'price')));
+    const rv=gv(tr,'vat'),vv=rv===''?Math.round(sup*.1):stlN(rv);
+    TEs+=sup;TEv+=vv; const c=gv(tr,'cat')||'기타'; aggE[c]=(aggE[c]||0)+sup;
+  });
+  document.querySelectorAll('#stl-bd-transport tr').forEach(tr=>{
+    const sup=Math.round(stlN(gv(tr,'qty'))*stlN(gv(tr,'price')));
+    const rv=gv(tr,'vat'),vv=rv===''?Math.round(sup*.1):stlN(rv);
+    TTs+=sup;TTv+=vv; const it=gv(tr,'item')||'기타'; aggT[it]=(aggT[it]||0)+sup;
+  });
+  document.querySelectorAll('#stl-bd-payment tr').forEach(tr=>{ PAY+=stlN(gv(tr,'amt')); });
+
+  const SS=TL+TMs+TSs+TEs+TTs, VT=TMv+TSv+TEv+TTv, GT=SS+VT;
+  const CA=stlN(stlEl('stl-cAmt')?.value), CVAT=Math.round(CA*.1), CT=CA+CVAT;
+  const PR=CT-GT, MR=CT>0?(PR/CT*100).toFixed(1):'0';
+  const pct=GT>0?Math.min(100,Math.round(PAY/GT*100)):0;
+
+  stlTx('stl-cVat',stlF(CVAT)+'원'); stlTx('stl-cTot',stlF(CT)+'원');
+  stlTx('stl-ft-labor',stlF(TL));
+  stlTx('stl-ft-ms',stlF(TMs)); stlTx('stl-ft-mv',stlF(TMv)); stlTx('stl-ft-mt',stlF(TMs+TMv));
+  stlTx('stl-ft-ss',stlF(TSs)); stlTx('stl-ft-sv',stlF(TSv)); stlTx('stl-ft-st',stlF(TSs+TSv));
+  stlTx('stl-ft-es',stlF(TEs)); stlTx('stl-ft-ev',stlF(TEv)); stlTx('stl-ft-et',stlF(TEs+TEv));
+  stlTx('stl-ft-ts',stlF(TTs)); stlTx('stl-ft-tv',stlF(TTv)); stlTx('stl-ft-tt',stlF(TTs+TTv));
+  stlTx('stl-ft-pay',stlF(PAY));
+  stlTx('stl-bg-labor',stlF(TL)+'원'); stlTx('stl-bg-material',stlF(TMs+TMv)+'원');
+  stlTx('stl-bg-sub',stlF(TSs+TSv)+'원'); stlTx('stl-bg-expense',stlF(TEs+TEv)+'원');
+  stlTx('stl-bg-transport',stlF(TTs+TTv)+'원'); stlTx('stl-bg-payment',stlF(PAY)+'원');
+  stlTx('stl-pay-smry',PAY>0?`미수금 ${stlF(Math.max(0,GT-PAY))}원`:'');
+  stlTx('stl-sb-cost',stlF(SS)+'원'); stlTx('stl-sb-pay',stlF(PAY)+'원');
+  const pe=stlEl('stl-sb-profit');
+  if(pe){ pe.textContent=(PR>=0?'+':'')+stlF(PR)+'원'; pe.style.color=PR>=0?'var(--success)':'var(--danger)'; }
+
+  // KPI
+  const kpi=stlEl('stl-kpi'); if(kpi) kpi.innerHTML=`
+    <div class="kpi-card kpi-primary"><div class="kpi-lbl">계약금액</div><div class="kpi-val">${stlF(CA)}<span style="font-size:13px;font-weight:400">원</span></div><div class="kpi-sub">VAT포함 <strong style="color:var(--primary)">${stlF(CT)}원</strong></div></div>
+    <div class="kpi-card kpi-warning"><div class="kpi-lbl">실행원가</div><div class="kpi-val">${stlF(SS)}<span style="font-size:13px;font-weight:400">원</span></div><div class="kpi-sub">VAT포함 <strong style="color:var(--warning)">${stlF(GT)}원</strong></div></div>
+    <div class="kpi-card ${PR>=0?'kpi-success':'kpi-danger'}"><div class="kpi-lbl">순이익</div><div class="kpi-val" style="color:${PR>=0?'var(--success)':'var(--danger)'}">${PR>=0?'+':''}${stlF(PR)}<span style="font-size:13px;font-weight:400">원</span></div><div class="kpi-sub">마진율 <span class="kpi-chip ${PR>=0?'up':'dn'}">${MR}%</span></div></div>
+    <div class="kpi-card kpi-info"><div class="kpi-lbl">수금현황</div><div class="kpi-val">${stlF(PAY)}<span style="font-size:13px;font-weight:400">원</span></div><div class="kpi-sub" style="flex-direction:column;align-items:flex-start;gap:3px"><span>미수금 <strong style="color:var(--danger)">${stlF(Math.max(0,GT-PAY))}원</strong></span><div class="prog"><div class="prog-bar" style="width:${pct}%;background:${pct>=100?'var(--success)':pct>=50?'var(--info)':'var(--warning)'}"></div></div><span style="font-size:11px">수금률 ${pct}%</span></div></div>`;
+
+  // 집계 카드
+  const CLRS=['#4F46E5','#10B981','#F59E0B','#EF4444','#8B5CF6'];
+  const AGGS=[{icon:'👷',title:'노무비',data:aggL,total:TL,free:true},{icon:'🧱',title:'자재비',data:aggM,total:TMs},{icon:'🏗',title:'하도급비',data:aggS,total:TSs},{icon:'🗂',title:'경비',data:aggE,total:TEs},{icon:'🚚',title:'운송비',data:aggT,total:TTs}];
+  const agg=stlEl('stl-agg'); if(agg) agg.innerHTML=AGGS.map(({icon,title,data,total,free},gi)=>{
+    const entries=Object.entries(data).sort((a,b)=>b[1]-a[1]).slice(0,5);
+    const bars=entries.map(([k,v])=>{const p2=total>0?Math.round(v/total*100):0;return `<div class="stl-agg-row"><div class="stl-agg-key" title="${k}">${k}</div><div class="stl-agg-bwrap"><div class="stl-agg-bg"><div class="stl-agg-fill" style="width:${p2}%;background:${CLRS[gi%5]}"></div></div></div><div class="stl-agg-val">${stlF(v)}원</div></div>`;}).join('');
+    const ft=free?` <span style="font-size:10px;background:var(--success-light);color:var(--success);border-radius:4px;padding:1px 5px">면세</span>`:'';
+    return `<div class="stl-agg-card"><div class="stl-agg-ttl">${icon} ${title}${ft}</div><div class="stl-agg-sum">${stlF(total)}원</div>${bars||'<div style="font-size:11.5px;color:var(--text-muted)">항목 없음</div>'}</div>`;
+  }).join('');
+
+  // 요약 바
+  const sum=stlEl('stl-sum'); if(sum) sum.innerHTML=`
+    <div class="stl-sum-row"><span class="stl-sum-lbl">노무비 (면세)</span><span class="stl-sum-val">${stlF(TL)}원</span></div>
+    <div class="stl-sum-row"><span class="stl-sum-lbl">자재비 공급가</span><span class="stl-sum-val">${stlF(TMs)}원</span></div>
+    <div class="stl-sum-row"><span class="stl-sum-lbl">하도급비 공급가</span><span class="stl-sum-val">${stlF(TSs)}원</span></div>
+    <div class="stl-sum-row"><span class="stl-sum-lbl">경비 공급가</span><span class="stl-sum-val">${stlF(TEs)}원</span></div>
+    <div class="stl-sum-row"><span class="stl-sum-lbl">운송비 공급가</span><span class="stl-sum-val">${stlF(TTs)}원</span></div>
+    <div class="stl-sum-row"><span class="stl-sum-lbl">부가세 합계</span><span class="stl-sum-val" style="color:#FCD34D">${stlF(VT)}원</span></div>
+    <div class="stl-sum-row total"><span class="stl-sum-lbl">실행원가 총액 (VAT포함)</span><span class="stl-sum-val">${stlF(GT)}원</span></div>`;
+}
+
+/* ── 저장 (D1 bulk-save API) ─────────────────────── */
+let _stlSaving = false;
+async function stlSave() {
+  if(!_stlCurId||_stlSaving) return;
+  stlSync();
+  _stlSaving=true;
+  const saveBtn=stlEl('stl-btn-save');
+  if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='저장중…';}
+  stlSetBadge('saving','↑ 저장중…');
+  const pid=_stlCurId;
+  const cd=stlEl('stl-pCd')?.value||'';
+  try {
+    // 1. 프로젝트 정보 저장
+    await stlApi(`stl/projects/${pid}`,'PUT',{
+      name:stlEl('stl-pNm')?.value||'', client:stlEl('stl-pCl')?.value||'',
+      manager:stlEl('stl-pMg')?.value||'', contract_date:cd,
+      end_date:stlEl('stl-pPd')?.value||'', settlement_date:stlEl('stl-pSd')?.value||'',
+      supplier_name:stlEl('stl-pSn')?.value||'', supplier_reg:stlEl('stl-pSr')?.value||'',
+      supplier_ceo:stlEl('stl-pSc')?.value||'', contract_amt:stlN(stlEl('stl-cAmt')?.value),
+      year_month:cd?cd.slice(0,7):_stlYm, status:_stlStatus,
+      updated_at:new Date().toISOString()
+    });
+    // 2. 벌크 저장 (delete all + re-insert)
+    await stlApi(`stl/bulk-save/${pid}`,'POST',{
+      labor:SD.labor.map((r,i)=>({id:crypto.randomUUID(),project_id:pid,date:r.date||'',work_type:r.wt||'',job:r.job||'',days:r.days||1,daily_rate:r.daily||0,workers:r.ppl||1,surcharge:r.sur||0,sort_order:i})),
+      material:SD.material.map((r,i)=>({id:crypto.randomUUID(),project_id:pid,date:r.date||'',category:r.cat||'',name:r.nm||'',vendor:r.vendor||'',qty:r.qty||1,unit:r.unit||'식',price:r.price||0,vat_override:r.vat??-1,sort_order:i})),
+      sub:SD.sub.map((r,i)=>({id:crypto.randomUUID(),project_id:pid,date:r.date||'',work_type:r.work||'',content:r.content||'',contractor:r.vendor||'',contract_no:r.cno||'',amount:r.amt||0,vat_override:r.vat??-1,sort_order:i})),
+      expense:SD.expense.map((r,i)=>({id:crypto.randomUUID(),project_id:pid,date:r.date||'',category:r.cat||'',name:r.nm||'',qty:r.qty||1,unit:r.unit||'식',price:r.price||0,vat_override:r.vat??-1,sort_order:i})),
+      transport:SD.transport.map((r,i)=>({id:crypto.randomUUID(),project_id:pid,date:r.date||'',origin:r.from||'',destination:r.to||'',item:r.item||'',qty:r.qty||1,unit:r.unit||'회',price:r.price||0,vat_override:r.vat??-1,vehicle:r.vehicle||'',sort_order:i})),
+      payment:SD.payment.map((r,i)=>({id:crypto.randomUUID(),project_id:pid,date:r.date||'',description:r.type||'',amount:r.amt||0,method:r.note||'',sort_order:i}))
+    });
+    stlSetBadge('ok','● 저장됨'); _stlDirty=false;
+    stlToast('저장되었습니다 ✓','success');
+  } catch(e){
+    console.error('stlSave:',e); stlSetBadge('err','✕ 저장 실패');
+    stlToast('저장 실패: '+e.message,'error');
+  } finally {
+    _stlSaving=false; if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='저장';}
+  }
+}
+
+/* ── 프로젝트 삭제 ───────────────────────────────── */
+async function stlDelProj(id,nm) {
+  if(!confirm(`"${nm}" 정산서를 삭제하시겠습니까?\n모든 비용 데이터가 함께 삭제됩니다.`)) return;
+  try {
+    await stlApi(`stl/bulk-delete/${id}`,'DELETE');
+    _stlProjs=_stlProjs.filter(p=>p.id!==id); stlRenderList();
+    stlToast('삭제되었습니다');
+  } catch(e){ stlToast('삭제 실패: '+e.message,'error'); }
+}
+
+/* ── 배지 / dirty / 모달 / 토스트 ────────────────── */
+function stlSetBadge(cls,txt) { const b=stlEl('stl-badge'); if(b){b.className='stl-sbadge '+cls;b.textContent=txt;} }
+function stlDirty() { _stlDirty=true; stlSetBadge('idle','● 미저장'); }
+function stlCloseModal(id) { stlEl(id)?.classList.remove('open'); }
+function stlToast(msg,type='') {
+  const area=stlEl('stl-toast-area')||document.getElementById('toast-area');
+  if(!area) return;
+  const t=document.createElement('div');
+  t.className=area.id==='stl-toast-area'?('stl-toast'+(type?' '+type:'')):('toast'+(type?' toast-'+type:''));
+  t.textContent=msg; area.appendChild(t);
+  setTimeout(()=>{t.style.cssText+='opacity:0;transform:translateX(100%);transition:all .3s';setTimeout(()=>t.remove(),300);},3000);
+}
 
 
