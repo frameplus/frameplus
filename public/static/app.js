@@ -49,14 +49,14 @@ async function initData() {
   if (_initializing) return;
   _initializing = true;
   try {
-    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList, clients, erpAttachments, designItems] = await Promise.all([
+    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList, clients, erpAttachments, designItems, sitePhotos, siteDailyLogs, siteIssues] = await Promise.all([
       api('projects'), api('vendors'), api('meetings'), api('pricedb'),
       api('orders'), api('as'), api('notices'), api('tax'),
       api('templates'), api('team'), api('company'),
       api('labor'), api('expenses'), api('presets'),
       api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs'),
       api('consultations'), api('rfp'), api('clients'), api('erp-attachments'),
-      api('design-items')
+      api('design-items'), api('site-photos'), api('site-daily-logs'), api('site-issues')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],
@@ -64,7 +64,7 @@ async function initData() {
       labor: labor||[], expenses: expenses||[], presets: presets||[],
       notifications: notifications||[], estTemplates: estTemplates||[], approvals: approvals||[],
       consultations: consultations||[], rfpList: rfpList||[], clients: clients||[], erpAttachments: erpAttachments||[],
-      designItems: designItems||[],
+      designItems: designItems||[], sitePhotos: sitePhotos||[], siteDailyLogs: siteDailyLogs||[], siteIssues: siteIssues||[],
       userPrefs: (Array.isArray(userPrefs)?userPrefs[0]:userPrefs)||{} };
     // Apply dark mode from saved prefs
     if (_d.userPrefs?.dark_mode) applyDarkMode(true);
@@ -407,6 +407,12 @@ const PROJECT_NAV = [
     {id:'design_material',label:'자재보드',icon:'tool'},
     {id:'design_compare',label:'시안비교',icon:'eye'},
     {id:'design_schedule',label:'디자인일정',icon:'activity'},
+  ]},
+  { section:'현장', icon:'📷', items:[
+    {id:'site_photos',label:'현장사진',icon:'camera'},
+    {id:'site_daily_log',label:'현장일지',icon:'edit'},
+    {id:'site_issues',label:'이슈관리',icon:'alert-triangle'},
+    {id:'site_analysis',label:'현장분석',icon:'bar-chart-2'},
   ]},
   { section:'문서', icon:'📄', items:[
     {id:'contracts',label:'계약서',icon:'book'},
@@ -782,6 +788,10 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'design_material':renderDesignMaterial();break;
     case 'design_compare':renderDesignCompare();break;
     case 'design_schedule':renderDesignSchedule();break;
+    case 'site_photos':renderSitePhotos();break;
+    case 'site_daily_log':renderSiteDailyLog();break;
+    case 'site_issues':renderSiteIssues();break;
+    case 'site_analysis':renderSiteAnalysis();break;
     default:content.innerHTML=`<div class="card"><p>${page} 페이지</p></div>`;
   }
   // Close mobile menu on nav
@@ -9162,11 +9172,650 @@ async function saveEditDesignItemModal(id){
   nav(viewMap[it.view_type]||'design_concept');
 }
 
+// ================================================================
+//  P5: 현장관리 모듈 — 사진 / 일지 / 이슈 / 분석
+// ================================================================
+
+// ── 데이터 헬퍼 ──
+function getSitePhotos(pid){return(_d.sitePhotos||[]).filter(p=>p.pid===pid);}
+function getSiteLogs(pid){return(_d.siteDailyLogs||[]).filter(l=>l.pid===pid);}
+function getSiteIssues(pid){return(_d.siteIssues||[]).filter(i=>i.pid===pid);}
+
+async function saveSitePhoto(item){await api('site-photos','POST',item);const idx=(_d.sitePhotos||[]).findIndex(x=>x.id===item.id);if(idx>=0)_d.sitePhotos[idx]=item;else(_d.sitePhotos=_d.sitePhotos||[]).push(item);}
+async function deleteSitePhoto(id){await api('site-photos/'+id,'DELETE');_d.sitePhotos=(_d.sitePhotos||[]).filter(x=>x.id!==id);}
+async function saveSiteLog(item){await api('site-daily-logs','POST',item);const idx=(_d.siteDailyLogs||[]).findIndex(x=>x.id===item.id);if(idx>=0)_d.siteDailyLogs[idx]=item;else(_d.siteDailyLogs=_d.siteDailyLogs||[]).push(item);}
+async function deleteSiteLog(id){await api('site-daily-logs/'+id,'DELETE');_d.siteDailyLogs=(_d.siteDailyLogs||[]).filter(x=>x.id!==id);}
+async function saveSiteIssue(item){await api('site-issues','POST',item);const idx=(_d.siteIssues||[]).findIndex(x=>x.id===item.id);if(idx>=0)_d.siteIssues[idx]=item;else(_d.siteIssues=_d.siteIssues||[]).push(item);}
+async function deleteSiteIssue(id){await api('site-issues/'+id,'DELETE');_d.siteIssues=(_d.siteIssues||[]).filter(x=>x.id!==id);}
+
+const PHOTO_CATS=['일반','시공전','시공중','시공후','하자','검수','안전','기타'];
+const PHOTO_CAT_ICONS={'일반':'📷','시공전':'🏚️','시공중':'🏗️','시공후':'✅','하자':'⚠️','검수':'🔍','안전':'🦺','기타':'📎'};
+const PHOTO_CAT_COLORS={'일반':'#6366f1','시공전':'#f59e0b','시공중':'#3b82f6','시공후':'#10b981','하자':'#ef4444','검수':'#8b5cf6','안전':'#f97316','기타':'#6b7280'};
+const WEATHER_OPTS=['맑음','흐림','비','눈','강풍','안개'];
+const WEATHER_ICONS={'맑음':'☀️','흐림':'☁️','비':'🌧️','눈':'❄️','강풍':'💨','안개':'🌫️'};
+const ISSUE_CATS=['품질','안전','공정','자재','설계','민원','기타'];
+const ISSUE_SEV=['낮음','보통','높음','긴급'];
+const ISSUE_SEV_COLORS={'낮음':'#10b981','보통':'#3b82f6','높음':'#f59e0b','긴급':'#ef4444'};
+const ISSUE_STATUS=['발생','확인','처리중','해결','보류'];
+const ISSUE_STATUS_COLORS={'발생':'#ef4444','확인':'#f59e0b','처리중':'#3b82f6','해결':'#10b981','보류':'#6b7280'};
+
+// ── View 1: 현장사진 갤러리 ──
+let _photoFilter='전체';
+function renderSitePhotos(){
+  const pid=S.selPid;if(!pid){document.getElementById('content').innerHTML='<p style="padding:20px">프로젝트를 선택하세요</p>';return;}
+  const photos=getSitePhotos(pid);
+  const filtered=_photoFilter==='전체'?photos:photos.filter(p=>p.category===_photoFilter);
+  const catCounts={};PHOTO_CATS.forEach(c=>{catCounts[c]=photos.filter(p=>p.category===c).length;});
+  document.getElementById('content').innerHTML=`
+  <div style="padding:20px;max-width:1400px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div><h2 style="margin:0;font-size:20px;font-weight:700">📷 현장사진</h2>
+        <p style="margin:4px 0 0;color:var(--g400);font-size:13px">총 ${photos.length}장 · ${filtered.length}장 표시</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="openAddSitePhoto()" style="padding:8px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600">
+          <i data-lucide="plus" style="width:14px;height:14px"></i> 사진 추가</button>
+      </div>
+    </div>
+    <!-- 카테고리 필터 -->
+    <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
+      <button onclick="_photoFilter='전체';renderSitePhotos()" style="padding:6px 14px;border-radius:20px;border:1px solid ${_photoFilter==='전체'?'var(--primary)':'var(--g200)'};background:${_photoFilter==='전체'?'var(--primary)':'var(--card)'};color:${_photoFilter==='전체'?'#fff':'var(--g600)'};cursor:pointer;font-size:12px;font-weight:600">전체 (${photos.length})</button>
+      ${PHOTO_CATS.map(c=>`<button onclick="_photoFilter='${c}';renderSitePhotos()" style="padding:6px 14px;border-radius:20px;border:1px solid ${_photoFilter===c?PHOTO_CAT_COLORS[c]:'var(--g200)'};background:${_photoFilter===c?PHOTO_CAT_COLORS[c]:'var(--card)'};color:${_photoFilter===c?'#fff':'var(--g600)'};cursor:pointer;font-size:12px">${PHOTO_CAT_ICONS[c]} ${c} (${catCounts[c]||0})</button>`).join('')}
+    </div>
+    <!-- 갤러리 그리드 -->
+    ${filtered.length===0?`<div style="text-align:center;padding:60px 20px;color:var(--g400)">
+      <div style="font-size:48px;margin-bottom:12px">📸</div>
+      <p style="font-size:15px;margin:0">등록된 사진이 없습니다</p>
+      <button onclick="openAddSitePhoto()" style="margin-top:16px;padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">첫 사진 추가하기</button>
+    </div>`:`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px">
+      ${filtered.sort((a,b)=>(b.taken_date||b.created_at||'').localeCompare(a.taken_date||a.created_at||'')).map(p=>{
+        const hasImg=p.image_data&&p.image_data.startsWith('data:');
+        return`<div style="background:var(--card);border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--g100);transition:all .2s;cursor:pointer" onclick="openViewSitePhoto('${p.id}')" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='var(--shadow-lg)'" onmouseout="this.style.transform='';this.style.boxShadow=''">
+          <div style="height:180px;background:${hasImg?'':'var(--g100)'};display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative">
+            ${hasImg?`<img src="${escHtml(p.image_data)}" alt="" style="width:100%;height:100%;object-fit:cover">`:`<span style="font-size:48px;opacity:.3">${PHOTO_CAT_ICONS[p.category]||'📷'}</span>`}
+            <span style="position:absolute;top:8px;left:8px;padding:3px 10px;border-radius:12px;font-size:11px;font-weight:600;color:#fff;background:${PHOTO_CAT_COLORS[p.category]||'#6b7280'}">${PHOTO_CAT_ICONS[p.category]||'📷'} ${escHtml(p.category||'일반')}</span>
+          </div>
+          <div style="padding:12px">
+            <div style="font-size:14px;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.title||p.file_name||'무제')}</div>
+            <div style="font-size:12px;color:var(--g400);display:flex;justify-content:space-between">
+              <span>${p.taken_date?fmtShort(p.taken_date):'날짜 없음'}</span>
+              <span>${escHtml(p.taken_by||'')}</span>
+            </div>
+          </div>
+        </div>`;}).join('')}
+    </div>`}
+  </div>`;
+}
+
+function openViewSitePhoto(id){
+  const p=(_d.sitePhotos||[]).find(x=>x.id===id);if(!p)return;
+  const hasImg=p.image_data&&p.image_data.startsWith('data:');
+  openModal('현장사진 상세',`
+    <div style="text-align:center;margin-bottom:16px">
+      ${hasImg?`<img src="${escHtml(p.image_data)}" alt="" style="max-width:100%;max-height:400px;border-radius:var(--radius-lg);object-fit:contain">`:`<div style="height:200px;display:flex;align-items:center;justify-content:center;background:var(--g100);border-radius:var(--radius-lg)"><span style="font-size:64px;opacity:.3">📷</span></div>`}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px">
+      <div><strong>제목:</strong> ${escHtml(p.title||'무제')}</div>
+      <div><strong>카테고리:</strong> <span style="padding:2px 8px;border-radius:10px;background:${PHOTO_CAT_COLORS[p.category]||'#6b7280'}20;color:${PHOTO_CAT_COLORS[p.category]||'#6b7280'};font-size:12px">${PHOTO_CAT_ICONS[p.category]||''} ${escHtml(p.category||'일반')}</span></div>
+      <div><strong>촬영일:</strong> ${p.taken_date||'-'}</div>
+      <div><strong>촬영자:</strong> ${escHtml(p.taken_by||'-')}</div>
+      <div><strong>위치:</strong> ${escHtml(p.location||'-')}</div>
+      <div><strong>공정단계:</strong> ${escHtml(p.phase||'-')}</div>
+    </div>
+    ${p.description?`<div style="margin-top:12px;padding:12px;background:var(--g50);border-radius:var(--radius);font-size:13px">${escHtml(p.description)}</div>`:''}
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button onclick="openEditSitePhoto('${p.id}')" style="padding:8px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">수정</button>
+      <button onclick="if(confirm('삭제하시겠습니까?')){deleteSitePhoto('${p.id}');closeModal();renderSitePhotos();toast('삭제됨')}" style="padding:8px 16px;background:#ef4444;color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">삭제</button>
+    </div>
+  `,'600px');
+}
+
+function openAddSitePhoto(){
+  openModal('📷 사진 추가',`
+    <div style="display:grid;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">제목</label>
+        <input id="sp_title" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px" placeholder="사진 제목"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">카테고리</label>
+          <select id="sp_cat" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+            ${PHOTO_CATS.map(c=>`<option value="${c}">${PHOTO_CAT_ICONS[c]} ${c}</option>`).join('')}</select></div>
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">촬영일</label>
+          <input id="sp_date" type="date" value="${today()}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">촬영자</label>
+          <select id="sp_by" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+            <option value="">선택</option>${(TEAM_MEMBERS||[]).map(m=>`<option value="${m}">${m}</option>`).join('')}</select></div>
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">위치</label>
+          <input id="sp_loc" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px" placeholder="촬영 위치"></div>
+      </div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">공정단계</label>
+        <select id="sp_phase" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          <option value="">선택</option>${GANTT_PHASES.map(ph=>`<option value="${ph.nm}">${ph.icon} ${ph.nm}</option>`).join('')}</select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">📷 사진 (이미지 파일)</label>
+        <input id="sp_file" type="file" accept="image/*" onchange="previewSitePhoto(this)" style="width:100%;padding:8px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+        <div id="sp_preview" style="margin-top:8px;text-align:center"></div></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">설명</label>
+        <textarea id="sp_desc" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="사진 설명"></textarea></div>
+      <button onclick="saveNewSitePhoto()" style="padding:10px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:600">저장</button>
+    </div>
+  `,'520px');
+}
+
+function previewSitePhoto(input){
+  const prev=document.getElementById('sp_preview')||document.getElementById('spe_preview');
+  if(!prev)return;
+  if(!input.files||!input.files[0]){prev.innerHTML='';return;}
+  const reader=new FileReader();
+  reader.onload=function(e){prev.innerHTML=`<img src="${e.target.result}" style="max-height:200px;border-radius:var(--radius);object-fit:contain">`};
+  reader.readAsDataURL(input.files[0]);
+}
+
+async function saveNewSitePhoto(){
+  const fileInput=document.getElementById('sp_file');
+  let imageData='';
+  if(fileInput&&fileInput.files&&fileInput.files[0]){
+    imageData=await new Promise((res)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(fileInput.files[0]);});
+  }
+  const item={id:uid(),pid:S.selPid,title:v('sp_title')||'무제',category:v('sp_cat')||'일반',
+    taken_date:v('sp_date')||today(),taken_by:v('sp_by')||'',location:v('sp_loc')||'',
+    phase:v('sp_phase')||'',description:v('sp_desc')||'',image_data:imageData,
+    file_name:fileInput?.files?.[0]?.name||'',tags:'[]',sort_order:0,created_at:new Date().toISOString()};
+  await saveSitePhoto(item);closeModal();renderSitePhotos();toast('사진이 추가되었습니다','success');
+}
+
+function openEditSitePhoto(id){
+  const p=(_d.sitePhotos||[]).find(x=>x.id===id);if(!p)return;closeModal();
+  openModal('📷 사진 수정',`
+    <div style="display:grid;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">제목</label>
+        <input id="spe_title" value="${escHtml(p.title||'')}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">카테고리</label>
+          <select id="spe_cat" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+            ${PHOTO_CATS.map(c=>`<option value="${c}" ${p.category===c?'selected':''}>${PHOTO_CAT_ICONS[c]} ${c}</option>`).join('')}</select></div>
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">촬영일</label>
+          <input id="spe_date" type="date" value="${p.taken_date||''}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">촬영자</label>
+          <select id="spe_by" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+            <option value="">선택</option>${(TEAM_MEMBERS||[]).map(m=>`<option value="${m}" ${p.taken_by===m?'selected':''}>${m}</option>`).join('')}</select></div>
+        <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">위치</label>
+          <input id="spe_loc" value="${escHtml(p.location||'')}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      </div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">공정단계</label>
+        <select id="spe_phase" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          <option value="">선택</option>${GANTT_PHASES.map(ph=>`<option value="${ph.nm}" ${p.phase===ph.nm?'selected':''}>${ph.icon} ${ph.nm}</option>`).join('')}</select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">사진 변경 (선택)</label>
+        <input id="spe_file" type="file" accept="image/*" onchange="previewSitePhoto(this)" style="width:100%;padding:8px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+        <div id="spe_preview" style="margin-top:8px;text-align:center">${p.image_data&&p.image_data.startsWith('data:')?`<img src="${escHtml(p.image_data)}" style="max-height:150px;border-radius:var(--radius);object-fit:contain">`:''}</div></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">설명</label>
+        <textarea id="spe_desc" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical">${escHtml(p.description||'')}</textarea></div>
+      <button onclick="saveEditSitePhotoItem('${p.id}')" style="padding:10px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:600">저장</button>
+    </div>
+  `,'520px');
+}
+
+async function saveEditSitePhotoItem(id){
+  const p=(_d.sitePhotos||[]).find(x=>x.id===id);if(!p)return;
+  const fileInput=document.getElementById('spe_file');
+  let imageData=p.image_data||'';
+  if(fileInput&&fileInput.files&&fileInput.files[0]){
+    imageData=await new Promise((res)=>{const r=new FileReader();r.onload=e=>res(e.target.result);r.readAsDataURL(fileInput.files[0]);});
+  }
+  Object.assign(p,{title:v('spe_title')||p.title,category:v('spe_cat')||p.category,taken_date:v('spe_date')||p.taken_date,
+    taken_by:v('spe_by')||p.taken_by,location:v('spe_loc')||p.location,phase:v('spe_phase')||p.phase,
+    description:v('spe_desc')||'',image_data:imageData});
+  await saveSitePhoto(p);closeModal();renderSitePhotos();toast('수정되었습니다','success');
+}
+
+// ── View 2: 현장일지 ──
+function renderSiteDailyLog(){
+  const pid=S.selPid;if(!pid){document.getElementById('content').innerHTML='<p style="padding:20px">프로젝트를 선택하세요</p>';return;}
+  const logs=getSiteLogs(pid).sort((a,b)=>(b.log_date||'').localeCompare(a.log_date||''));
+  const thisMonth=today().slice(0,7);
+  const monthLogs=logs.filter(l=>(l.log_date||'').startsWith(thisMonth));
+  const totalWorkers=monthLogs.reduce((s,l)=>s+(l.workers_count||0),0);
+  const avgProgress=monthLogs.length?Math.round(monthLogs.reduce((s,l)=>s+(l.progress_pct||0),0)/monthLogs.length):0;
+  document.getElementById('content').innerHTML=`
+  <div style="padding:20px;max-width:1200px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div><h2 style="margin:0;font-size:20px;font-weight:700">📋 현장일지</h2>
+        <p style="margin:4px 0 0;color:var(--g400);font-size:13px">총 ${logs.length}건 · 이번 달 ${monthLogs.length}건</p></div>
+      <button onclick="openAddSiteLog()" style="padding:8px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600">
+        <i data-lucide="plus" style="width:14px;height:14px"></i> 일지 작성</button>
+    </div>
+    <!-- 월간 요약 카드 -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px">
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:24px;font-weight:800;color:var(--primary)">${monthLogs.length}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">이번 달 일지</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:24px;font-weight:800;color:#3b82f6">${totalWorkers}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">투입 인원(명)</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:24px;font-weight:800;color:#10b981">${avgProgress}%</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">평균 공정률</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:24px;font-weight:800;color:#f59e0b">${monthLogs.filter(l=>l.issues&&l.issues.trim()).length}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">이슈 발생</div></div>
+    </div>
+    <!-- 일지 목록 -->
+    ${logs.length===0?`<div style="text-align:center;padding:60px 20px;color:var(--g400)">
+      <div style="font-size:48px;margin-bottom:12px">📋</div>
+      <p style="font-size:15px;margin:0">작성된 일지가 없습니다</p>
+      <button onclick="openAddSiteLog()" style="margin-top:16px;padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">첫 일지 작성하기</button>
+    </div>`:`<div style="display:flex;flex-direction:column;gap:12px">
+      ${logs.map(l=>{
+        const wd=safeParse(l.work_details);
+        const isToday=l.log_date===today();
+        return`<div style="background:var(--card);border-radius:var(--radius-lg);border:1px solid ${isToday?'var(--primary)':'var(--g100)'};overflow:hidden;cursor:pointer;transition:all .2s" onclick="openViewSiteLog('${l.id}')" onmouseover="this.style.boxShadow='var(--shadow)'" onmouseout="this.style.boxShadow=''">
+          <div style="display:flex;align-items:center;padding:16px;gap:16px">
+            <div style="min-width:60px;text-align:center">
+              <div style="font-size:11px;color:var(--g400)">${(l.log_date||'').slice(0,7)}</div>
+              <div style="font-size:28px;font-weight:800;color:${isToday?'var(--primary)':'var(--g700)'}">${(l.log_date||'').slice(8)||'?'}</div>
+              <div style="font-size:11px;color:var(--g400)">${['일','월','화','수','목','금','토'][new Date(l.log_date).getDay()]||''}</div>
+            </div>
+            <div style="width:1px;height:50px;background:var(--g100)"></div>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                <span style="font-size:13px">${WEATHER_ICONS[l.weather]||'☀️'} ${escHtml(l.weather||'맑음')} ${escHtml(l.temperature||'')}</span>
+                <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:var(--primary)15;color:var(--primary)">공정률 ${l.progress_pct||0}%</span>
+                ${l.safety_check?'<span style="font-size:11px;color:#10b981">✅ 안전점검</span>':'<span style="font-size:11px;color:#ef4444">⚠️ 미점검</span>'}
+                ${isToday?'<span style="padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;background:#10b981;color:#fff">TODAY</span>':''}
+              </div>
+              <div style="font-size:14px;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(l.summary||'작업 요약 없음')}</div>
+              <div style="font-size:12px;color:var(--g400);display:flex;gap:12px">
+                <span>👷 ${l.workers_count||0}명</span>
+                <span>🔧 ${wd.length}건 작업</span>
+                ${l.issues&&l.issues.trim()?'<span style="color:#ef4444">⚠️ 이슈 있음</span>':''}
+                ${l.inspector?`<span>검수: ${escHtml(l.inspector)}</span>`:''}
+              </div>
+            </div>
+          </div>
+        </div>`;}).join('')}
+    </div>`}
+  </div>`;
+}
+
+function safeParse(s){try{return JSON.parse(s||'[]');}catch(e){return[];}}
+
+function openViewSiteLog(id){
+  const l=(_d.siteDailyLogs||[]).find(x=>x.id===id);if(!l)return;
+  const wd=safeParse(l.work_details);
+  const wk=safeParse(l.workers_detail);
+  const eq=safeParse(l.equipment);
+  openModal(`📋 현장일지 — ${l.log_date||''}`,`
+    <div style="display:grid;gap:16px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;text-align:center">
+        <div style="padding:12px;background:var(--g50);border-radius:var(--radius)">
+          <div style="font-size:20px">${WEATHER_ICONS[l.weather]||'☀️'}</div>
+          <div style="font-size:12px;color:var(--g400)">${escHtml(l.weather||'맑음')} ${escHtml(l.temperature||'')}</div></div>
+        <div style="padding:12px;background:var(--g50);border-radius:var(--radius)">
+          <div style="font-size:20px;font-weight:800;color:var(--primary)">${l.progress_pct||0}%</div>
+          <div style="font-size:12px;color:var(--g400)">공정률</div></div>
+        <div style="padding:12px;background:var(--g50);border-radius:var(--radius)">
+          <div style="font-size:20px;font-weight:800;color:#3b82f6">${l.workers_count||0}명</div>
+          <div style="font-size:12px;color:var(--g400)">투입 인원</div></div>
+      </div>
+      <div><strong style="font-size:13px">📝 작업 요약</strong>
+        <div style="padding:10px;background:var(--g50);border-radius:var(--radius);margin-top:6px;font-size:13px">${escHtml(l.summary||'-')}</div></div>
+      ${wd.length?`<div><strong style="font-size:13px">🔧 작업 내역 (${wd.length}건)</strong>
+        <div style="margin-top:6px;display:flex;flex-direction:column;gap:6px">${wd.map((w,i)=>`<div style="padding:8px 12px;background:var(--g50);border-radius:var(--radius);font-size:13px;border-left:3px solid var(--primary)"><strong>${i+1}.</strong> ${escHtml(typeof w==='string'?w:(w.task||''))}</div>`).join('')}</div></div>`:''}
+      ${wk.length?`<div><strong style="font-size:13px">👷 인원 상세</strong>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${wk.map(w=>`<span style="padding:4px 10px;background:var(--g100);border-radius:var(--radius);font-size:12px">${escHtml(typeof w==='string'?w:`${w.role||''} ${w.count||''}명`)}</span>`).join('')}</div></div>`:''}
+      ${eq.length?`<div><strong style="font-size:13px">🚜 장비</strong>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px">${eq.map(e=>`<span style="padding:4px 10px;background:#f59e0b15;color:#f59e0b;border-radius:var(--radius);font-size:12px">${escHtml(typeof e==='string'?e:e.name||'')}</span>`).join('')}</div></div>`:''}
+      ${l.issues&&l.issues.trim()?`<div><strong style="font-size:13px;color:#ef4444">⚠️ 이슈/특이사항</strong>
+        <div style="padding:10px;background:#ef444410;border-radius:var(--radius);margin-top:6px;font-size:13px;color:#ef4444;border-left:3px solid #ef4444">${escHtml(l.issues)}</div></div>`:''}
+      ${l.notes?`<div><strong style="font-size:13px">💬 비고</strong><div style="padding:10px;background:var(--g50);border-radius:var(--radius);margin-top:6px;font-size:13px">${escHtml(l.notes)}</div></div>`:''}
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="openEditSiteLog('${l.id}')" style="padding:8px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">수정</button>
+        <button onclick="if(confirm('삭제하시겠습니까?')){deleteSiteLog('${l.id}');closeModal();renderSiteDailyLog();toast('삭제됨')}" style="padding:8px 16px;background:#ef4444;color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">삭제</button>
+      </div>
+    </div>
+  `,'600px');
+}
+
+function buildSiteLogForm(prefix,l){
+  const wd=l?safeParse(l.work_details):[];
+  return`<div style="display:grid;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">날짜</label>
+        <input id="${prefix}_date" type="date" value="${l?.log_date||today()}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">날씨</label>
+        <select id="${prefix}_weather" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          ${WEATHER_OPTS.map(w=>`<option value="${w}" ${(l?.weather||'맑음')===w?'selected':''}>${WEATHER_ICONS[w]} ${w}</option>`).join('')}</select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">기온</label>
+        <input id="${prefix}_temp" value="${escHtml(l?.temperature||'')}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px" placeholder="예: 25°C"></div>
+    </div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">작업 요약</label>
+      <textarea id="${prefix}_summary" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="오늘의 주요 작업 내용">${escHtml(l?.summary||'')}</textarea></div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">작업 내역 (한 줄에 하나씩)</label>
+      <textarea id="${prefix}_works" rows="4" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="목공 경량칸막이 설치&#10;전기 배선 작업&#10;바닥 타일 시공">${wd.map(w=>typeof w==='string'?w:(w.task||'')).join('\\n')}</textarea></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">투입 인원(명)</label>
+        <input id="${prefix}_workers" type="number" min="0" value="${l?.workers_count||0}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">공정률(%)</label>
+        <input id="${prefix}_progress" type="number" min="0" max="100" value="${l?.progress_pct||0}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">안전점검</label>
+        <select id="${prefix}_safety" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          <option value="1" ${(l?.safety_check!==0)?'selected':''}>✅ 완료</option>
+          <option value="0" ${l?.safety_check===0?'selected':''}>⚠️ 미실시</option></select></div>
+    </div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">검수자</label>
+      <select id="${prefix}_inspector" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+        <option value="">선택</option>${(TEAM_MEMBERS||[]).map(m=>`<option value="${m}" ${l?.inspector===m?'selected':''}>${m}</option>`).join('')}</select></div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;color:#ef4444">⚠️ 이슈/특이사항</label>
+      <textarea id="${prefix}_issues" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="특이사항 입력">${escHtml(l?.issues||'')}</textarea></div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">비고</label>
+      <textarea id="${prefix}_notes" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical">${escHtml(l?.notes||'')}</textarea></div>
+  </div>`;
+}
+
+function collectSiteLogData(prefix){
+  const worksRaw=v(prefix+'_works')||'';
+  const workDetails=worksRaw.split('\n').filter(s=>s.trim()).map(s=>({task:s.trim()}));
+  return{log_date:v(prefix+'_date')||today(),weather:v(prefix+'_weather')||'맑음',temperature:v(prefix+'_temp')||'',
+    summary:v(prefix+'_summary')||'',work_details:JSON.stringify(workDetails),workers_count:parseInt(v(prefix+'_workers'))||0,
+    progress_pct:parseFloat(v(prefix+'_progress'))||0,safety_check:parseInt(v(prefix+'_safety'))||1,
+    inspector:v(prefix+'_inspector')||'',issues:v(prefix+'_issues')||'',notes:v(prefix+'_notes')||'',
+    updated_at:new Date().toISOString()};
+}
+
+function openAddSiteLog(){
+  openModal('📋 일지 작성',buildSiteLogForm('sl',null)+`
+    <button onclick="saveNewSiteLog()" style="margin-top:12px;padding:10px;width:100%;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:600">저장</button>
+  `,'560px');
+}
+
+async function saveNewSiteLog(){
+  const data=collectSiteLogData('sl');
+  const item={id:uid(),pid:S.selPid,...data,workers_detail:'[]',equipment:'[]',created_at:new Date().toISOString()};
+  await saveSiteLog(item);closeModal();renderSiteDailyLog();toast('일지가 작성되었습니다','success');
+}
+
+function openEditSiteLog(id){
+  const l=(_d.siteDailyLogs||[]).find(x=>x.id===id);if(!l)return;closeModal();
+  openModal('📋 일지 수정',buildSiteLogForm('sle',l)+`
+    <button onclick="saveEditSiteLogItem('${l.id}')" style="margin-top:12px;padding:10px;width:100%;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:600">저장</button>
+  `,'560px');
+}
+
+async function saveEditSiteLogItem(id){
+  const l=(_d.siteDailyLogs||[]).find(x=>x.id===id);if(!l)return;
+  Object.assign(l,collectSiteLogData('sle'));
+  await saveSiteLog(l);closeModal();renderSiteDailyLog();toast('수정되었습니다','success');
+}
+
+// ── View 3: 이슈관리 ──
+let _issueFilter='전체';
+function renderSiteIssues(){
+  const pid=S.selPid;if(!pid){document.getElementById('content').innerHTML='<p style="padding:20px">프로젝트를 선택하세요</p>';return;}
+  const issues=getSiteIssues(pid);
+  const filtered=_issueFilter==='전체'?issues:issues.filter(i=>i.status===_issueFilter);
+  const statusCounts={};ISSUE_STATUS.forEach(s=>{statusCounts[s]=issues.filter(i=>i.status===s).length;});
+  const openCount=issues.filter(i=>i.status!=='해결'&&i.status!=='보류').length;
+  const urgentCount=issues.filter(i=>i.severity==='긴급'&&i.status!=='해결').length;
+  document.getElementById('content').innerHTML=`
+  <div style="padding:20px;max-width:1200px;margin:0 auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div><h2 style="margin:0;font-size:20px;font-weight:700">⚠️ 이슈관리</h2>
+        <p style="margin:4px 0 0;color:var(--g400);font-size:13px">총 ${issues.length}건 · 미해결 ${openCount}건${urgentCount?' · <span style="color:#ef4444;font-weight:700">긴급 '+urgentCount+'건</span>':''}</p></div>
+      <button onclick="openAddSiteIssue()" style="padding:8px 16px;background:#ef4444;color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600">
+        <i data-lucide="alert-triangle" style="width:14px;height:14px"></i> 이슈 등록</button>
+    </div>
+    <!-- 상태 필터 -->
+    <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
+      <button onclick="_issueFilter='전체';renderSiteIssues()" style="padding:6px 14px;border-radius:20px;border:1px solid ${_issueFilter==='전체'?'var(--primary)':'var(--g200)'};background:${_issueFilter==='전체'?'var(--primary)':'var(--card)'};color:${_issueFilter==='전체'?'#fff':'var(--g600)'};cursor:pointer;font-size:12px;font-weight:600">전체 (${issues.length})</button>
+      ${ISSUE_STATUS.map(s=>`<button onclick="_issueFilter='${s}';renderSiteIssues()" style="padding:6px 14px;border-radius:20px;border:1px solid ${_issueFilter===s?ISSUE_STATUS_COLORS[s]:'var(--g200)'};background:${_issueFilter===s?ISSUE_STATUS_COLORS[s]:'var(--card)'};color:${_issueFilter===s?'#fff':'var(--g600)'};cursor:pointer;font-size:12px">${s} (${statusCounts[s]||0})</button>`).join('')}
+    </div>
+    <!-- 이슈 목록 -->
+    ${filtered.length===0?`<div style="text-align:center;padding:60px 20px;color:var(--g400)">
+      <div style="font-size:48px;margin-bottom:12px">✅</div>
+      <p style="font-size:15px;margin:0">${_issueFilter==='전체'?'등록된 이슈가 없습니다':'해당 상태의 이슈가 없습니다'}</p>
+    </div>`:`<div style="display:flex;flex-direction:column;gap:10px">
+      ${filtered.sort((a,b)=>{const so={'긴급':0,'높음':1,'보통':2,'낮음':3};return(so[a.severity]||2)-(so[b.severity]||2);}).map(i=>{
+        const sevColor=ISSUE_SEV_COLORS[i.severity]||'#6b7280';
+        const stColor=ISSUE_STATUS_COLORS[i.status]||'#6b7280';
+        const overdue=i.due_date&&i.due_date<today()&&i.status!=='해결';
+        return`<div style="background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);border-left:4px solid ${sevColor};padding:16px;cursor:pointer;transition:all .2s" onclick="openViewSiteIssue('${i.id}')" onmouseover="this.style.boxShadow='var(--shadow)'" onmouseout="this.style.boxShadow=''">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap">
+                <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${sevColor}18;color:${sevColor}">${escHtml(i.severity||'보통')}</span>
+                <span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${stColor}18;color:${stColor}">${escHtml(i.status||'발생')}</span>
+                <span style="padding:2px 8px;border-radius:10px;font-size:11px;background:var(--g100);color:var(--g500)">${escHtml(i.category||'기타')}</span>
+                ${overdue?'<span style="padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:#ef444418;color:#ef4444">⏰ 기한 초과</span>':''}
+              </div>
+              <div style="font-size:14px;font-weight:600;margin-bottom:4px">${escHtml(i.title)}</div>
+              <div style="font-size:12px;color:var(--g400);display:flex;gap:12px;flex-wrap:wrap">
+                <span>📅 ${i.reported_date||'-'}</span>
+                ${i.reported_by?`<span>👤 ${escHtml(i.reported_by)}</span>`:''}
+                ${i.assigned_to?`<span>🎯 ${escHtml(i.assigned_to)}</span>`:''}
+                ${i.due_date?`<span>⏰ ~${i.due_date}</span>`:''}
+                ${i.location?`<span>📍 ${escHtml(i.location)}</span>`:''}
+              </div>
+            </div>
+          </div>
+        </div>`;}).join('')}
+    </div>`}
+  </div>`;
+}
+
+function openViewSiteIssue(id){
+  const i=(_d.siteIssues||[]).find(x=>x.id===id);if(!i)return;
+  const sevColor=ISSUE_SEV_COLORS[i.severity]||'#6b7280';
+  const stColor=ISSUE_STATUS_COLORS[i.status]||'#6b7280';
+  openModal('이슈 상세',`
+    <div style="display:grid;gap:14px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;background:${sevColor}18;color:${sevColor}">${escHtml(i.severity)}</span>
+        <span style="padding:4px 12px;border-radius:12px;font-size:12px;font-weight:700;background:${stColor}18;color:${stColor}">${escHtml(i.status)}</span>
+        <span style="padding:4px 12px;border-radius:12px;font-size:12px;background:var(--g100);color:var(--g500)">${escHtml(i.category)}</span>
+      </div>
+      <h3 style="margin:0;font-size:18px;font-weight:700">${escHtml(i.title)}</h3>
+      ${i.description?`<div style="padding:12px;background:var(--g50);border-radius:var(--radius);font-size:13px">${escHtml(i.description)}</div>`:''}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px">
+        <div><strong>보고일:</strong> ${i.reported_date||'-'}</div>
+        <div><strong>보고자:</strong> ${escHtml(i.reported_by||'-')}</div>
+        <div><strong>담당자:</strong> ${escHtml(i.assigned_to||'-')}</div>
+        <div><strong>위치:</strong> ${escHtml(i.location||'-')}</div>
+        <div><strong>기한:</strong> ${i.due_date||'-'}</div>
+        <div><strong>해결일:</strong> ${i.resolved_date||'-'}</div>
+      </div>
+      ${i.resolution?`<div><strong style="font-size:13px;color:#10b981">✅ 해결 방법</strong>
+        <div style="padding:10px;background:#10b98110;border-radius:var(--radius);margin-top:6px;font-size:13px;border-left:3px solid #10b981">${escHtml(i.resolution)}</div></div>`:''}
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="openEditSiteIssue('${i.id}')" style="padding:8px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">수정</button>
+        ${i.status!=='해결'?`<button onclick="resolveSiteIssue('${i.id}')" style="padding:8px 16px;background:#10b981;color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">✅ 해결 처리</button>`:''}
+        <button onclick="if(confirm('삭제하시겠습니까?')){deleteSiteIssue('${i.id}');closeModal();renderSiteIssues();toast('삭제됨')}" style="padding:8px 16px;background:#ef4444;color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">삭제</button>
+      </div>
+    </div>
+  `,'560px');
+}
+
+async function resolveSiteIssue(id){
+  const i=(_d.siteIssues||[]).find(x=>x.id===id);if(!i)return;
+  const resolution=prompt('해결 방법을 입력하세요:');if(resolution===null)return;
+  i.status='해결';i.resolved_date=today();i.resolution=resolution||'';i.updated_at=new Date().toISOString();
+  await saveSiteIssue(i);closeModal();renderSiteIssues();toast('이슈가 해결되었습니다','success');
+}
+
+function buildSiteIssueForm(prefix,i){
+  return`<div style="display:grid;gap:12px">
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">제목 *</label>
+      <input id="${prefix}_title" value="${escHtml(i?.title||'')}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px" placeholder="이슈 제목"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">유형</label>
+        <select id="${prefix}_cat" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          ${ISSUE_CATS.map(c=>`<option value="${c}" ${(i?.category||'품질')===c?'selected':''}>${c}</option>`).join('')}</select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">심각도</label>
+        <select id="${prefix}_sev" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          ${ISSUE_SEV.map(s=>`<option value="${s}" ${(i?.severity||'보통')===s?'selected':''}>${s}</option>`).join('')}</select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">상태</label>
+        <select id="${prefix}_status" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          ${ISSUE_STATUS.map(s=>`<option value="${s}" ${(i?.status||'발생')===s?'selected':''}>${s}</option>`).join('')}</select></div>
+    </div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">설명</label>
+      <textarea id="${prefix}_desc" rows="3" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="이슈 상세 설명">${escHtml(i?.description||'')}</textarea></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">위치</label>
+        <input id="${prefix}_loc" value="${escHtml(i?.location||'')}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px" placeholder="발생 위치"></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">보고일</label>
+        <input id="${prefix}_rdate" type="date" value="${i?.reported_date||today()}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">보고자</label>
+        <select id="${prefix}_rby" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          <option value="">선택</option>${(TEAM_MEMBERS||[]).map(m=>`<option value="${m}" ${i?.reported_by===m?'selected':''}>${m}</option>`).join('')}</select></div>
+      <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">담당자</label>
+        <select id="${prefix}_assign" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px">
+          <option value="">선택</option>${(TEAM_MEMBERS||[]).map(m=>`<option value="${m}" ${i?.assigned_to===m?'selected':''}>${m}</option>`).join('')}</select></div>
+    </div>
+    <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">처리 기한</label>
+      <input id="${prefix}_due" type="date" value="${i?.due_date||''}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
+    ${i?.status==='해결'?`<div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;color:#10b981">해결 방법</label>
+      <textarea id="${prefix}_resolution" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical">${escHtml(i?.resolution||'')}</textarea></div>`:''}
+  </div>`;
+}
+
+function collectSiteIssueData(prefix,existing){
+  return{title:v(prefix+'_title')||existing?.title||'',category:v(prefix+'_cat')||'품질',
+    severity:v(prefix+'_sev')||'보통',status:v(prefix+'_status')||'발생',
+    description:v(prefix+'_desc')||'',location:v(prefix+'_loc')||'',
+    reported_date:v(prefix+'_rdate')||today(),reported_by:v(prefix+'_rby')||'',
+    assigned_to:v(prefix+'_assign')||'',due_date:v(prefix+'_due')||'',
+    resolution:document.getElementById(prefix+'_resolution')?.value||existing?.resolution||'',
+    updated_at:new Date().toISOString()};
+}
+
+function openAddSiteIssue(){
+  openModal('⚠️ 이슈 등록',buildSiteIssueForm('si',null)+`
+    <button onclick="saveNewSiteIssue()" style="margin-top:12px;padding:10px;width:100%;background:#ef4444;color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:600">등록</button>
+  `,'540px');
+}
+
+async function saveNewSiteIssue(){
+  if(!v('si_title')){toast('제목을 입력하세요','warning');return;}
+  const data=collectSiteIssueData('si');
+  const item={id:uid(),pid:S.selPid,...data,resolved_date:'',photos:'[]',created_at:new Date().toISOString()};
+  await saveSiteIssue(item);closeModal();renderSiteIssues();toast('이슈가 등록되었습니다','success');
+}
+
+function openEditSiteIssue(id){
+  const i=(_d.siteIssues||[]).find(x=>x.id===id);if(!i)return;closeModal();
+  openModal('⚠️ 이슈 수정',buildSiteIssueForm('sie',i)+`
+    <button onclick="saveEditSiteIssueItem('${i.id}')" style="margin-top:12px;padding:10px;width:100%;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:14px;font-weight:600">저장</button>
+  `,'540px');
+}
+
+async function saveEditSiteIssueItem(id){
+  const i=(_d.siteIssues||[]).find(x=>x.id===id);if(!i)return;
+  const data=collectSiteIssueData('sie',i);
+  if(data.status==='해결'&&!i.resolved_date)data.resolved_date=today();
+  Object.assign(i,data);
+  await saveSiteIssue(i);closeModal();renderSiteIssues();toast('수정되었습니다','success');
+}
+
+// ── View 4: 현장분석 대시보드 ──
+function renderSiteAnalysis(){
+  const pid=S.selPid;if(!pid){document.getElementById('content').innerHTML='<p style="padding:20px">프로젝트를 선택하세요</p>';return;}
+  const photos=getSitePhotos(pid);
+  const logs=getSiteLogs(pid).sort((a,b)=>(a.log_date||'').localeCompare(b.log_date||''));
+  const issues=getSiteIssues(pid);
+  // 통계
+  const totalWorkers=logs.reduce((s,l)=>s+(l.workers_count||0),0);
+  const avgWorkers=logs.length?Math.round(totalWorkers/logs.length):0;
+  const latestProg=logs.length?(logs[logs.length-1].progress_pct||0):0;
+  const openIssues=issues.filter(i=>i.status!=='해결'&&i.status!=='보류').length;
+  const urgentIssues=issues.filter(i=>i.severity==='긴급'&&i.status!=='해결').length;
+  const resolvedRate=issues.length?Math.round(issues.filter(i=>i.status==='해결').length/issues.length*100):0;
+  const safetyRate=logs.length?Math.round(logs.filter(l=>l.safety_check).length/logs.length*100):0;
+  // 최근 7일 일지
+  const last7=logs.slice(-7);
+  // 카테고리별 사진 수
+  const photoByCat={};photos.forEach(p=>{photoByCat[p.category||'일반']=(photoByCat[p.category||'일반']||0)+1;});
+  // 이슈 카테고리별
+  const issueByCat={};issues.forEach(i=>{issueByCat[i.category||'기타']=(issueByCat[i.category||'기타']||0)+1;});
+
+  document.getElementById('content').innerHTML=`
+  <div style="padding:20px;max-width:1200px;margin:0 auto">
+    <h2 style="margin:0 0 20px;font-size:20px;font-weight:700">📊 현장분석 대시보드</h2>
+    <!-- KPI 카드 -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px">
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:28px;font-weight:800;color:var(--primary)">${latestProg}%</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">현재 공정률</div>
+        <div style="margin-top:6px;height:4px;background:var(--g100);border-radius:2px;overflow:hidden"><div style="height:100%;background:var(--primary);width:${latestProg}%;border-radius:2px"></div></div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:28px;font-weight:800;color:#3b82f6">${avgWorkers}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">일평균 인원</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:28px;font-weight:800;color:${openIssues>0?'#ef4444':'#10b981'}">${openIssues}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">미해결 이슈</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:28px;font-weight:800;color:#10b981">${safetyRate}%</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">안전점검률</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:28px;font-weight:800;color:#8b5cf6">${photos.length}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">현장사진</div></div>
+      <div style="padding:16px;background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);text-align:center">
+        <div style="font-size:28px;font-weight:800;color:#f59e0b">${logs.length}</div>
+        <div style="font-size:12px;color:var(--g400);margin-top:2px">작성 일지</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:${logs.length>0?'2fr 1fr':'1fr'};gap:20px">
+      <!-- 공정률 추이 (최근 7일) -->
+      ${last7.length?`<div style="background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);padding:20px">
+        <h3 style="margin:0 0 16px;font-size:15px;font-weight:700">📈 공정률 추이 (최근 ${last7.length}일)</h3>
+        <div style="display:flex;align-items:flex-end;gap:8px;height:160px;padding:0 4px">
+          ${last7.map(l=>{const pct=l.progress_pct||0;const h=Math.max(pct*1.5,8);return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+            <span style="font-size:11px;font-weight:600;color:var(--primary)">${pct}%</span>
+            <div style="width:100%;max-width:40px;height:${h}px;background:linear-gradient(180deg,var(--primary),#818cf8);border-radius:4px 4px 0 0;min-height:8px"></div>
+            <span style="font-size:10px;color:var(--g400)">${(l.log_date||'').slice(5)}</span>
+          </div>`;}).join('')}
+        </div>
+        <!-- 인력 투입 -->
+        <h4 style="margin:20px 0 12px;font-size:13px;font-weight:700;color:var(--g500)">👷 인력 투입</h4>
+        <div style="display:flex;align-items:flex-end;gap:8px;height:100px;padding:0 4px">
+          ${last7.map(l=>{const w=l.workers_count||0;const h=Math.max(w*6,8);return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+            <span style="font-size:11px;font-weight:600;color:#3b82f6">${w}</span>
+            <div style="width:100%;max-width:40px;height:${h}px;background:linear-gradient(180deg,#3b82f6,#93c5fd);border-radius:4px 4px 0 0;min-height:8px"></div>
+            <span style="font-size:10px;color:var(--g400)">${(l.log_date||'').slice(5)}</span>
+          </div>`;}).join('')}
+        </div>
+      </div>`:``}
+      <!-- 사이드바: 이슈 + 사진 통계 -->
+      <div style="display:flex;flex-direction:column;gap:16px">
+        ${issues.length?`<div style="background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);padding:16px">
+          <h3 style="margin:0 0 12px;font-size:14px;font-weight:700">⚠️ 이슈 현황</h3>
+          <div style="margin-bottom:8px;font-size:12px;color:var(--g400)">해결률: <strong style="color:#10b981">${resolvedRate}%</strong></div>
+          <div style="height:6px;background:var(--g100);border-radius:3px;overflow:hidden;margin-bottom:12px"><div style="height:100%;background:#10b981;width:${resolvedRate}%"></div></div>
+          ${urgentIssues?`<div style="padding:8px;background:#ef444410;border-radius:var(--radius);font-size:12px;color:#ef4444;font-weight:600;margin-bottom:8px">🚨 긴급 이슈 ${urgentIssues}건 미해결</div>`:''}
+          <div style="display:flex;flex-direction:column;gap:4px">
+            ${Object.entries(issueByCat).sort((a,b)=>b[1]-a[1]).map(([cat,cnt])=>`<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid var(--g50)"><span>${cat}</span><strong>${cnt}건</strong></div>`).join('')}
+          </div>
+        </div>`:``}
+        ${photos.length?`<div style="background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);padding:16px">
+          <h3 style="margin:0 0 12px;font-size:14px;font-weight:700">📷 사진 분포</h3>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            ${Object.entries(photoByCat).sort((a,b)=>b[1]-a[1]).map(([cat,cnt])=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0;border-bottom:1px solid var(--g50)"><span>${PHOTO_CAT_ICONS[cat]||'📷'} ${cat}</span><strong>${cnt}장</strong></div>`).join('')}
+          </div>
+        </div>`:``}
+        ${!issues.length&&!photos.length?`<div style="background:var(--card);border-radius:var(--radius-lg);border:1px solid var(--g100);padding:40px 20px;text-align:center;color:var(--g400)">
+          <div style="font-size:32px;margin-bottom:8px">📊</div>
+          <p style="font-size:13px;margin:0">현장 데이터를 추가하면<br>분석 차트가 표시됩니다</p>
+        </div>`:``}
+      </div>
+    </div>
+  </div>`;
+}
+
 // ===== VERSION BADGE UPDATE =====
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.2 Full-Stack · D1 Database · RBAC';
+  if(badge) badge.textContent = 'v8.3 Full-Stack · D1 Database · RBAC';
 })();
 
 // ================================================================

@@ -69,6 +69,9 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS leave_requests (id TEXT PRIMARY KEY, user_id TEXT DEFAULT '', user_name TEXT DEFAULT '', leave_type TEXT DEFAULT '연차', start_date TEXT DEFAULT '', end_date TEXT DEFAULT '', days REAL DEFAULT 1, reason TEXT DEFAULT '', status TEXT DEFAULT '작성중', reviewer TEXT DEFAULT '', reviewer_name TEXT DEFAULT '', reviewed_at TEXT DEFAULT '', reviewer_memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS leave_types (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT DEFAULT '일반휴가', default_days REAL DEFAULT 1, consumes_annual INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS design_items (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', view_type TEXT DEFAULT 'concept', title TEXT NOT NULL, category TEXT DEFAULT '', description TEXT DEFAULT '', image_data TEXT DEFAULT '', file_name TEXT DEFAULT '', status TEXT DEFAULT '진행중', tags TEXT DEFAULT '[]', assignee TEXT DEFAULT '', due_date TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, meta TEXT DEFAULT '{}', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS site_photos (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', category TEXT DEFAULT '일반', title TEXT DEFAULT '', description TEXT DEFAULT '', image_data TEXT DEFAULT '', file_name TEXT DEFAULT '', taken_date TEXT DEFAULT '', taken_by TEXT DEFAULT '', location TEXT DEFAULT '', tags TEXT DEFAULT '[]', phase TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS site_daily_logs (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', log_date TEXT DEFAULT '', weather TEXT DEFAULT '맑음', temperature TEXT DEFAULT '', summary TEXT DEFAULT '', work_details TEXT DEFAULT '[]', workers_count INTEGER DEFAULT 0, workers_detail TEXT DEFAULT '[]', equipment TEXT DEFAULT '[]', issues TEXT DEFAULT '', safety_check INTEGER DEFAULT 1, inspector TEXT DEFAULT '', progress_pct REAL DEFAULT 0, notes TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS site_issues (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', title TEXT NOT NULL, category TEXT DEFAULT '품질', severity TEXT DEFAULT '보통', status TEXT DEFAULT '발생', description TEXT DEFAULT '', location TEXT DEFAULT '', reported_by TEXT DEFAULT '', reported_date TEXT DEFAULT '', assigned_to TEXT DEFAULT '', due_date TEXT DEFAULT '', resolved_date TEXT DEFAULT '', resolution TEXT DEFAULT '', photos TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
   // Auto-migrate: add missing columns to existing tables
   const alterStmts = [
@@ -212,6 +215,9 @@ app.route('/api/erp-attachments', crud('erp_attachments'))
 app.route('/api/leave-requests', crud('leave_requests'))
 app.route('/api/leave-types', crud('leave_types'))
 app.route('/api/design-items', crud('design_items'))
+app.route('/api/site-photos', crud('site_photos'))
+app.route('/api/site-daily-logs', crud('site_daily_logs'))
+app.route('/api/site-issues', crud('site_issues'))
 // Settlement module
 app.route('/api/stl/projects', crud('stl_projects'))
 app.route('/api/stl/labor', crud('stl_labor_costs'))
