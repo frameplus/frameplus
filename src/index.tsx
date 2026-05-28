@@ -68,6 +68,7 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS stl_payments (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', description TEXT DEFAULT '', amount REAL DEFAULT 0, method TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS leave_requests (id TEXT PRIMARY KEY, user_id TEXT DEFAULT '', user_name TEXT DEFAULT '', leave_type TEXT DEFAULT '연차', start_date TEXT DEFAULT '', end_date TEXT DEFAULT '', days REAL DEFAULT 1, reason TEXT DEFAULT '', status TEXT DEFAULT '작성중', reviewer TEXT DEFAULT '', reviewer_name TEXT DEFAULT '', reviewed_at TEXT DEFAULT '', reviewer_memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS leave_types (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT DEFAULT '일반휴가', default_days REAL DEFAULT 1, consumes_annual INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS design_items (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', view_type TEXT DEFAULT 'concept', title TEXT NOT NULL, category TEXT DEFAULT '', description TEXT DEFAULT '', image_data TEXT DEFAULT '', file_name TEXT DEFAULT '', status TEXT DEFAULT '진행중', tags TEXT DEFAULT '[]', assignee TEXT DEFAULT '', due_date TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, meta TEXT DEFAULT '{}', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
   // Auto-migrate: add missing columns to existing tables
   const alterStmts = [
@@ -210,6 +211,7 @@ app.route('/api/erp-attachments', crud('erp_attachments'))
 // Leave management (연차 관리)
 app.route('/api/leave-requests', crud('leave_requests'))
 app.route('/api/leave-types', crud('leave_types'))
+app.route('/api/design-items', crud('design_items'))
 // Settlement module
 app.route('/api/stl/projects', crud('stl_projects'))
 app.route('/api/stl/labor', crud('stl_labor_costs'))

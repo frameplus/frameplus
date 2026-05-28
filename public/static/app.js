@@ -49,13 +49,14 @@ async function initData() {
   if (_initializing) return;
   _initializing = true;
   try {
-    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList, clients, erpAttachments] = await Promise.all([
+    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList, clients, erpAttachments, designItems] = await Promise.all([
       api('projects'), api('vendors'), api('meetings'), api('pricedb'),
       api('orders'), api('as'), api('notices'), api('tax'),
       api('templates'), api('team'), api('company'),
       api('labor'), api('expenses'), api('presets'),
       api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs'),
-      api('consultations'), api('rfp'), api('clients'), api('erp-attachments')
+      api('consultations'), api('rfp'), api('clients'), api('erp-attachments'),
+      api('design-items')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],
@@ -63,6 +64,7 @@ async function initData() {
       labor: labor||[], expenses: expenses||[], presets: presets||[],
       notifications: notifications||[], estTemplates: estTemplates||[], approvals: approvals||[],
       consultations: consultations||[], rfpList: rfpList||[], clients: clients||[], erpAttachments: erpAttachments||[],
+      designItems: designItems||[],
       userPrefs: (Array.isArray(userPrefs)?userPrefs[0]:userPrefs)||{} };
     // Apply dark mode from saved prefs
     if (_d.userPrefs?.dark_mode) applyDarkMode(true);
@@ -398,6 +400,13 @@ const PROJECT_NAV = [
     {id:'orders',label:'발주',icon:'truck'},
     {id:'collection',label:'수금',icon:'dollar'},
     {id:'labor',label:'노무비',icon:'users'},
+  ]},
+  { section:'디자인', icon:'🎨', items:[
+    {id:'design_concept',label:'컨셉보드',icon:'grid'},
+    {id:'design_drawing',label:'도면관리',icon:'file'},
+    {id:'design_material',label:'자재보드',icon:'tool'},
+    {id:'design_compare',label:'시안비교',icon:'eye'},
+    {id:'design_schedule',label:'디자인일정',icon:'activity'},
   ]},
   { section:'문서', icon:'📄', items:[
     {id:'contracts',label:'계약서',icon:'book'},
@@ -768,6 +777,11 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'erp_attachments':renderErpAttachments();break;
     case 'erp_report':renderErpReport();break;
     case 'settlement':renderSettlement();break;
+    case 'design_concept':renderDesignConcept();break;
+    case 'design_drawing':renderDesignDrawing();break;
+    case 'design_material':renderDesignMaterial();break;
+    case 'design_compare':renderDesignCompare();break;
+    case 'design_schedule':renderDesignSchedule();break;
     default:content.innerHTML=`<div class="card"><p>${page} 페이지</p></div>`;
   }
   // Close mobile menu on nav
@@ -8791,11 +8805,368 @@ function renderErpReport(){
   </div>`;
 }
 
+// ===== P4: DESIGN MODULE — 5 VIEWS =====
+function getDesignItems(pid,viewType){
+  return (_d.designItems||[]).filter(d=>d.pid===pid&&d.view_type===viewType);
+}
+function getAllDesignItems(pid){return (_d.designItems||[]).filter(d=>d.pid===pid);}
+async function loadDesignItems(){
+  try{const r=await api('design-items','GET');_d.designItems=r||[];}catch(e){_d.designItems=[];}
+}
+async function saveDesignItem(item){
+  await api('design-items','POST',item);
+  const idx=(_d.designItems||[]).findIndex(x=>x.id===item.id);
+  if(idx>=0)_d.designItems[idx]=item;else(_d.designItems=_d.designItems||[]).push(item);
+}
+async function deleteDesignItem(id){
+  await api('design-items/'+id,'DELETE');
+  _d.designItems=(_d.designItems||[]).filter(x=>x.id!==id);
+}
+
+const DESIGN_STATUSES=['아이디어','진행중','검토중','확정','보류'];
+const DESIGN_STATUS_COLORS={'아이디어':'#6366f1','진행중':'#3b82f6','검토중':'#f59e0b','확정':'#10b981','보류':'#6b7280'};
+
+// ── VIEW 1: 컨셉보드 ──
+function renderDesignConcept(){
+  const pid=S.selPid;const p=getProject(pid);if(!p){backToBoard();return;}
+  const items=getDesignItems(pid,'concept');
+  document.getElementById('tb-title').textContent='컨셉보드';
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-primary btn-sm" onclick="openAddDesignItem('concept','컨셉 이미지')">+ 컨셉 추가</button>`;
+  const cats=[...new Set(items.map(i=>i.category||'미분류'))];
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <div style="margin-bottom:16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:20px">🎨</span>
+      <span style="font-size:16px;font-weight:800">${escHtml(p.nm)} — 컨셉보드</span>
+      <span style="font-size:12px;color:var(--text-muted)">${items.length}개 항목</span>
+    </div>
+    ${cats.length===0?`<div class="empty-state" style="padding:60px"><div class="empty-state-icon">🎨</div><div class="empty-state-title">컨셉보드가 비어있습니다</div><div class="empty-state-desc">무드보드, 레퍼런스 이미지, 컬러 팔레트를 추가하세요</div><button class="btn btn-primary btn-sm" onclick="openAddDesignItem('concept','컨셉 이미지')">+ 컨셉 추가</button></div>`
+    :cats.map(cat=>`
+      <div style="margin-bottom:20px">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:8px;display:flex;align-items:center;gap:6px">
+          <span style="width:4px;height:16px;background:var(--primary);border-radius:2px;display:inline-block"></span>${cat}
+          <span style="font-size:11px;color:var(--text-muted)">(${items.filter(i=>(i.category||'미분류')===cat).length})</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px">
+          ${items.filter(i=>(i.category||'미분류')===cat).map(it=>`
+            <div class="card" style="padding:0;overflow:hidden;cursor:pointer;transition:var(--transition)" onclick="openEditDesignItem('${it.id}')" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='var(--shadow-md)'" onmouseout="this.style.transform='';this.style.boxShadow=''">
+              ${it.image_data?`<div style="height:140px;background:url('${it.image_data}') center/cover;border-bottom:1px solid var(--border)"></div>`
+              :`<div style="height:140px;background:var(--gray-100);display:flex;align-items:center;justify-content:center;font-size:32px;border-bottom:1px solid var(--border)">🖼️</div>`}
+              <div style="padding:10px">
+                <div style="font-size:12px;font-weight:700;margin-bottom:4px">${escHtml(it.title)}</div>
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span style="font-size:9px;padding:2px 6px;border-radius:6px;background:${DESIGN_STATUS_COLORS[it.status]||'#6b7280'}15;color:${DESIGN_STATUS_COLORS[it.status]||'#6b7280'};font-weight:600">${it.status||'진행중'}</span>
+                  ${it.assignee?`<span style="font-size:10px;color:var(--text-muted)">${it.assignee}</span>`:''}
+                </div>
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+// ── VIEW 2: 도면관리 ──
+function renderDesignDrawing(){
+  const pid=S.selPid;const p=getProject(pid);if(!p){backToBoard();return;}
+  const items=getDesignItems(pid,'drawing');
+  document.getElementById('tb-title').textContent='도면관리';
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-primary btn-sm" onclick="openAddDesignItem('drawing','도면')">+ 도면 추가</button>`;
+  const DRAWING_CATS=['평면도','천정도','입면도','상세도','전개도','설비도','기타'];
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+      <span style="font-size:20px">📐</span>
+      <span style="font-size:16px;font-weight:800">${escHtml(p.nm)} — 도면관리</span>
+    </div>
+    ${!items.length?`<div class="empty-state" style="padding:60px"><div class="empty-state-icon">📐</div><div class="empty-state-title">도면이 없습니다</div><div class="empty-state-desc">평면도, 천정도, 상세도 등을 등록하세요</div><button class="btn btn-primary btn-sm" onclick="openAddDesignItem('drawing','도면')">+ 도면 추가</button></div>`
+    :`<div class="tbl-wrap"><table class="tbl">
+      <thead><tr>
+        <th>구분</th><th>도면명</th><th>버전</th><th>담당</th><th>상태</th><th>수정일</th><th>작업</th>
+      </tr></thead>
+      <tbody>${items.map(it=>{
+        const meta=typeof it.meta==='string'?JSON.parse(it.meta||'{}'):it.meta||{};
+        return`<tr onclick="openEditDesignItem('${it.id}')" class="cursor-pointer">
+          <td><span style="font-size:10px;padding:2px 6px;border-radius:6px;background:var(--primary)10;color:var(--primary);font-weight:600">${it.category||'기타'}</span></td>
+          <td style="font-weight:700">${escHtml(it.title)}</td>
+          <td style="font-size:12px">${meta.version||'v1.0'}</td>
+          <td style="font-size:12px">${it.assignee||'-'}</td>
+          <td><span style="font-size:10px;padding:2px 6px;border-radius:6px;background:${DESIGN_STATUS_COLORS[it.status]||'#6b7280'}15;color:${DESIGN_STATUS_COLORS[it.status]||'#6b7280'};font-weight:600">${it.status||'진행중'}</span></td>
+          <td style="font-size:11px;color:var(--text-muted)">${it.updated_at?.split('T')[0]||it.created_at?.split('T')[0]||'-'}</td>
+          <td onclick="event.stopPropagation()">
+            <button class="btn btn-ghost btn-sm btn-icon" style="color:var(--red)" onclick="deleteDesignItem('${it.id}');renderDesignDrawing()" title="삭제">${svgIcon('trash',12)}</button>
+          </td>
+        </tr>`}).join('')}</tbody>
+    </table></div>`}
+  </div>`;
+}
+
+// ── VIEW 3: 자재보드 ──
+function renderDesignMaterial(){
+  const pid=S.selPid;const p=getProject(pid);if(!p){backToBoard();return;}
+  const items=getDesignItems(pid,'material');
+  document.getElementById('tb-title').textContent='자재보드';
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-primary btn-sm" onclick="openAddDesignItem('material','자재')">+ 자재 추가</button>`;
+  const MAT_CATS=['바닥재','벽체','천정','조명','가구','하드웨어','패브릭','기타'];
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+      <span style="font-size:20px">🧱</span>
+      <span style="font-size:16px;font-weight:800">${escHtml(p.nm)} — 자재보드</span>
+      <span style="font-size:12px;color:var(--text-muted)">${items.length}개</span>
+    </div>
+    ${!items.length?`<div class="empty-state" style="padding:60px"><div class="empty-state-icon">🧱</div><div class="empty-state-title">자재 목록이 비어있습니다</div><div class="empty-state-desc">선정 자재, 샘플, 가격 정보를 관리하세요</div><button class="btn btn-primary btn-sm" onclick="openAddDesignItem('material','자재')">+ 자재 추가</button></div>`
+    :`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+      ${items.map(it=>{
+        const meta=typeof it.meta==='string'?JSON.parse(it.meta||'{}'):it.meta||{};
+        return`<div class="card" style="padding:12px;cursor:pointer;border-left:3px solid ${DESIGN_STATUS_COLORS[it.status]||'#6b7280'}" onclick="openEditDesignItem('${it.id}')">
+          <div style="display:flex;gap:10px">
+            ${it.image_data?`<div style="width:60px;height:60px;border-radius:6px;background:url('${it.image_data}') center/cover;flex-shrink:0;border:1px solid var(--border)"></div>`
+            :`<div style="width:60px;height:60px;border-radius:6px;background:var(--gray-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:20px">🧱</div>`}
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:700;margin-bottom:2px">${escHtml(it.title)}</div>
+              <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px">${it.category||''} ${meta.vendor?'· '+meta.vendor:''}</div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${meta.price?`<span class="badge badge-green">₩${fmt(Number(meta.price))}</span>`:''}
+                ${meta.unit?`<span class="badge badge-gray">${meta.unit}</span>`:''}
+                <span style="font-size:9px;padding:2px 6px;border-radius:6px;background:${DESIGN_STATUS_COLORS[it.status]||'#6b7280'}15;color:${DESIGN_STATUS_COLORS[it.status]||'#6b7280'};font-weight:600">${it.status}</span>
+              </div>
+            </div>
+          </div>
+          ${it.description?`<div style="margin-top:6px;font-size:11px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(it.description)}</div>`:''}
+        </div>`}).join('')}
+    </div>`}
+  </div>`;
+}
+
+// ── VIEW 4: 시안비교 ──
+function renderDesignCompare(){
+  const pid=S.selPid;const p=getProject(pid);if(!p){backToBoard();return;}
+  const items=getDesignItems(pid,'compare');
+  document.getElementById('tb-title').textContent='시안비교';
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-primary btn-sm" onclick="openAddDesignItem('compare','시안')">+ 시안 추가</button>`;
+  // Group by category (e.g., 로비, 미팅룸, etc.)
+  const groups=[...new Set(items.map(i=>i.category||'전체'))];
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+      <span style="font-size:20px">🔍</span>
+      <span style="font-size:16px;font-weight:800">${escHtml(p.nm)} — 시안비교</span>
+    </div>
+    ${!items.length?`<div class="empty-state" style="padding:60px"><div class="empty-state-icon">🔍</div><div class="empty-state-title">시안이 없습니다</div><div class="empty-state-desc">공간별 시안 A/B를 등록하여 비교하세요</div><button class="btn btn-primary btn-sm" onclick="openAddDesignItem('compare','시안')">+ 시안 추가</button></div>`
+    :groups.map(grp=>{
+      const grpItems=items.filter(i=>(i.category||'전체')===grp);
+      return`<div style="margin-bottom:24px">
+        <div style="font-size:14px;font-weight:700;margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid var(--primary)">${grp}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px">
+          ${grpItems.map((it,idx)=>{
+            const meta=typeof it.meta==='string'?JSON.parse(it.meta||'{}'):it.meta||{};
+            const label=String.fromCharCode(65+idx); // A, B, C...
+            return`<div class="card" style="padding:0;overflow:hidden;position:relative;cursor:pointer" onclick="openEditDesignItem('${it.id}')">
+              <div style="position:absolute;top:8px;left:8px;z-index:1;width:28px;height:28px;border-radius:50%;background:${it.status==='확정'?'var(--success)':'var(--primary)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:800">${label}</div>
+              ${it.status==='확정'?`<div style="position:absolute;top:8px;right:8px;z-index:1;background:var(--success);color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700">✓ 확정</div>`:''}
+              ${it.image_data?`<div style="height:180px;background:url('${it.image_data}') center/cover"></div>`
+              :`<div style="height:180px;background:var(--gray-100);display:flex;align-items:center;justify-content:center;font-size:40px">🖼️</div>`}
+              <div style="padding:10px">
+                <div style="font-size:13px;font-weight:700">${escHtml(it.title)}</div>
+                ${it.description?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml(it.description)}</div>`:''}
+                ${meta.score?`<div style="margin-top:6px;display:flex;align-items:center;gap:4px">
+                  <span style="font-size:10px;color:var(--text-muted)">평점</span>
+                  <span style="font-size:13px;font-weight:800;color:var(--warning)">${meta.score}</span>
+                  <span style="font-size:10px;color:var(--text-muted)">/10</span>
+                </div>`:''}
+              </div>
+            </div>`}).join('')}
+        </div>
+      </div>`}).join('')}
+  </div>`;
+}
+
+// ── VIEW 5: 디자인 일정 ──
+function renderDesignSchedule(){
+  const pid=S.selPid;const p=getProject(pid);if(!p){backToBoard();return;}
+  const items=getDesignItems(pid,'schedule');
+  document.getElementById('tb-title').textContent='디자인 일정';
+  document.getElementById('tb-actions').innerHTML=`
+    <button class="btn btn-outline btn-sm" onclick="autoGenDesignSchedule('${pid}')">🤖 자동생성</button>
+    <button class="btn btn-primary btn-sm" onclick="openAddDesignItem('schedule','마일스톤')">+ 일정 추가</button>`;
+  const sorted=[...items].sort((a,b)=>(a.due_date||'').localeCompare(b.due_date||''));
+  document.getElementById('content').innerHTML=`
+  <div style="animation:fadeIn .4s ease">
+    <div style="margin-bottom:16px;display:flex;gap:8px;align-items:center">
+      <span style="font-size:20px">📅</span>
+      <span style="font-size:16px;font-weight:800">${escHtml(p.nm)} — 디자인 일정</span>
+    </div>
+    ${!sorted.length?`<div class="empty-state" style="padding:60px"><div class="empty-state-icon">📅</div><div class="empty-state-title">디자인 일정이 없습니다</div><div class="empty-state-desc">마일스톤을 등록하거나 자동생성하세요</div><div style="display:flex;gap:8px;justify-content:center;margin-top:12px"><button class="btn btn-primary btn-sm" onclick="autoGenDesignSchedule('${pid}')">🤖 자동생성</button><button class="btn btn-outline btn-sm" onclick="openAddDesignItem('schedule','마일스톤')">+ 직접 추가</button></div></div>`
+    :`<!-- Timeline -->
+    <div style="position:relative;padding-left:32px">
+      <div style="position:absolute;left:14px;top:0;bottom:0;width:2px;background:var(--gray-200)"></div>
+      ${sorted.map((it,i)=>{
+        const stColor=DESIGN_STATUS_COLORS[it.status]||'#6b7280';
+        const isLate=it.due_date&&it.due_date<today()&&it.status!=='확정';
+        return`<div style="position:relative;margin-bottom:16px;cursor:pointer" onclick="openEditDesignItem('${it.id}')">
+          <div style="position:absolute;left:-24px;top:4px;width:18px;height:18px;border-radius:50%;background:${it.status==='확정'?'var(--success)':stColor};display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 0 0 2px ${stColor}40">
+            <span style="font-size:8px;color:#fff;font-weight:800">${i+1}</span>
+          </div>
+          <div class="card" style="padding:12px;margin-left:8px;border-left:3px solid ${stColor};${isLate?'background:#fef2f2':''}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div>
+                <div style="font-size:13px;font-weight:700;${isLate?'color:var(--danger)':''}">${isLate?'⚠️ ':''}${escHtml(it.title)}</div>
+                ${it.description?`<div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml(it.description)}</div>`:''}
+              </div>
+              <span style="font-size:9px;padding:2px 8px;border-radius:10px;background:${stColor}15;color:${stColor};font-weight:600;flex-shrink:0">${it.status}</span>
+            </div>
+            <div style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--text-muted)">
+              ${it.due_date?`<span>📅 ${it.due_date}</span>`:''}
+              ${it.assignee?`<span>👤 ${it.assignee}</span>`:''}
+              ${it.category?`<span>📁 ${it.category}</span>`:''}
+            </div>
+          </div>
+        </div>`}).join('')}
+    </div>`}
+  </div>`;
+}
+
+// 디자인 일정 자동생성
+function autoGenDesignSchedule(pid){
+  const p=getProject(pid);if(!p)return;
+  const start=p.date||today();
+  const phases=[
+    {title:'현장실측 및 요구사항 정리',cat:'기획',days:0},
+    {title:'컨셉 기획 및 레퍼런스 수집',cat:'기획',days:3},
+    {title:'평면 레이아웃 (1차안)',cat:'설계',days:7},
+    {title:'평면 확정 및 고객 컨펌',cat:'설계',days:10},
+    {title:'3D 모델링 및 시안 제작',cat:'디자인',days:15},
+    {title:'시안 비교 및 최종안 선정',cat:'디자인',days:18},
+    {title:'자재 셀렉션 및 샘플 확인',cat:'자재',days:20},
+    {title:'실시설계 도면 작성',cat:'설계',days:25},
+    {title:'도면 최종 검토 및 발행',cat:'설계',days:28},
+    {title:'시공 착수 전 디자인 핸드오버',cat:'핸드오버',days:30},
+  ];
+  const items=phases.map((ph,i)=>({
+    id:uid(),pid,view_type:'schedule',title:ph.title,category:ph.cat,
+    status:i===0?'진행중':'아이디어',due_date:addDays(start,ph.days),
+    assignee:TEAM_MEMBERS[i%TEAM_MEMBERS.length]||'',sort_order:i,
+    description:'',image_data:'',file_name:'',tags:'[]',meta:'{}',
+    created_at:new Date().toISOString(),updated_at:new Date().toISOString()
+  }));
+  items.forEach(async it=>await saveDesignItem(it));
+  toast(`📅 ${items.length}개 디자인 마일스톤이 생성되었습니다`,'success');
+  setTimeout(()=>renderDesignSchedule(),500);
+}
+
+// ── 공통: 디자인 아이템 추가/편집 모달 ──
+function openAddDesignItem(viewType,label){
+  const pid=S.selPid;if(!pid)return;
+  const isSchedule=viewType==='schedule';
+  const isMaterial=viewType==='material';
+  const isCompare=viewType==='compare';
+  const catOptions=viewType==='drawing'?['평면도','천정도','입면도','상세도','전개도','설비도','기타']
+    :viewType==='material'?['바닥재','벽체','천정','조명','가구','하드웨어','패브릭','기타']
+    :viewType==='concept'?['무드보드','레퍼런스','컬러팔레트','마감재','공간계획','기타']
+    :viewType==='compare'?['로비','사무공간','회의실','휴게공간','임원실','기타']
+    :viewType==='schedule'?['기획','설계','디자인','자재','핸드오버','기타']
+    :['기타'];
+  openModal(`<div class="modal-bg"><div class="modal modal-md">
+    <div class="modal-hdr"><span class="modal-title">➕ ${label} 추가</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">제목 *</label><input class="inp" id="di_title" placeholder="${label} 이름"></div>
+        <div><label class="lbl">구분</label><select class="sel" id="di_cat">${catOptions.map(c=>`<option>${c}</option>`).join('')}</select></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">담당자</label><select class="sel" id="di_assign">${TEAM_MEMBERS.map(m=>`<option>${m}</option>`).join('')}</select></div>
+        <div><label class="lbl">상태</label><select class="sel" id="di_status">${DESIGN_STATUSES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+        ${isSchedule?`<div><label class="lbl">마감일</label><input class="inp" id="di_due" type="date"></div>`
+        :isMaterial?`<div><label class="lbl">단가</label><input class="inp" id="di_price" type="number" placeholder="50000"></div>`
+        :isCompare?`<div><label class="lbl">평점(1~10)</label><input class="inp" id="di_score" type="number" min="1" max="10" placeholder="8"></div>`
+        :`<div></div>`}
+      </div>
+      <div style="margin-bottom:12px"><label class="lbl">설명</label><textarea class="inp" id="di_desc" rows="2" placeholder="상세 설명..."></textarea></div>
+      ${!isSchedule?`<div style="margin-bottom:12px"><label class="lbl">이미지 (Base64 URL)</label><input class="inp" id="di_img" placeholder="data:image/...  또는 https://..."></div>`:''}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveNewDesignItem('${viewType}')">등록</button>
+    </div>
+  </div></div>`);
+}
+async function saveNewDesignItem(viewType){
+  const title=document.getElementById('di_title')?.value?.trim();
+  if(!title){toast('제목을 입력하세요','error');return;}
+  const meta={};
+  if(document.getElementById('di_price'))meta.price=Number(v('di_price')||0);
+  if(document.getElementById('di_score'))meta.score=Number(v('di_score')||0);
+  const item={
+    id:uid(),pid:S.selPid,view_type:viewType,title,
+    category:v('di_cat')||'',description:v('di_desc')||'',
+    image_data:document.getElementById('di_img')?.value||'',
+    status:v('di_status')||'진행중',assignee:v('di_assign')||'',
+    due_date:document.getElementById('di_due')?.value||'',
+    sort_order:0,tags:'[]',meta:JSON.stringify(meta),file_name:'',
+    created_at:new Date().toISOString(),updated_at:new Date().toISOString()
+  };
+  await saveDesignItem(item);closeModal();toast('등록되었습니다','success');
+  const viewMap={'concept':'design_concept','drawing':'design_drawing','material':'design_material','compare':'design_compare','schedule':'design_schedule'};
+  nav(viewMap[viewType]||'design_concept');
+}
+function openEditDesignItem(id){
+  const it=(_d.designItems||[]).find(x=>x.id===id);if(!it)return;
+  const meta=typeof it.meta==='string'?JSON.parse(it.meta||'{}'):it.meta||{};
+  const isSchedule=it.view_type==='schedule';
+  const isMaterial=it.view_type==='material';
+  const isCompare=it.view_type==='compare';
+  openModal(`<div class="modal-bg"><div class="modal modal-md">
+    <div class="modal-hdr"><span class="modal-title">✏️ 편집 — ${escHtml(it.title)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">제목</label><input class="inp" id="edi_title" value="${escHtml(it.title)}"></div>
+        <div><label class="lbl">구분</label><input class="inp" id="edi_cat" value="${it.category||''}"></div>
+      </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">담당자</label><select class="sel" id="edi_assign">${TEAM_MEMBERS.map(m=>`<option${it.assignee===m?' selected':''}>${m}</option>`).join('')}</select></div>
+        <div><label class="lbl">상태</label><select class="sel" id="edi_status">${DESIGN_STATUSES.map(s=>`<option${it.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+        ${isSchedule?`<div><label class="lbl">마감일</label><input class="inp" id="edi_due" type="date" value="${it.due_date||''}"></div>`
+        :isMaterial?`<div><label class="lbl">단가</label><input class="inp" id="edi_price" type="number" value="${meta.price||''}"></div>`
+        :isCompare?`<div><label class="lbl">평점(1~10)</label><input class="inp" id="edi_score" type="number" min="1" max="10" value="${meta.score||''}"></div>`
+        :`<div></div>`}
+      </div>
+      <div style="margin-bottom:12px"><label class="lbl">설명</label><textarea class="inp" id="edi_desc" rows="2">${it.description||''}</textarea></div>
+      ${!isSchedule?`<div style="margin-bottom:12px"><label class="lbl">이미지 URL</label><input class="inp" id="edi_img" value="${it.image_data||''}"></div>`:''}
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn" style="background:var(--danger);color:#fff" onclick="deleteDesignItem('${it.id}');closeModal();nav('design_${it.view_type}')">삭제</button>
+      <button class="btn btn-primary" onclick="saveEditDesignItemModal('${it.id}')">저장</button>
+    </div>
+  </div></div>`);
+}
+async function saveEditDesignItemModal(id){
+  const it=(_d.designItems||[]).find(x=>x.id===id);if(!it)return;
+  const meta=typeof it.meta==='string'?JSON.parse(it.meta||'{}'):it.meta||{};
+  if(document.getElementById('edi_price'))meta.price=Number(v('edi_price')||0);
+  if(document.getElementById('edi_score'))meta.score=Number(v('edi_score')||0);
+  Object.assign(it,{
+    title:v('edi_title')||it.title,category:v('edi_cat')||'',
+    assignee:v('edi_assign')||'',status:v('edi_status')||it.status,
+    description:v('edi_desc')||'',
+    image_data:document.getElementById('edi_img')?.value||it.image_data,
+    due_date:document.getElementById('edi_due')?.value||it.due_date||'',
+    meta:JSON.stringify(meta),updated_at:new Date().toISOString()
+  });
+  await saveDesignItem(it);closeModal();toast('저장되었습니다','success');
+  const viewMap={'concept':'design_concept','drawing':'design_drawing','material':'design_material','compare':'design_compare','schedule':'design_schedule'};
+  nav(viewMap[it.view_type]||'design_concept');
+}
+
 // ===== VERSION BADGE UPDATE =====
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.1 Full-Stack · D1 Database · RBAC';
+  if(badge) badge.textContent = 'v8.2 Full-Stack · D1 Database · RBAC';
 })();
 
 // ================================================================
