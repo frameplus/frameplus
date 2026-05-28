@@ -574,6 +574,7 @@ function svgIcon(name,size=14){
 // ===== SIDEBAR NAV =====
 const NAV=[
   {section:'메인'},
+  {id:'me',label:'내 페이지',icon:'user'},
   {id:'dash',label:'대시보드',icon:'home'},
   {section:'경영',adminOnly:true},
   {id:'exec_dash',label:'경영 현황',icon:'chart',adminOnly:true},
@@ -774,6 +775,7 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'vendors':renderVendors();break;
     case 'tax':renderTax();break;
     case 'as':renderAS();break;
+    case 'me':renderMe();break;
     case 'team':renderTeam();break;
     case 'leave':renderLeave();break;
     case 'labor':renderLabor();break;
@@ -6938,6 +6940,188 @@ async function doSendExpenseApproval(id){
     if(res?.success){closeModal();toast('✉️ 결재요청 이메일이 발송되었습니다!','success');}
     else toast('발송 실패: '+(res?.error||''),'error');
   }catch(err){toast('오류: '+err.message,'error');}
+}
+
+// ===== MY PAGE (내 페이지 — 노션 박관우 패턴) =====
+async function renderMe(){
+  const me = _authUser?.username || '';
+  const myName = _authUser?.name || me;
+  const role = _authUser?.role || 'staff';
+  const isAdmin = role === 'admin';
+  const today = new Date().toISOString().slice(0,10);
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0,10);
+  const in7Days = new Date(Date.now() + 7*86400000).toISOString().slice(0,10);
+
+  // Filter: meetings I'm assigned to or attending
+  const allMeetings = (_d.meetings || []);
+  const myMeetings = allMeetings.filter(m =>
+    (m.assignee||'').includes(myName) || (m.assignee||'').includes(me) ||
+    (m.contact||'').includes(myName)
+  );
+  const todayMeetings = myMeetings.filter(m => m.date === today);
+  const tomorrowMeetings = myMeetings.filter(m => m.date === tomorrow);
+  const upcomingMeetings = myMeetings.filter(m => m.date > today && m.date <= in7Days)
+    .sort((a,b) => (a.date||'').localeCompare(b.date||''))
+    .slice(0,8);
+
+  // Filter: projects assigned to me
+  const allProjects = getProjects();
+  const myProjects = allProjects.filter(p => {
+    const assignees = p.assignees || p.assignee || '';
+    if (Array.isArray(assignees)) return assignees.some(a => a===me || a===myName);
+    return String(assignees).includes(myName) || String(assignees).includes(me);
+  });
+  const activeProjects = myProjects.filter(p => (p.status||'') !== '완료' && (p.status||'') !== '취소').slice(0,8);
+
+  // Filter: expenses I requested
+  const myExpenses = (_d.expenses || []).filter(e =>
+    (e.requester||'').includes(myName) || (e.requester||'').includes(me)
+  ).sort((a,b)=>String(b.date||b.created_at||'').localeCompare(String(a.date||a.created_at||''))).slice(0,5);
+
+  // Filter: notifications for me
+  const myNotifications = (_d.notifications || []).filter(n =>
+    !n.to_user || n.to_user === me || n.to_user === myName || n.to_user === '*'
+  ).slice(0,5);
+
+  // Filter: notices (everyone)
+  const recentNotices = (_d.notices || []).slice().sort((a,b)=>(b.pinned||0)-(a.pinned||0)||String(b.date||b.created_at||'').localeCompare(String(a.date||a.created_at||''))).slice(0,3);
+
+  // Leave balance
+  let bal = null;
+  try { bal = await api('leave-balance/' + encodeURIComponent(me)); } catch(_) {}
+
+  // My approved/pending leaves
+  const myLeaves = (_d.leaveRequests || []).filter(r =>
+    r.user_id===me || r.user_name===myName || r.user_name===me
+  );
+  const pendingLeaves = myLeaves.filter(r => r.status==='신청' || r.status==='대기');
+
+  // My labor (worker_name match)
+  const myLabor = (_d.labor || []).filter(l => (l.worker_name||'').includes(myName));
+  const thisMonth = today.slice(0,7);
+  const monthLabor = myLabor.filter(l => String(l.date||'').slice(0,7) === thisMonth);
+  const monthLaborTotal = monthLabor.reduce((a,l)=>a+(Number(l.net_amount||l.total||0)),0);
+
+  const fmtKRW = (n)=> new Intl.NumberFormat('ko-KR').format(Math.round(Number(n)||0));
+  const meetingRow = (m) => `
+    <div style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border-light)">
+      <div style="min-width:56px;font-weight:600;color:var(--primary);font-size:13px">${escHtml(m.time||'-')}</div>
+      <div style="flex:1">
+        <div style="font-weight:600;font-size:13.5px;color:var(--text)">${escHtml(m.title||'-')}</div>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">${escHtml(m.client||'')} ${m.loc?'· '+escHtml(m.loc):''}</div>
+      </div>
+    </div>`;
+  const projRow = (p) => `
+    <div onclick="enterProject('${p.id}')" style="padding:10px 12px;border-radius:6px;cursor:pointer;border:1px solid var(--border-light);margin-bottom:6px;background:var(--card)">
+      <div style="font-weight:600;font-size:13px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.nm||p.name||'-')}</div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:3px">${escHtml(p.status||'-')} ${p.client?'· '+escHtml(p.client):''}</div>
+    </div>`;
+
+  document.getElementById('content').innerHTML = `
+    <div style="padding:24px;max-width:1200px;margin:0 auto">
+      <!-- Header -->
+      <div style="background:linear-gradient(135deg,var(--primary) 0%,#818CF8 100%);color:#fff;border-radius:14px;padding:24px 28px;margin-bottom:20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        <div style="width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700">${escHtml((myName||'?').slice(0,1))}</div>
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:22px;font-weight:700;letter-spacing:-.01em">${escHtml(myName)}</div>
+          <div style="font-size:13px;opacity:.85;margin-top:4px">${escHtml(role==='admin'?'관리자':'직원')} ${bal?.hire_date?' · 입사 '+escHtml(bal.hire_date):''}</div>
+        </div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap">
+          <div style="text-align:center"><div style="font-size:11px;opacity:.8">잔여 연차</div><div style="font-size:22px;font-weight:700">${bal?.remaining ?? '-'}<span style="font-size:13px;opacity:.8">일</span></div></div>
+          <div style="text-align:center"><div style="font-size:11px;opacity:.8">오늘 미팅</div><div style="font-size:22px;font-weight:700">${todayMeetings.length}<span style="font-size:13px;opacity:.8">건</span></div></div>
+          <div style="text-align:center"><div style="font-size:11px;opacity:.8">진행 프로젝트</div><div style="font-size:22px;font-weight:700">${activeProjects.length}<span style="font-size:13px;opacity:.8">건</span></div></div>
+          ${!isAdmin ? `<div style="text-align:center"><div style="font-size:11px;opacity:.8">이번달 인건비</div><div style="font-size:18px;font-weight:700">${fmtKRW(monthLaborTotal)}<span style="font-size:11px;opacity:.8">원</span></div></div>` : ''}
+        </div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px">
+        <button class="btn btn-outline" onclick="openLeaveRequestModal()">🏖️ 연차 신청</button>
+        <button class="btn btn-outline" onclick="nav('leave')">📋 연차 내역</button>
+        <button class="btn btn-outline" onclick="nav('meetings')">📅 미팅 캘린더</button>
+        <button class="btn btn-outline" onclick="nav('expenses')">💳 지출결의</button>
+        ${isAdmin ? '<button class="btn btn-outline" onclick="nav(\'approvals\')">⚖️ 결재함</button>' : ''}
+      </div>
+
+      <!-- Main Grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+
+        <!-- Today's Meetings -->
+        <div class="card">
+          <div class="card-title">🔴 오늘 미팅 (${todayMeetings.length})</div>
+          ${todayMeetings.length ? todayMeetings.map(meetingRow).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">오늘 미팅 없음</div>'}
+        </div>
+
+        <!-- Tomorrow's Meetings -->
+        <div class="card">
+          <div class="card-title">🟡 내일 미팅 (${tomorrowMeetings.length})</div>
+          ${tomorrowMeetings.length ? tomorrowMeetings.map(meetingRow).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">내일 미팅 없음</div>'}
+        </div>
+
+        <!-- Upcoming Meetings -->
+        <div class="card">
+          <div class="card-title">📅 다가오는 미팅 (7일 내, ${upcomingMeetings.length})</div>
+          ${upcomingMeetings.length ? upcomingMeetings.map(m=>`
+            <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12.5px">
+              <div style="min-width:80px;color:var(--text-muted)">${escHtml(m.date||'-')} ${escHtml(m.time||'')}</div>
+              <div style="flex:1">${escHtml(m.title||'-')}</div>
+            </div>`).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">예정된 미팅 없음</div>'}
+        </div>
+
+        <!-- My Active Projects -->
+        <div class="card">
+          <div class="card-title">📋 내 진행 프로젝트 (${activeProjects.length})</div>
+          ${activeProjects.length ? activeProjects.map(projRow).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">담당 프로젝트 없음</div>'}
+        </div>
+
+        <!-- My Leave Status -->
+        <div class="card">
+          <div class="card-title">🏖️ 내 연차 현황</div>
+          ${bal ? `
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px">
+            <div><div style="font-size:11px;color:var(--text-muted)">발생</div><div style="font-size:18px;font-weight:700;color:var(--primary)">${bal.accrued}일</div></div>
+            <div><div style="font-size:11px;color:var(--text-muted)">사용</div><div style="font-size:18px;font-weight:700">${bal.used}일</div></div>
+            <div><div style="font-size:11px;color:var(--text-muted)">잔여</div><div style="font-size:18px;font-weight:700;color:#10B981">${bal.remaining}일</div></div>
+          </div>` : '<div style="color:var(--text-muted);padding:8px 0;font-size:13px">잔여 연차 계산 불가 (입사일 미설정)</div>'}
+          ${pendingLeaves.length ? `<div style="font-size:12px;color:#92400E;background:#FEF3C7;padding:8px 10px;border-radius:6px">⏳ 결재 대기 ${pendingLeaves.length}건</div>` : ''}
+        </div>
+
+        <!-- My Recent Expenses -->
+        <div class="card">
+          <div class="card-title">💳 내 최근 지출결의 (${myExpenses.length})</div>
+          ${myExpenses.length ? myExpenses.map(e=>`
+            <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12.5px">
+              <div style="flex:1">
+                <div style="font-weight:500">${escHtml(e.title||e.category||'-')}</div>
+                <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml(e.date||'')} · ${escHtml(e.status||'대기')}</div>
+              </div>
+              <div style="text-align:right;font-weight:600">${fmtKRW(e.amount||0)}원</div>
+            </div>`).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">지출 내역 없음</div>'}
+        </div>
+
+        <!-- My Notifications -->
+        <div class="card">
+          <div class="card-title">🔔 내 알림 (${myNotifications.length})</div>
+          ${myNotifications.length ? myNotifications.map(n=>`
+            <div style="padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12.5px">
+              <div style="font-weight:500">${escHtml(n.title||'-')}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml(n.message||'').slice(0,80)}</div>
+            </div>`).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">새 알림 없음</div>'}
+        </div>
+
+        <!-- Company Notices -->
+        <div class="card">
+          <div class="card-title">📢 회사 공지 (${recentNotices.length})</div>
+          ${recentNotices.length ? recentNotices.map(n=>`
+            <div style="padding:8px 0;border-bottom:1px solid var(--border-light);font-size:12.5px">
+              <div style="font-weight:500">${n.pinned?'📌 ':''}${escHtml(n.title||'-')}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml((n.content||'').slice(0,80))}</div>
+            </div>`).join('') : '<div style="color:var(--text-muted);padding:16px 0;font-size:13px">공지 없음</div>'}
+        </div>
+
+      </div>
+    </div>
+  `;
 }
 
 // ===== LEAVE MANAGEMENT (연차 관리) =====
