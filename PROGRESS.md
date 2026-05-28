@@ -97,12 +97,28 @@
 - [x] **상태 시스템**: 아이디어/진행중/검토중/확정/보류 (5가지, 색상 구분)
 - [x] 버전 v8.2
 
+### P5: 현장관리 모듈 4개 뷰 (2026-05-28)
+- [x] **Backend**: `site_photos`, `site_daily_logs`, `site_issues` 3개 테이블 + CRUD API
+- [x] **PROJECT_NAV**: 현장 섹션 4개 메뉴 (현장사진/현장일지/이슈관리/현장분석)
+- [x] **View 1 — 현장사진** (`renderSitePhotos()`): 갤러리 그리드, 8개 카테고리 필터 (일반/시공전/시공중/시공후/하자/검수/안전/기타), 이미지 업로드/프리뷰, 상세보기 모달
+- [x] **View 2 — 현장일지** (`renderSiteDailyLog()`): 날짜별 카드 목록, 날씨/기온/공정률/투입인원/안전점검
+  - 월간 요약 KPI 4개 (일지수/투입인원/평균공정률/이슈발생)
+  - 작업내역 줄단위 입력, 장비/인원 상세, TODAY 뱃지
+- [x] **View 3 — 이슈관리** (`renderSiteIssues()`): 5단계 상태 필터 (발생/확인/처리중/해결/보류)
+  - 심각도 4단계 (낮음/보통/높음/긴급), 기한초과 감지
+  - 빠른 해결처리 (prompt로 해결방법 입력)
+  - 카테고리 7종 (품질/안전/공정/자재/설계/민원/기타)
+- [x] **View 4 — 현장분석** (`renderSiteAnalysis()`): 6개 KPI 카드 (공정률/일평균인원/미해결이슈/안전점검률/사진수/일지수)
+  - 공정률 추이 바 차트 (최근 7일)
+  - 인력 투입 바 차트 (최근 7일)
+  - 이슈 해결률 + 카테고리별 분포
+  - 사진 카테고리 분포
+- [x] **initData()에 3개 API 연결** — `_d.sitePhotos`, `_d.siteDailyLogs`, `_d.siteIssues`
+- [x] 버전 v8.3
+
 ---
 
 ## 🔲 미완료 / 다음 작업
-
-### P5: 현장 관리
-- [ ] 사진 관리, 분석 테이블
 
 ### P6: 프리셋 3-레벨 드릴다운 + PO Form
 - [ ] 프리셋 → 공종 → 항목 3단계 + 발주서 양식
@@ -119,16 +135,17 @@
 
 | 항목 | 수치 |
 |------|------|
-| src/index.tsx (백엔드) | ~1,735+ lines |
-| public/static/app.js (프론트) | ~10,100+ lines, 450+ functions |
-| D1 테이블 | 29개 (design_items 추가) |
-| API 엔드포인트 | 43+ |
-| 빌드 크기 | ~128 KB (_worker.js) |
+| src/index.tsx (백엔드) | ~1,740+ lines |
+| public/static/app.js (프론트) | ~10,760+ lines, 490+ functions |
+| D1 테이블 | 32개 (+site_photos, site_daily_logs, site_issues) |
+| API 엔드포인트 | 46+ |
+| 빌드 크기 | ~129 KB (_worker.js) |
 | 프로덕션 데이터 | 2,047+ 레코드 |
 
 ## 🔗 Git Log (최근)
 | 커밋 | 내용 |
 |------|------|
+| `bda8606` | P5: Site Management Module - 4 views (Photos/DailyLog/Issues/Analysis) |
 | `c55e286` | P4: 디자인 모듈 5개 뷰 (컨셉보드/도면관리/자재보드/시안비교/디자인일정) |
 | `e8f6258` | PROGRESS.md 업데이트: P2+P3 완료, P4~P8 잔여 |
 | `2fe0a89` | P3: 견적 프리뷰 6탭 + GANTT_PHASES 9단계 + 대금조건 탭 |
