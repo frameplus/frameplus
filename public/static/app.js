@@ -6454,6 +6454,13 @@ async function deleteLabor(id){
   renderLabor();toast('삭제되었습니다');
 }
 
+// ===== EXPENSE DETAIL (stub — route fallback) =====
+function renderExpenseDetail(){
+  // Fallback: redirect to expenses list since detail view is not implemented
+  S.subPage = null;
+  renderExpenses();
+}
+
 // ===== EXPENSES (지출결의서) =====
 function renderExpenses(){
   document.getElementById('tb-title').textContent='지출결의서';

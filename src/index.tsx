@@ -17,6 +17,18 @@ app.use('/api/*', async (c, next) => {
   await next()
 })
 
+// ===== AUTH MIDDLEWARE — protect all API routes except auth endpoints =====
+const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/logout', '/api/health', '/api/init']
+app.use('/api/*', async (c, next) => {
+  const path = new URL(c.req.url).pathname
+  if (PUBLIC_PATHS.some(p => path === p)) return next()
+  const sid = c.req.header('X-Session-Id') || ''
+  if (!sid) return c.json({ error: 'Unauthorized' }, 401)
+  const sess = await c.env.DB.prepare('SELECT * FROM sessions WHERE id = ? AND expires_at > ?').bind(sid, new Date().toISOString()).first()
+  if (!sess) return c.json({ error: 'Session expired' }, 401)
+  await next()
+})
+
 // ===== DB INIT =====
 async function ensureTables(db: D1Database) {
   // Auto-create tables if not exists (for first run)
@@ -305,6 +317,22 @@ app.post('/api/init', async (c) => {
 // Health check
 app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.0' }))
 
+// ===== PASSWORD HASHING (PBKDF2-SHA256) =====
+async function hashPassword(password: string, salt?: string): Promise<string> {
+  const enc = new TextEncoder()
+  const s = salt || crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+  const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode(s), iterations: 100000, hash: 'SHA-256' }, keyMaterial, 256)
+  const hash = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('')
+  return `pbkdf2:${s}:${hash}`
+}
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
+  if (!stored.startsWith('pbkdf2:')) return password === stored  // legacy plain-text fallback
+  const [, salt] = stored.split(':')
+  const hashed = await hashPassword(password, salt)
+  return hashed === stored
+}
+
 // ===== AUTH ENDPOINTS =====
 app.post('/api/auth/login', async (c) => {
   const db = c.env.DB
@@ -312,7 +340,14 @@ app.post('/api/auth/login', async (c) => {
   const { username, password } = await c.req.json()
   if (!username || !password) return c.json({ error: '아이디와 비밀번호를 입력하세요' }, 400)
   const user = await db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').bind(username).first() as Record<string, unknown> | null
-  if (!user || user.password !== password) return c.json({ error: '아이디 또는 비밀번호가 올바르지 않습니다' }, 401)
+  if (!user) return c.json({ error: '아이디 또는 비밀번호가 올바르지 않습니다' }, 401)
+  const passwordOk = await verifyPassword(password, user.password as string)
+  if (!passwordOk) return c.json({ error: '아이디 또는 비밀번호가 올바르지 않습니다' }, 401)
+  // Auto-upgrade plain-text password to PBKDF2 hash on successful login
+  if (!(user.password as string).startsWith('pbkdf2:')) {
+    const hashed = await hashPassword(password)
+    await db.prepare('UPDATE users SET password = ? WHERE id = ?').bind(hashed, user.id).run()
+  }
   // Create session (24h expiry)
   const sid = crypto.randomUUID()
   const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
@@ -352,8 +387,11 @@ app.post('/api/users', async (c) => {
   const db = c.env.DB
   const body = await c.req.json()
   const id = body.id || crypto.randomUUID()
+  // Hash password with PBKDF2 for new users / password updates
+  let pw = body.password || ''
+  if (pw && !pw.startsWith('pbkdf2:')) pw = await hashPassword(pw)
   await db.prepare('INSERT OR REPLACE INTO users (id, username, password, name, role, email, phone, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(
-    id, body.username, body.password, body.name || '', body.role || 'staff', body.email || '', body.phone || '', body.active ?? 1
+    id, body.username, pw, body.name || '', body.role || 'staff', body.email || '', body.phone || '', body.active ?? 1
   ).run()
   return c.json({ success: true, id })
 })
@@ -375,7 +413,8 @@ app.put('/api/users/:id/password', async (c) => {
   const id = c.req.param('id')
   const { password } = await c.req.json()
   if (!password || password.length < 4) return c.json({ error: '비밀번호는 4자 이상이어야 합니다' }, 400)
-  await db.prepare('UPDATE users SET password = ? WHERE id = ?').bind(password, id).run()
+  const hashed = await hashPassword(password)
+  await db.prepare('UPDATE users SET password = ? WHERE id = ?').bind(hashed, id).run()
   return c.json({ success: true })
 })
 
