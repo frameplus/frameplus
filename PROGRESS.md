@@ -1,6 +1,6 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-> 마지막 업데이트: 2026-05-28
+> 마지막 업데이트: 2026-05-29 (P7-A 완료)
 
 ---
 
@@ -132,13 +132,31 @@
 
 ---
 
+### P7-A: 버전·다크모드·접근성 폴리시 (2026-05-29)
+- [x] **버전 일관성 v8.5** — `/api/health`, CSS 헤더 주석, app.js 헤더(L1·L6), 로그인 footer(L122), 관리자 시스템 정보(L5785), 사이드바 sb-logo-ver, fs-badge, 우측 하단 badge(L10070) 모두 동기화
+- [x] **다크모드 19개 클래스 변형 추가** — kpi-card / card / filter-bar inp·sel / tbl td·wrap / est-section / gantt-wrap / cal-wrap·cell·day-hdr / cost-flow / badge-gray / empty-state / tab-btn·list / mobile-nav·item (P3~P6 신규 모듈 다크모드 완성)
+- [x] **접근성 향상** — `*:focus-visible` 글로벌 outline (WCAG 2.1 AA), input/select/textarea/button focus-visible outline 제거 (이중 outline 방지)
+
+---
+
 ## 🔲 미완료 / 다음 작업
 
-### P7: CSS/테스트/배포 최적화
-- [ ] UI 다듬기, 성능 개선
+### P7-B: 페이지네이션·서버사이드 필터 (다음 작업)
+- [ ] `/api/projects?limit=50&offset=0&q=&status=` 등 페이지네이션 파라미터
+- [ ] `_d` 메모리 캐시 → 페이지 단위 lazy load 전환 (2,047 레코드 모바일 로딩 단축)
+
+### P7-C: 모바일 반응형 점검 (375/768)
+- [ ] 칸반·PO 양식·디자인 모듈·현장관리 모바일 점검
+
+### P7-D: 스모크 테스트 + 재배포
+- [ ] CRUD 8개 모듈 + 로그인 + 인쇄/PDF 회귀 테스트
+- [ ] `npm run build` + Cloudflare Pages 재배포
 
 ### P8: 부가 모듈
-- [ ] 개인페이지, 회의 cron, 문의 폼, 휴가 워크플로우
+- [ ] `/me` 개인페이지 (RBAC 자기 직원만)
+- [ ] 미팅 D-1/당일 자동 이메일 Cron (Cloudflare Cron Triggers + Resend)
+- [ ] 외부 상담 폼 엔드포인트 `POST /api/inquiry` (인증 면제·허니팟·자동 후보일)
+- [ ] 연차 결재선 (leave_requests·1차→최종 워크플로·잔여연차 차감 트리거)
 
 ---
 

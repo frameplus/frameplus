@@ -360,7 +360,7 @@ app.post('/api/init', async (c) => {
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.0' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.5' }))
 
 // ===== PASSWORD HASHING (PBKDF2-SHA256) =====
 async function hashPassword(password: string, salt?: string): Promise<string> {
@@ -1233,7 +1233,7 @@ function getIndexHTML() {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
 <style>
-/* ===== FRAME PLUS ERP v7 - Pluuug-Inspired SaaS Design ===== */
+/* ===== FRAME PLUS ERP v8.5 - Pluuug-Inspired SaaS Design ===== */
 :root{
   --primary:#4F46E5;--primary-light:#EEF2FF;--primary-dark:#3730A3;--primary-50:#EEF2FF;--primary-100:#E0E7FF;--primary-500:#6366F1;--primary-600:#4F46E5;--primary-700:#4338CA;
   --gray-50:#F9FAFB;--gray-100:#F3F4F6;--gray-200:#E5E7EB;--gray-300:#D1D5DB;--gray-400:#9CA3AF;--gray-500:#6B7280;--gray-600:#4B5563;--gray-700:#374151;--gray-800:#1F2937;--gray-900:#111827;
@@ -1286,6 +1286,25 @@ html.dark .contract-doc{background:var(--card);color:var(--text)}
 html.dark .toast{background:var(--primary-600)}
 html.dark .btn-primary{background:var(--primary);color:#fff}
 html.dark .btn-outline{background:var(--card);border-color:var(--border);color:var(--text)}
+html.dark .kpi-card{background:var(--card);border-color:var(--border)}
+html.dark .card{background:var(--card);border-color:var(--border)}
+html.dark .filter-bar .inp,html.dark .filter-bar .sel{background:var(--gray-100);border-color:var(--gray-200);color:var(--text)}
+html.dark .tbl td{color:var(--text);border-color:var(--border)}
+html.dark .tbl-wrap{background:var(--card);border-color:var(--border)}
+html.dark .est-section{background:var(--card);border-color:var(--border)}
+html.dark .gantt-wrap{background:var(--card);border-color:var(--border)}
+html.dark .cal-wrap{background:var(--card);border-color:var(--border)}
+html.dark .cal-cell{border-color:var(--border)}
+html.dark .cal-day-hdr{background:var(--gray-100);border-color:var(--border);color:var(--text-muted)}
+html.dark .cost-flow{background:var(--card);border-color:var(--border)}
+html.dark .badge-gray{background:var(--gray-200);color:var(--gray-500)}
+html.dark .empty-state{color:var(--text-muted)}
+html.dark .tab-btn{color:var(--text-muted)}
+html.dark .tab-btn.active{color:var(--primary)}
+html.dark .tab-list{border-color:var(--border)}
+html.dark .mobile-nav{background:var(--card);border-color:var(--border)}
+html.dark .mobile-nav-item{color:var(--text-muted)}
+html.dark .mobile-nav-item.active{color:var(--primary)}
 
 /* ===== ANIMATIONS ===== */
 @keyframes shimmer{0%{opacity:.6}50%{opacity:.3}100%{opacity:.6}}
@@ -1302,6 +1321,8 @@ button{cursor:pointer;font-family:var(--font-sans)}
 input,select,textarea{font-family:var(--font-sans);font-size:13.5px}
 a{text-decoration:none;color:inherit}
 ::selection{background:var(--primary-100);color:var(--primary-700)}
+*:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:var(--radius-sm)}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible{outline:none}
 
 /* ===== LAYOUT ===== */
 #app{display:flex;height:100vh;overflow:hidden}
@@ -1676,7 +1697,7 @@ a{text-decoration:none;color:inherit}
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       </div>
       <span class="sb-logo-text">Frame Plus</span>
-      <span class="sb-logo-ver">v7</span>
+      <span class="sb-logo-ver">v8.5</span>
     </div>
     <button class="sb-toggle" onclick="toggleSidebar()" title="메뉴 접기">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -1729,7 +1750,7 @@ a{text-decoration:none;color:inherit}
     </button>
   </div>
 </div>
-<div class="fs-badge">v7 Full-Stack ERP</div>
+<div class="fs-badge">v8.5 Full-Stack ERP</div>
 <script src="/static/app.js"></script>
 </body>
 </html>`
