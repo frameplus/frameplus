@@ -32,35 +32,40 @@
 - [x] Migration API 구현 (`/api/notion/migrate/:target`) — 7개 타겟, merge/replace 모드
 - [x] Notion API 헬퍼 함수 구현 (nText, nSelect, nMultiSelect, nNumber, nDate 등)
 - [x] **ID 충돌 버그 수정** — `slice(0,12)` → 전체 UUID 사용 (32자 hex)
-- [x] 전체 재마이그레이션 완료 (로컬):
+- [x] **배치 처리 추가** — D1 subrequest 제한 해결 (batch_size/batch_offset)
+- [x] **프로덕션 마이그레이션 완료** — 전체 2,019 레코드, 에러 0
 
-| 테이블 | Notion 원본 | 마이그레이션 | 비고 |
-|--------|------------|------------|------|
-| projects | 133 | 133 | 공사진행상태, 프로젝트구분, 공사범위 포함 |
-| vendors | 224 | 224 | 업종, 계좌정보 포함 |
-| employees → users | 11 | 11 | 직책, 입사일 매핑, 비밀번호 자동생성 |
-| consultations | 34 | 34 | 개인정보동의, 마케팅동의 포함 |
-| expenses | 1,541 | 1,541 | VAT포함금액, 계산서여부 포함 |
+| 테이블 | Notion 원본 | 프로덕션 | 비고 |
+|--------|------------|---------|------|
+| projects | 133 | 153 (+20 기존) | 공사진행상태, 프로젝트구분, 공사범위 포함 |
+| vendors | 224 | 228 (+4 기존) | 업종, 계좌정보 포함 |
+| employees → users | 11 | 13 (+2 기존) | 직책, 입사일 매핑, 비밀번호 자동생성 |
+| consultations | 34 | 35 (+1 기존) | 개인정보동의, 마케팅동의 포함 |
+| expenses | 1,541 | 1,542 (+1 기존) | VAT포함금액, 계산서여부, 배치 처리(200건/batch) |
 | leave_requests | 68 | 68 | 승인상태 매핑 |
 | leave_types | 8 | 8 | 연차소비여부 포함 |
-| **합계** | **2,019** | **2,019** | |
+| **합계** | **2,019** | **2,047** | |
+
+- [x] NOTION_TOKEN Cloudflare secret 등록
+
+### P1: 프로젝트 상세 모드 개선 (2026-05-28)
+- [x] `dbToProject`/`projectToDb`에 Notion 신규 필드 추가 (projectType, constructionStatus, scopeTags)
+- [x] 프로젝트 목록 UI 개선:
+  - 프로젝트 구분 배지 (인테리어/리모델링/신축/부분시공/설계/AS — 컬러코딩)
+  - 공사 범위 태그 표시 (최대 3개 + overflow)
+  - 공사 상태 아이콘 (시공예정🟡/시공중🔵/시공완료🟢/하자보수🔴)
+- [x] Overview 헤더에 프로젝트 구분/공사 상태 배지 추가
+- [x] Overview 하단 2-컬럼 추가:
+  - 프로젝트 정보 상세 카드 (구분/상태/범위/주소/연락처/이메일/메모)
+  - 연관 상담 연결 (고객사명 매칭으로 상담 이력 표시)
+  - 최근 활동 타임라인 (발주/노무/지출 최근 5건)
+- [x] 프로젝트 추가/편집 모달에 새 필드 추가 (프로젝트구분, 공사상태, 공사범위)
+- [x] 검색 필터 확장 (프로젝트구분, 공사범위, 담당자도 검색)
+- [x] `projTypeBadge()`, `scopeTagBadges()`, `constrStatusBadge()` 헬퍼 함수
 
 ---
 
 ## 🔲 미완료 / 다음 작업
-
-### 즉시 (이번 세션)
-- [x] 빌드 후 users SELECT 쿼리 반영 확인
-- [x] ID 충돌 수정 후 전체 재마이그레이션
-- [ ] Cloudflare Pages 프로덕션 배포
-- [ ] NOTION_TOKEN Cloudflare secret 등록
-- [ ] 프로덕션 환경에서 마이그레이션 실행
-- [ ] 프로덕션 데이터 무결성 검증
-
-### P1: 프로젝트 상세 모드 (다음 단계)
-- [ ] PROJECT_NAV 네비게이션 (5개 탭: 개요/예산/공정/보고/첨부)
-- [ ] enterProject() 함수 구현
-- [ ] 4개 신규 뷰 (예산요약, 공정표, 보고서, 첨부파일)
 
 ### P2: 영업 모듈
 - [ ] 7단계 칸반 (상담→계약)
@@ -79,9 +84,17 @@
 
 | 항목 | 수치 |
 |------|------|
-| src/index.tsx (백엔드) | ~1,500+ lines |
-| public/static/app.js (프론트) | ~9,200+ lines, 380+ functions |
-| D1 테이블 | 28개 (+2: leave_requests, leave_types) |
+| src/index.tsx (백엔드) | ~1,550+ lines |
+| public/static/app.js (프론트) | ~9,300+ lines, 390+ functions |
+| D1 테이블 | 28개 |
 | API 엔드포인트 | 40+ |
 | 빌드 크기 | ~126 KB (_worker.js) |
-| Notion 마이그레이션 데이터 | 2,019 레코드 |
+| 프로덕션 데이터 | 2,047 레코드 |
+
+## 🔗 Git Log (최근)
+| 커밋 | 내용 |
+|------|------|
+| `c2aab8b` | P1: 프로젝트 상세 모드 개선 + Notion 필드 통합 |
+| `e9227f2` | Notion migration: 배치 처리 + 에러 로깅 |
+| `d0752ec` | Notion 연동: 스키마 정렬 + 데이터 마이그레이션 API + ID충돌 수정 |
+| `3187399` | CRITICAL: Auth middleware + PBKDF2 password hashing |
