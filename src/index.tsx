@@ -954,10 +954,12 @@ app.get('/api/notion/status', async (c) => {
 app.post('/api/notion/migrate/:target', async (c) => {
   const db = c.env.DB
   const target = c.req.param('target')
-  const body = await c.req.json() as { token?: string; mode?: string }
+  const body = await c.req.json() as { token?: string; mode?: string; batch_size?: number; batch_offset?: number }
   const token = body.token || c.env.NOTION_TOKEN || ''
   if (!token) return c.json({ error: 'Notion token required' }, 400)
   const mode = body.mode || 'merge' // merge=기존 유지+추가, replace=전체 교체
+  const batchSize = body.batch_size || 0 // 0 = all at once
+  const batchOffset = body.batch_offset || 0
 
   const dbId = (NOTION_DB_IDS as any)[target]
   if (!dbId) return c.json({ error: `Unknown target: ${target}` }, 400)
@@ -970,10 +972,17 @@ app.post('/api/notion/migrate/:target', async (c) => {
     cursor = page.has_more ? page.next_cursor : undefined
   } while (cursor)
 
+  const totalFetched = allResults.length
+  // Apply batch slicing if batch_size is set
+  if (batchSize > 0) {
+    allResults = allResults.slice(batchOffset, batchOffset + batchSize)
+  }
+
   let migrated = 0, skipped = 0, errors = 0
+  const errorSamples: string[] = []
 
   if (target === 'projects') {
-    if (mode === 'replace') await db.prepare('DELETE FROM projects WHERE id LIKE ?').bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare('DELETE FROM projects WHERE id LIKE ?').bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1005,12 +1014,12 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, nm, client, contact, email, loc, mgr, date, status, contract_status, construction_status, project_type, scope_tags, memo, gantt_tasks, r.created_time, r.last_edited_time
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
   else if (target === 'vendors') {
-    if (mode === 'replace') await db.prepare('DELETE FROM vendors WHERE id LIKE ?').bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare('DELETE FROM vendors WHERE id LIKE ?').bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1031,12 +1040,12 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, nm, contact, phone, addr, category, bank_info, memo, r.created_time
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
   else if (target === 'employees') {
-    if (mode === 'replace') await db.prepare("DELETE FROM users WHERE id LIKE ? AND id != 'admin-default'").bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare("DELETE FROM users WHERE id LIKE ? AND id != 'admin-default'").bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1061,12 +1070,12 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, username, pw, name, role, position, hire_date
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
   else if (target === 'consultations') {
-    if (mode === 'replace') await db.prepare('DELETE FROM consultations WHERE id LIKE ?').bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare('DELETE FROM consultations WHERE id LIKE ?').bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1091,12 +1100,12 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, client_name, client_phone, client_email, location, budget, area_text, status, privacy_agreed, marketing_agreed, notes, r.created_time, r.last_edited_time
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
   else if (target === 'expenses') {
-    if (mode === 'replace') await db.prepare('DELETE FROM expenses WHERE id LIKE ?').bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare('DELETE FROM expenses WHERE id LIKE ?').bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1119,12 +1128,12 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, title, amount, amount_vat, vendor, status, has_invoice, payment_due, memo, r.created_time
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
   else if (target === 'leave_requests') {
-    if (mode === 'replace') await db.prepare('DELETE FROM leave_requests WHERE id LIKE ?').bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare('DELETE FROM leave_requests WHERE id LIKE ?').bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1147,12 +1156,12 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, title, '연차', start_date, end_date || start_date, reason, status, reviewer, reviewer_memo, reviewed_at, r.created_time
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
   else if (target === 'leave_types') {
-    if (mode === 'replace') await db.prepare('DELETE FROM leave_types WHERE id LIKE ?').bind('notion-%').run()
+    if (mode === 'replace' && batchOffset === 0) await db.prepare('DELETE FROM leave_types WHERE id LIKE ?').bind('notion-%').run()
     for (const r of allResults) {
       try {
         const p = r.properties
@@ -1171,11 +1180,11 @@ app.post('/api/notion/migrate/:target', async (c) => {
           id, name, category, default_days, consumes_annual, r.created_time
         ).run()
         migrated++
-      } catch(e) { errors++ }
+      } catch(e: any) { errors++; if (errorSamples.length < 5) errorSamples.push(e?.message || String(e)) }
     }
   }
 
-  return c.json({ target, total: allResults.length, migrated, skipped, errors, mode })
+  return c.json({ target, total_fetched: totalFetched, batch_processed: allResults.length, migrated, skipped, errors, mode, ...(batchSize > 0 ? { batch_offset: batchOffset, batch_size: batchSize } : {}), ...(errorSamples.length > 0 ? { errorSamples: errorSamples.slice(0, 5) } : {}) })
 })
 
 // Notion DB ID lookup for direct iteration
