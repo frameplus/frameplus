@@ -1,6 +1,6 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-> 마지막 업데이트: 2026-05-29 (P7-A 완료)
+> 마지막 업데이트: 2026-05-29 (P7-A + P8-B 완료)
 
 ---
 
@@ -152,10 +152,21 @@
 - [ ] CRUD 8개 모듈 + 로그인 + 인쇄/PDF 회귀 테스트
 - [ ] `npm run build` + Cloudflare Pages 재배포
 
-### P8: 부가 모듈
+### P8-B: 외부 상담 폼 (2026-05-29 완료) ✅
+- [x] `POST /api/inquiry` 공개 라우트 (PUBLIC_PATHS 추가, 인증 면제)
+- [x] 허니팟 `_hp` 필드 — 스팸 봇 차단
+- [x] 필수 검증: 이름 + (연락처 또는 이메일), 개인정보 동의
+- [x] consultations 자동 적재 (source=website, status=신규, pipeline_stage=초기상담)
+- [x] 자동 미팅 후보일 추천 — 영업일 +2~+7 중 3건 (주말 제외)
+- [x] Resend 이메일 알림 → main@frameplus.kr (HTML 표 + 추천일 + ERP 링크)
+- [x] **공개 폼 HTML** — `public/inquiry.html` 즉시 임베드 가능
+  - URL: `https://frameplus-erp.pages.dev/inquiry.html`
+  - 모바일 반응형, 그라디언트 헤더, 동의 펼침 약관
+  - 자기 웹사이트에 iframe 임베드 또는 링크 공유 가능
+
+### P8 잔여
 - [ ] `/me` 개인페이지 (RBAC 자기 직원만)
 - [ ] 미팅 D-1/당일 자동 이메일 Cron (Cloudflare Cron Triggers + Resend)
-- [ ] 외부 상담 폼 엔드포인트 `POST /api/inquiry` (인증 면제·허니팟·자동 후보일)
 - [ ] 연차 결재선 (leave_requests·1차→최종 워크플로·잔여연차 차감 트리거)
 
 ---

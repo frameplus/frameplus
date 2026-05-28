@@ -18,7 +18,7 @@ app.use('/api/*', async (c, next) => {
 })
 
 // ===== AUTH MIDDLEWARE — protect all API routes except auth endpoints =====
-const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/logout', '/api/health', '/api/init']
+const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/logout', '/api/health', '/api/init', '/api/inquiry']
 app.use('/api/*', async (c, next) => {
   const path = new URL(c.req.url).pathname
   if (PUBLIC_PATHS.some(p => path === p)) return next()
@@ -1211,6 +1211,103 @@ app.post('/api/notion/migrate-all', async (c) => {
   // For migrate-all, we internally call the same logic per target
   // This avoids self-fetch which is problematic in Workers
   return c.json({ error: 'Use individual /api/notion/migrate/:target endpoints for each table, or call them sequentially from the frontend.' }, 400)
+})
+
+// ===== EXTERNAL INQUIRY FORM (public, no auth — for website embed) =====
+// POST body: { name, phone?, email?, company?, area_text?, budget_range?, requirements?, timeline?, privacy_agreed, marketing_agreed?, _hp? }
+app.post('/api/inquiry', async (c) => {
+  try {
+    const body = await c.req.json<any>()
+    // Honeypot — bots fill hidden _hp field, real users don't
+    if (body._hp) return c.json({ ok: true })
+    if (!body.name || (!body.phone && !body.email)) {
+      return c.json({ error: '이름과 (연락처 또는 이메일)은 필수입니다' }, 400)
+    }
+    if (!body.privacy_agreed) {
+      return c.json({ error: '개인정보 수집·이용 동의가 필요합니다' }, 400)
+    }
+    // Suggest 3 business days within +2~+7
+    const now = new Date()
+    const suggestions: string[] = []
+    const d = new Date(now)
+    for (let i = 0; i < 14 && suggestions.length < 3; i++) {
+      d.setDate(d.getDate() + 1)
+      const dow = d.getDay()
+      if (dow === 0 || dow === 6) continue
+      const offset = Math.ceil((d.getTime() - now.getTime()) / 86400000)
+      if (offset >= 2 && offset <= 7) suggestions.push(d.toISOString().slice(0, 10))
+    }
+    // Insert into consultations
+    const id = `inq-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
+    const now_iso = new Date().toISOString()
+    const notes = [
+      body.company ? `회사: ${body.company}` : '',
+      body.area_text ? `면적: ${body.area_text}` : '',
+      body.budget_range ? `예산: ${body.budget_range}` : '',
+      body.timeline ? `희망일정: ${body.timeline}` : '',
+      body.requirements ? `요구사항: ${body.requirements}` : ''
+    ].filter(Boolean).join('\n')
+    await c.env.DB.prepare(`
+      INSERT INTO consultations (
+        id, client_name, client_phone, client_email, client_contact,
+        source, status, pipeline_stage, notes,
+        privacy_agreed, marketing_agreed, area_text,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'website', '신규', '초기상담', ?, ?, ?, ?, ?, ?)
+    `).bind(
+      id,
+      String(body.name).slice(0, 80),
+      String(body.phone || '').slice(0, 40),
+      String(body.email || '').slice(0, 120),
+      String(body.company || '').slice(0, 120),
+      notes.slice(0, 4000),
+      body.privacy_agreed ? 1 : 0,
+      body.marketing_agreed ? 1 : 0,
+      String(body.area_text || '').slice(0, 40),
+      now_iso,
+      now_iso
+    ).run()
+    // Email notification (best-effort)
+    const apiKey = c.env.RESEND_API_KEY
+    if (apiKey) {
+      const esc = (s: any) => String(s || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!))
+      try {
+        await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            from: 'Frame Plus ERP <onboarding@resend.dev>',
+            to: ['main@frameplus.kr'],
+            subject: `[상담신청] ${esc(body.name)}${body.company ? ' / ' + esc(body.company) : ''}`,
+            html: `
+              <h2 style="font-family:sans-serif;color:#4F46E5">새 상담 신청</h2>
+              <table cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:14px;border:1px solid #E5E7EB">
+                <tr><td style="background:#F9FAFB"><b>이름</b></td><td>${esc(body.name)}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>연락처</b></td><td>${esc(body.phone || '-')}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>이메일</b></td><td>${esc(body.email || '-')}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>회사</b></td><td>${esc(body.company || '-')}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>면적</b></td><td>${esc(body.area_text || '-')}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>예산</b></td><td>${esc(body.budget_range || '-')}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>희망일정</b></td><td>${esc(body.timeline || '-')}</td></tr>
+                <tr><td style="background:#F9FAFB"><b>요구사항</b></td><td><pre style="white-space:pre-wrap;font-family:inherit;margin:0">${esc(body.requirements || '-')}</pre></td></tr>
+                <tr><td style="background:#F9FAFB"><b>마케팅 수신</b></td><td>${body.marketing_agreed ? '동의' : '미동의'}</td></tr>
+              </table>
+              <p style="margin-top:16px;font-family:sans-serif"><b>추천 미팅 후보일:</b> ${suggestions.join(', ') || '-'}</p>
+              <p style="font-family:sans-serif;margin-top:20px"><a href="https://frameplus-erp.pages.dev/" style="background:#4F46E5;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">ERP에서 상담 칸반 보기 →</a></p>
+            `
+          })
+        })
+      } catch (_) { /* ignore email errors */ }
+    }
+    return c.json({
+      ok: true,
+      id,
+      suggestedDates: suggestions,
+      message: '상담 신청이 접수되었습니다. 영업일 기준 1일 이내 연락드리겠습니다.'
+    })
+  } catch (e: any) {
+    return c.json({ error: e?.message || 'inquiry failed' }, 500)
+  }
 })
 
 // ===== SERVE FRONTEND =====
