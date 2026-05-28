@@ -10,5 +10,8 @@
       "database_name": "frameplus-erp-production",
       "database_id": "25dbe1fb-b659-41c8-9fa0-8c8c54280244"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": ["0 0 * * *"]
+  }
 }

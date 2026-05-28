@@ -1,6 +1,6 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-> 마지막 업데이트: 2026-05-29 (P7-A + P8-B + P8-D 완료)
+> 마지막 업데이트: 2026-05-29 (P7-A + P8-B + P8-D + P8-C 완료)
 
 ---
 
@@ -174,9 +174,16 @@
 - [x] **연차 신청 모달** — 6가지 유형(연차/반차/반반차/병가/경조사/공가), 시작·종료일·일수 자동 계산(주말 제외), 사유 입력
 - [x] **신청·승인·반려·취소 전체 사이클** + 잔여연차 자동 차감(승인된 연차/반차/반반차 SUM)
 
+### P8-C: 미팅 자동 이메일 Cron (2026-05-29 완료) ✅
+- [x] **wrangler.jsonc**: `triggers.crons: ["0 0 * * *"]` — 매일 UTC 00:00 = **KST 09:00 자동 실행**
+- [x] **scheduled handler** — `export default { fetch, scheduled }` 구조로 전환
+- [x] **runMeetingNotify(env)** — 오늘/내일 미팅 조회 → 활성 admin 사용자 email 수집 → Resend로 다이제스트 발송
+- [x] **HTML 이메일** — 오늘(빨강 하이라이트) / 내일(노랑 하이라이트) 분리, 시간·제목·고객·장소·담당자 표, ERP 바로가기 버튼
+- [x] **수동 트리거** — `POST /api/cron/meeting-notify` (admin 인증) — 즉시 테스트용
+- [x] 미팅 0건일 때 발송 스킵, Resend 실패 시 무시 (best-effort)
+
 ### P8 잔여
 - [ ] `/me` 개인페이지 (RBAC 자기 직원만)
-- [ ] 미팅 D-1/당일 자동 이메일 Cron (Cloudflare Cron Triggers + Resend)
 
 ---
 

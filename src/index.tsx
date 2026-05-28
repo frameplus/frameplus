@@ -1916,4 +1916,88 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 </html>`
 }
 
-export default app
+// ===== SCHEDULED: Meeting D-1 / D-day notification =====
+// Cron: "0 0 * * *" UTC = 09:00 KST (configured in wrangler.jsonc)
+// Sends one digest email to all active admin users listing today's & tomorrow's meetings.
+async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; tomorrowCount: number; sent: boolean }> {
+  const now = new Date()
+  const kst = new Date(now.getTime() + 9 * 3600 * 1000)
+  const today = kst.toISOString().slice(0, 10)
+  const tomorrow = new Date(kst.getTime() + 86400000).toISOString().slice(0, 10)
+  const meetings = await env.DB.prepare(
+    `SELECT id, title, date, time, client, contact, loc, status, assignee, memo
+     FROM meetings WHERE date IN (?, ?) AND COALESCE(status,'') != '취소'
+     ORDER BY date ASC, time ASC`
+  ).bind(today, tomorrow).all<any>()
+  const list = meetings.results || []
+  const todayList = list.filter((m: any) => m.date === today)
+  const tomorrowList = list.filter((m: any) => m.date === tomorrow)
+  if (list.length === 0) return { todayCount: 0, tomorrowCount: 0, sent: false }
+  let adminEmails: string[] = []
+  try {
+    const admins = await env.DB.prepare(
+      `SELECT email FROM users WHERE role='admin' AND COALESCE(active,1)=1 AND COALESCE(email,'') != ''`
+    ).all<any>()
+    adminEmails = (admins.results || []).map((a: any) => a.email).filter(Boolean)
+  } catch (_) { /* email column may not exist */ }
+  if (!env.RESEND_API_KEY || adminEmails.length === 0) {
+    return { todayCount: todayList.length, tomorrowCount: tomorrowList.length, sent: false }
+  }
+  const esc = (s: any) => String(s || '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!))
+  const rows = (l: any[]) => l.map((m: any) => `
+    <tr>
+      <td style="padding:6px;border-bottom:1px solid #E5E7EB;white-space:nowrap"><b>${esc(m.time || '-')}</b></td>
+      <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc(m.title)}</td>
+      <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc(m.client || '-')}</td>
+      <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc(m.loc || '-')}</td>
+      <td style="padding:6px;border-bottom:1px solid #E5E7EB">${esc(m.assignee || '-')}</td>
+    </tr>`).join('')
+  const html = `
+    <div style="font-family:'Pretendard','Noto Sans KR',sans-serif;max-width:680px;margin:0 auto;padding:20px">
+      <h2 style="color:#4F46E5;margin:0 0 8px 0">📅 미팅 알림 — ${today}</h2>
+      <p style="color:#6B7280;font-size:13px;margin:0 0 24px 0">오늘 ${todayList.length}건 / 내일 ${tomorrowList.length}건</p>
+      ${todayList.length ? `
+      <h3 style="margin:24px 0 8px 0;font-size:15px;color:#DC2626">🔴 오늘 미팅 (${todayList.length}건)</h3>
+      <table cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px;border:1px solid #E5E7EB;border-radius:6px;overflow:hidden">
+        <thead><tr style="background:#FEE2E2"><th style="padding:8px;text-align:left">시간</th><th style="padding:8px;text-align:left">제목</th><th style="padding:8px;text-align:left">고객</th><th style="padding:8px;text-align:left">장소</th><th style="padding:8px;text-align:left">담당</th></tr></thead>
+        <tbody>${rows(todayList)}</tbody>
+      </table>` : ''}
+      ${tomorrowList.length ? `
+      <h3 style="margin:24px 0 8px 0;font-size:15px;color:#D97706">🟡 내일 미팅 (${tomorrowList.length}건)</h3>
+      <table cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px;border:1px solid #E5E7EB;border-radius:6px;overflow:hidden">
+        <thead><tr style="background:#FEF3C7"><th style="padding:8px;text-align:left">시간</th><th style="padding:8px;text-align:left">제목</th><th style="padding:8px;text-align:left">고객</th><th style="padding:8px;text-align:left">장소</th><th style="padding:8px;text-align:left">담당</th></tr></thead>
+        <tbody>${rows(tomorrowList)}</tbody>
+      </table>` : ''}
+      <p style="margin-top:28px"><a href="https://frameplus-erp.pages.dev/" style="background:#4F46E5;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600">ERP에서 미팅 캘린더 보기 →</a></p>
+      <p style="color:#9CA3AF;font-size:11px;margin-top:24px">이 메일은 Frame Plus ERP가 매일 KST 09:00에 자동 발송합니다.</p>
+    </div>
+  `
+  try {
+    await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        from: 'Frame Plus ERP <onboarding@resend.dev>',
+        to: adminEmails,
+        subject: `[미팅 알림] 오늘 ${todayList.length}건 / 내일 ${tomorrowList.length}건`,
+        html
+      })
+    })
+    return { todayCount: todayList.length, tomorrowCount: tomorrowList.length, sent: true }
+  } catch (_) {
+    return { todayCount: todayList.length, tomorrowCount: tomorrowList.length, sent: false }
+  }
+}
+
+// Manual trigger (admin only via auth middleware) — for testing the digest immediately
+app.post('/api/cron/meeting-notify', async (c) => {
+  const result = await runMeetingNotify(c.env)
+  return c.json({ ok: true, ...result })
+})
+
+export default {
+  fetch: app.fetch,
+  scheduled: async (_event: any, env: Bindings, ctx: any) => {
+    ctx.waitUntil(runMeetingNotify(env))
+  }
+}
