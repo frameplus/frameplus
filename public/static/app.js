@@ -7144,62 +7144,198 @@ async function deleteConsultation(id){ await api('consultations/'+id,'DELETE'); 
 async function saveRfpItem(r){ await api('rfp','POST',r); const idx=(_d.rfpList||[]).findIndex(x=>x.id===r.id); if(idx>=0)_d.rfpList[idx]=r; else (_d.rfpList=_d.rfpList||[]).unshift(r); }
 async function deleteRfpItem(id){ await api('rfp/'+id,'DELETE'); _d.rfpList=(_d.rfpList||[]).filter(x=>x.id!==id); renderRfp(); toast('삭제되었습니다'); }
 
-// ===== CONSULTATION VIEW (상담 관리) =====
+// ===== CONSULTATION VIEW (상담 관리) — P2 칸반 파이프라인 =====
 const CONSULT_STATUSES=['신규','상담중','견적발송','계약완료','보류','실패'];
 const CONSULT_STATUS_COLORS={'신규':'var(--info)','상담중':'var(--primary)','견적발송':'var(--warning)','계약완료':'var(--success)','보류':'var(--gray-400)','실패':'var(--danger)'};
 const CONSULT_SOURCES=['온라인 문의','전화','소개','SNS','블로그','직접 방문','기타'];
 const PROJECT_TYPES=['사무실','카페·식당','매장·리테일','주거','병원·의원','학원·교육','기타'];
 
+// P2: 7단계 파이프라인
+const PIPELINE_STAGES=['초기상담','니즈파악','제안준비','제안완료','계약진행','실주','보류'];
+const PIPELINE_COLORS={
+  '초기상담':'#6366f1','니즈파악':'#3b82f6','제안준비':'#f59e0b',
+  '제안완료':'#8b5cf6','계약진행':'#10b981','실주':'#ef4444','보류':'#6b7280'
+};
+const PIPELINE_ICONS={'초기상담':'📞','니즈파악':'🔍','제안준비':'📝','제안완료':'📤','계약진행':'🤝','실주':'🏆','보류':'⏸️'};
+let _consultViewMode = 'kanban'; // 'kanban' | 'list'
+let _dragConsultId = null;
+
 function renderConsult(){
   const cs=getConsultations();
-  const statusCounts={};
-  CONSULT_STATUSES.forEach(s=>statusCounts[s]=cs.filter(c=>c.status===s).length);
+  // Auto-assign pipeline_stage from status for legacy data
+  cs.forEach(c=>{ if(!c.pipeline_stage) c.pipeline_stage = mapStatusToPipeline(c.status); });
+  const totalAmt=cs.reduce((a,c)=>a+(Number(c.expected_amount)||0),0);
+  const activeCount=cs.filter(c=>!['실주','보류'].includes(c.pipeline_stage)).length;
 
   document.getElementById('tb-actions').innerHTML=`
-    <button class="btn btn-outline btn-sm" onclick="exportConsultXLSX()">${svgIcon('download',12)} 엑셀</button>
-    <button class="btn btn-primary btn-sm" onclick="openAddConsult()">+ 신규 상담</button>`;
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-sm ${_consultViewMode==='kanban'?'btn-primary':'btn-outline'}" onclick="_consultViewMode='kanban';renderConsult()" title="칸반 보기">${svgIcon('grid',12)} 칸반</button>
+      <button class="btn btn-sm ${_consultViewMode==='list'?'btn-primary':'btn-outline'}" onclick="_consultViewMode='list';renderConsult()" title="리스트 보기">${svgIcon('list',12)} 리스트</button>
+      <span style="width:1px;height:20px;background:var(--border);margin:0 4px"></span>
+      <button class="btn btn-outline btn-sm" onclick="exportConsultXLSX()">${svgIcon('download',12)} 엑셀</button>
+      <button class="btn btn-primary btn-sm" onclick="openAddConsult()">+ 신규 상담</button>
+    </div>`;
+
+  // Pipeline KPIs
+  const stageCounts={};
+  PIPELINE_STAGES.forEach(s=>stageCounts[s]=cs.filter(c=>c.pipeline_stage===s).length);
+  const stageAmts={};
+  PIPELINE_STAGES.forEach(s=>stageAmts[s]=cs.filter(c=>c.pipeline_stage===s).reduce((a,c)=>a+(Number(c.expected_amount)||0),0));
 
   document.getElementById('content').innerHTML=`
   <div style="animation:fadeIn .4s ease">
-    <!-- Pipeline KPIs -->
-    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
-      ${CONSULT_STATUSES.map(s=>{
-        const cnt=statusCounts[s]||0;
-        const active=s==='전체'?true:false;
-        return `<button class="btn btn-sm ${cnt>0?'btn-outline':'btn-ghost'}" style="border-color:${CONSULT_STATUS_COLORS[s]};color:${CONSULT_STATUS_COLORS[s]};position:relative" onclick="filterConsultByStatus('${s}')">
-          ${s} <span style="background:${CONSULT_STATUS_COLORS[s]};color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px">${cnt}</span>
-        </button>`;
+    <!-- Pipeline Summary Bar -->
+    <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;align-items:stretch">
+      ${PIPELINE_STAGES.map(s=>{
+        const cnt=stageCounts[s]||0;
+        const amt=stageAmts[s]||0;
+        return `<div style="flex:1;min-width:120px;padding:10px 12px;border-radius:8px;background:${PIPELINE_COLORS[s]}10;border:1px solid ${PIPELINE_COLORS[s]}30;cursor:pointer;transition:var(--transition)" onclick="${_consultViewMode==='list'?`filterConsultByPipeline('${s}')`:''}">
+          <div style="display:flex;align-items:center;gap:4px;margin-bottom:4px">
+            <span style="font-size:14px">${PIPELINE_ICONS[s]}</span>
+            <span style="font-size:11px;font-weight:700;color:${PIPELINE_COLORS[s]}">${s}</span>
+          </div>
+          <div style="font-size:18px;font-weight:800;color:var(--text)">${cnt}<span style="font-size:11px;font-weight:400;color:var(--text-muted)">건</span></div>
+          ${amt?`<div style="font-size:10px;color:var(--text-muted)">${fmtShort(amt)}</div>`:''}
+        </div>`;
       }).join('')}
-      <button class="btn btn-sm btn-ghost" onclick="filterConsultByStatus('')" style="color:var(--text-muted)">전체 ${cs.length}</button>
     </div>
 
-    ${filterBar({searchId:'cs-search',statuses:CONSULT_STATUSES,statusId:'cs-status',placeholder:'고객명, 연락처 검색...',showDate:true,dateId:'cs-from',dateToId:'cs-to',onFilter:'filterConsultList()'})}
-
-    <div id="consult-list">
-      ${renderConsultCards(cs)}
-    </div>
+    ${_consultViewMode==='kanban' ? renderConsultKanban(cs) : renderConsultListView(cs)}
   </div>`;
+}
+
+function mapStatusToPipeline(status){
+  const map={'신규':'초기상담','상담중':'니즈파악','견적발송':'제안준비','계약완료':'실주','보류':'보류','실패':'보류'};
+  return map[status]||'초기상담';
+}
+
+// ── P2 칸반 보기 ──
+function renderConsultKanban(cs){
+  return `<div id="consult-kanban" style="display:flex;gap:10px;overflow-x:auto;padding-bottom:12px;min-height:500px">
+    ${PIPELINE_STAGES.map(stage=>{
+      const stageCards=cs.filter(c=>c.pipeline_stage===stage);
+      const color=PIPELINE_COLORS[stage];
+      return `<div class="kanban-col" data-stage="${stage}" style="min-width:240px;max-width:280px;flex:1;background:var(--gray-50);border-radius:10px;display:flex;flex-direction:column;border:2px solid transparent;transition:border-color .2s"
+        ondragover="event.preventDefault();this.style.borderColor='${color}';this.style.background='${color}08'"
+        ondragleave="this.style.borderColor='transparent';this.style.background='var(--gray-50)'"
+        ondrop="dropConsultCard(event,'${stage}');this.style.borderColor='transparent';this.style.background='var(--gray-50)'">
+        <!-- Column Header -->
+        <div style="padding:10px 12px 8px;display:flex;align-items:center;justify-content:space-between;border-bottom:2px solid ${color}">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:14px">${PIPELINE_ICONS[stage]}</span>
+            <span style="font-size:12px;font-weight:700;color:${color}">${stage}</span>
+            <span style="background:${color};color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700">${stageCards.length}</span>
+          </div>
+          <button class="btn btn-ghost btn-sm btn-icon" onclick="openAddConsultWithStage('${stage}')" title="이 단계에 추가" style="width:22px;height:22px;padding:0;color:${color}">+</button>
+        </div>
+        <!-- Cards -->
+        <div style="flex:1;padding:8px;overflow-y:auto;display:flex;flex-direction:column;gap:6px" data-stage="${stage}">
+          ${stageCards.length===0?`<div style="text-align:center;padding:30px 10px;color:var(--text-muted);font-size:11px">카드를 여기로<br>드래그하세요</div>`:''}
+          ${stageCards.map(c=>renderKanbanCard(c,color)).join('')}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>
+  <style>
+    .kanban-card{background:var(--bg);border-radius:8px;padding:10px 12px;cursor:grab;border:1px solid var(--border);transition:transform .15s,box-shadow .15s}
+    .kanban-card:hover{transform:translateY(-1px);box-shadow:var(--shadow-md)}
+    .kanban-card.dragging{opacity:.5;transform:rotate(2deg)}
+    .kanban-col{scrollbar-width:thin}
+    @media(max-width:768px){
+      #consult-kanban{flex-direction:column}
+      .kanban-col{min-width:100%!important;max-width:100%!important}
+    }
+  </style>`;
+}
+
+function renderKanbanCard(c,color){
+  const priorityIcon={'긴급':'🔴','높음':'🟠','보통':'🟡','낮음':'🟢'}[c.priority]||'🟡';
+  const amt=Number(c.expected_amount)||0;
+  return `<div class="kanban-card" draggable="true" data-id="${c.id}"
+    ondragstart="dragConsultStart(event,'${c.id}')" ondragend="dragConsultEnd(event)"
+    onclick="openEditConsult('${c.id}')">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+      <div style="font-size:13px;font-weight:700;color:var(--text);line-height:1.3">${escHtml(c.client_name||'(미입력)')}</div>
+      <span style="font-size:10px;flex-shrink:0">${priorityIcon}</span>
+    </div>
+    ${c.project_type||c.area?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px">
+      ${c.project_type?`<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:${color}15;color:${color};font-weight:600">${c.project_type}</span>`:''}
+      ${c.area?`<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--gray-100);color:var(--text-muted)">${c.area}평</span>`:''}
+      ${amt?`<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:var(--success-light,#d1fae5);color:var(--success);font-weight:600">${fmtShort(amt)}</span>`:''}
+    </div>`:''}
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--text-muted)">
+      <span>${c.assignee||'미배정'}</span>
+      <span>${c.date||''}</span>
+    </div>
+    ${c.next_date?`<div style="margin-top:3px;font-size:9px;padding:1px 6px;border-radius:6px;background:var(--warning-light);color:var(--warning);display:inline-block">다음: ${c.next_date}</div>`:''}
+  </div>`;
+}
+
+// ── 칸반 드래그앤드롭 ──
+function dragConsultStart(e, id){
+  _dragConsultId=id;
+  e.dataTransfer.effectAllowed='move';
+  e.dataTransfer.setData('text/plain',id);
+  setTimeout(()=>{ e.target.classList.add('dragging'); },0);
+}
+function dragConsultEnd(e){
+  e.target.classList.remove('dragging');
+  _dragConsultId=null;
+}
+async function dropConsultCard(e, newStage){
+  e.preventDefault();
+  const id=e.dataTransfer.getData('text/plain')||_dragConsultId;
+  if(!id) return;
+  const c=getConsultations().find(x=>x.id===id);
+  if(!c||c.pipeline_stage===newStage) return;
+  const oldStage=c.pipeline_stage;
+  c.pipeline_stage=newStage;
+  c.updated_at=new Date().toISOString();
+  // Map pipeline stage back to legacy status
+  const stageToStatus={'초기상담':'신규','니즈파악':'상담중','제안준비':'견적발송','제안완료':'견적발송','계약진행':'계약완료','실주':'계약완료','보류':'보류'};
+  c.status=stageToStatus[newStage]||c.status;
+  try{
+    await api('consultations','POST',c);
+    toast(`${oldStage} → ${newStage}로 이동`,'success');
+  }catch(err){
+    c.pipeline_stage=oldStage;
+    toast('단계 변경 실패','error');
+  }
+  renderConsult();
+}
+function openAddConsultWithStage(stage){
+  openAddConsult(stage);
+}
+
+// ── P2 리스트 보기 (기존 카드+필터 유지) ──
+function renderConsultListView(cs){
+  return `<div style="margin-bottom:12px">
+    ${filterBar({searchId:'cs-search',statuses:PIPELINE_STAGES,statusId:'cs-stage',placeholder:'고객명, 연락처 검색...',showDate:true,dateId:'cs-from',dateToId:'cs-to',onFilter:'filterConsultList()'})}
+  </div>
+  <div id="consult-list">${renderConsultCards(cs)}</div>`;
 }
 
 function renderConsultCards(cs){
   if(!cs.length) return '<div class="empty-state" style="padding:50px"><div class="empty-state-icon">📞</div><div class="empty-state-title">상담 내역이 없습니다</div><div class="empty-state-desc">새 상담을 등록하여 영업 파이프라인을 관리하세요</div><button class="btn btn-primary btn-sm" onclick="openAddConsult()">+ 신규 상담</button></div>';
   return `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px">
     ${cs.map(c=>{
-      const stColor=CONSULT_STATUS_COLORS[c.status]||'var(--gray-400)';
+      const stColor=PIPELINE_COLORS[c.pipeline_stage]||'var(--gray-400)';
       const priorityIcon={'긴급':'🔴','높음':'🟠','보통':'🟡','낮음':'🟢'}[c.priority]||'🟡';
+      const amt=Number(c.expected_amount)||0;
       return `<div class="card" style="padding:14px;border-left:3px solid ${stColor};cursor:pointer;transition:var(--transition)" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='var(--shadow-md)'" onmouseout="this.style.transform='';this.style.boxShadow=''" onclick="openEditConsult('${c.id}')">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div>
             <div style="font-size:14px;font-weight:700;color:var(--text)">${escHtml(c.client_name||'(미입력)')}</div>
             <div style="font-size:11px;color:var(--text-muted)">${c.client_phone||''} ${c.client_email?'· '+c.client_email:''}</div>
           </div>
-          <span style="background:${stColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${c.status}</span>
+          <span style="background:${stColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${PIPELINE_ICONS[c.pipeline_stage]||''} ${c.pipeline_stage}</span>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           ${c.project_type?`<span class="badge badge-blue">${c.project_type}</span>`:''}
           ${c.area?`<span class="badge badge-gray">${c.area}평</span>`:''}
           ${c.budget?`<span class="badge badge-green">${c.budget}</span>`:''}
           ${c.source?`<span class="badge badge-purple">${c.source}</span>`:''}
+          ${amt?`<span class="badge" style="background:var(--success-light,#d1fae5);color:var(--success)">${fmtShort(amt)}</span>`:''}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted)">
           <span>${priorityIcon} ${c.date||'-'} ${c.assignee?'· '+c.assignee:''}</span>
@@ -7214,24 +7350,29 @@ function renderConsultCards(cs){
 }
 
 function filterConsultByStatus(st){
-  if(document.getElementById('cs-status'))document.getElementById('cs-status').value=st;
+  if(document.getElementById('cs-stage'))document.getElementById('cs-stage').value=st;
+  filterConsultList();
+}
+function filterConsultByPipeline(stage){
+  if(document.getElementById('cs-stage'))document.getElementById('cs-stage').value=stage;
   filterConsultList();
 }
 function filterConsultList(){
   const q=(document.getElementById('cs-search')?.value||'').toLowerCase();
-  const st=document.getElementById('cs-status')?.value||'';
+  const st=document.getElementById('cs-stage')?.value||'';
   const df=document.getElementById('cs-from')?.value||'';
   const dt=document.getElementById('cs-to')?.value||'';
   let cs=getConsultations().filter(c=>{
     const text=!q||(c.client_name+c.client_phone+c.client_email+c.notes+c.location).toLowerCase().includes(q);
-    const status=!st||c.status===st;
+    const stageOk=!st||c.pipeline_stage===st;
     const dateOk=(!df||c.date>=df)&&(!dt||c.date<=dt);
-    return text&&status&&dateOk;
+    return text&&stageOk&&dateOk;
   });
   document.getElementById('consult-list').innerHTML=renderConsultCards(cs);
 }
 
-function openAddConsult(){
+function openAddConsult(initialStage){
+  const stage=initialStage||'초기상담';
   openModal(`<div class="modal-bg"><div class="modal modal-lg">
     <div class="modal-hdr"><span class="modal-title">📞 신규 상담 등록</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -7251,14 +7392,16 @@ function openAddConsult(){
         <div><label class="lbl">상담일</label><input class="inp" id="cs_date" type="date" value="${today()}"></div>
         <div><label class="lbl">담당자</label><select class="sel" id="cs_assign">${TEAM_MEMBERS.map(m=>`<option>${m}</option>`).join('')}</select></div>
       </div>
-      <div class="form-row form-row-2" style="margin-bottom:12px">
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">파이프라인 단계</label><select class="sel" id="cs_pipeline">${PIPELINE_STAGES.map(s=>`<option${s===stage?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div><label class="lbl">예상 금액</label><input class="inp" id="cs_amount" type="number" placeholder="50000000"></div>
         <div><label class="lbl">우선순위</label><select class="sel" id="cs_priority"><option>보통</option><option>긴급</option><option>높음</option><option>낮음</option></select></div>
-        <div><label class="lbl">상태</label><select class="sel" id="cs_status">${CONSULT_STATUSES.map(s=>`<option>${s}</option>`).join('')}</select></div>
       </div>
       <div style="margin-bottom:12px"><label class="lbl">상담 내용</label><textarea class="inp" id="cs_notes" rows="3" placeholder="상담 내용을 기록하세요..."></textarea></div>
-      <div class="form-row form-row-2">
+      <div class="form-row form-row-3">
         <div><label class="lbl">다음 액션</label><input class="inp" id="cs_next" placeholder="견적서 발송, 현장미팅 등"></div>
         <div><label class="lbl">다음 일정</label><input class="inp" id="cs_next_date" type="date"></div>
+        <div><label class="lbl">예상 계약일</label><input class="inp" id="cs_close_date" type="date"></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -7270,12 +7413,17 @@ function openAddConsult(){
 async function saveNewConsult(){
   const name=document.getElementById('cs_client')?.value?.trim();
   if(!name){toast('고객명을 입력하세요','error');return;}
+  const pipelineStage=v('cs_pipeline')||'초기상담';
+  const stageToStatus={'초기상담':'신규','니즈파악':'상담중','제안준비':'견적발송','제안완료':'견적발송','계약진행':'계약완료','실주':'계약완료','보류':'보류'};
   const c={
     id:uid(), client_name:name, client_phone:v('cs_phone'), client_email:v('cs_email'),
     source:v('cs_source'), project_type:v('cs_type'), area:Number(v('cs_area')||0),
     budget:v('cs_budget'), location:v('cs_loc'), date:v('cs_date'),
-    assignee:v('cs_assign'), status:v('cs_status')||'신규', notes:v('cs_notes'),
-    next_action:v('cs_next'), next_date:v('cs_next_date'), priority:v('cs_priority')||'보통',
+    assignee:v('cs_assign'), status:stageToStatus[pipelineStage]||'신규',
+    pipeline_stage:pipelineStage, expected_amount:Number(v('cs_amount')||0),
+    expected_close_date:v('cs_close_date')||'',
+    notes:v('cs_notes'), next_action:v('cs_next'), next_date:v('cs_next_date'),
+    priority:v('cs_priority')||'보통',
     created_at:new Date().toISOString(), updated_at:new Date().toISOString()
   };
   await saveConsultation(c);closeModal();toast('상담이 등록되었습니다','success');renderConsult();
@@ -7283,8 +7431,14 @@ async function saveNewConsult(){
 
 function openEditConsult(id){
   const c=getConsultations().find(x=>x.id===id);if(!c)return;
+  if(!c.pipeline_stage) c.pipeline_stage=mapStatusToPipeline(c.status);
+  const stageColor=PIPELINE_COLORS[c.pipeline_stage]||'#6b7280';
   openModal(`<div class="modal-bg"><div class="modal modal-lg">
-    <div class="modal-hdr"><span class="modal-title">📞 상담 편집 — ${escHtml(c.client_name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-hdr">
+      <span class="modal-title">📞 상담 편집 — ${escHtml(c.client_name)}</span>
+      <span style="background:${stageColor};color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;margin-left:8px">${PIPELINE_ICONS[c.pipeline_stage]||''} ${c.pipeline_stage}</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
     <div class="modal-body">
       <div class="form-row form-row-3" style="margin-bottom:12px">
         <div><label class="lbl">고객명 *</label><input class="inp" id="ec_client" value="${escHtml(c.client_name||'')}"></div>
@@ -7302,9 +7456,16 @@ function openEditConsult(id){
         <div><label class="lbl">상담일</label><input class="inp" id="ec_date" type="date" value="${c.date||''}"></div>
         <div><label class="lbl">담당자</label><select class="sel" id="ec_assign">${TEAM_MEMBERS.map(m=>`<option${c.assignee===m?' selected':''}>${m}</option>`).join('')}</select></div>
       </div>
-      <div class="form-row form-row-2" style="margin-bottom:12px">
-        <div><label class="lbl">우선순위</label><select class="sel" id="ec_priority"><option${c.priority==='보통'?' selected':''}>보통</option><option${c.priority==='긴급'?' selected':''}>긴급</option><option${c.priority==='높음'?' selected':''}>높음</option><option${c.priority==='낮음'?' selected':''}>낮음</option></select></div>
-        <div><label class="lbl">상태</label><select class="sel" id="ec_status">${CONSULT_STATUSES.map(s=>`<option${c.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+      <!-- P2: 파이프라인 단계 & 금액 -->
+      <div style="padding:10px 12px;background:${stageColor}08;border:1px solid ${stageColor}25;border-radius:8px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:${stageColor};margin-bottom:8px">📊 영업 파이프라인</div>
+        <div class="form-row form-row-4">
+          <div><label class="lbl">파이프라인 단계</label><select class="sel" id="ec_pipeline">${PIPELINE_STAGES.map(s=>`<option${c.pipeline_stage===s?' selected':''}>${s}</option>`).join('')}</select></div>
+          <div><label class="lbl">예상 금액</label><input class="inp" id="ec_amount" type="number" value="${c.expected_amount||''}"></div>
+          <div><label class="lbl">예상 계약일</label><input class="inp" id="ec_close_date" type="date" value="${c.expected_close_date||''}"></div>
+          <div><label class="lbl">우선순위</label><select class="sel" id="ec_priority"><option${c.priority==='보통'?' selected':''}>보통</option><option${c.priority==='긴급'?' selected':''}>긴급</option><option${c.priority==='높음'?' selected':''}>높음</option><option${c.priority==='낮음'?' selected':''}>낮음</option></select></div>
+        </div>
+        ${c.pipeline_stage==='보류'?`<div style="margin-top:8px"><label class="lbl">보류/실패 사유</label><input class="inp" id="ec_lost" value="${c.lost_reason||''}"></div>`:''}
       </div>
       <div style="margin-bottom:12px"><label class="lbl">상담 내용</label><textarea class="inp" id="ec_notes" rows="3">${c.notes||''}</textarea></div>
       <div class="form-row form-row-2">
@@ -7321,13 +7482,18 @@ function openEditConsult(id){
 }
 async function saveEditConsultItem(id){
   const c=getConsultations().find(x=>x.id===id);if(!c)return;
+  const pipelineStage=v('ec_pipeline')||c.pipeline_stage||'초기상담';
+  const stageToStatus={'초기상담':'신규','니즈파악':'상담중','제안준비':'견적발송','제안완료':'견적발송','계약진행':'계약완료','실주':'계약완료','보류':'보류'};
   Object.assign(c,{
     client_name:v('ec_client'),client_phone:v('ec_phone'),client_email:v('ec_email'),
     source:v('ec_source'),project_type:v('ec_type'),area:Number(v('ec_area')||0),
     budget:v('ec_budget'),location:v('ec_loc'),date:v('ec_date'),
-    assignee:v('ec_assign'),status:v('ec_status'),notes:v('ec_notes'),
-    next_action:v('ec_next'),next_date:v('ec_next_date'),priority:v('ec_priority'),
-    updated_at:new Date().toISOString()
+    assignee:v('ec_assign'),status:stageToStatus[pipelineStage]||c.status,
+    pipeline_stage:pipelineStage,expected_amount:Number(v('ec_amount')||0),
+    expected_close_date:v('ec_close_date')||'',
+    lost_reason:document.getElementById('ec_lost')?.value||c.lost_reason||'',
+    notes:v('ec_notes'),next_action:v('ec_next'),next_date:v('ec_next_date'),
+    priority:v('ec_priority'),updated_at:new Date().toISOString()
   });
   await saveConsultation(c);closeModal();toast('저장되었습니다','success');renderConsult();
 }
@@ -7384,27 +7550,31 @@ function renderRfp(){
 
 function renderRfpTable(rs){
   if(!rs.length) return '<div class="empty-state" style="padding:50px"><div class="empty-state-icon">📋</div><div class="empty-state-title">RFP 내역이 없습니다</div><div class="empty-state-desc">입찰·제안 요청을 등록하여 영업 성과를 추적하세요</div><button class="btn btn-primary btn-sm" onclick="openAddRfp()">+ RFP 등록</button></div>';
+  function tryP(s,d){if(!s)return d;if(typeof s==='object')return s;try{return JSON.parse(s)}catch{return d}}
   return `<div class="tbl-wrap">
     <table class="tbl">
       <thead><tr>
-        <th>프로젝트명</th><th>고객사</th><th>예산 범위</th><th>면적</th><th>마감일</th><th>수주확률</th><th>담당</th><th>상태</th><th>작업</th>
+        <th>프로젝트명</th><th>고객사</th><th>예산 범위</th><th>마감일</th><th>수주확률</th><th>평가</th><th>Go/NoGo</th><th>팀·경쟁</th><th>상태</th><th>작업</th>
       </tr></thead>
       <tbody>
         ${rs.map(r=>{
           const stColor=RFP_STATUS_COLORS[r.status]||'var(--gray-400)';
           const daysLeft=r.deadline?diffDays(today(),r.deadline):null;
           const urgent=daysLeft!==null&&daysLeft<=3&&daysLeft>=0&&!['수주','탈락','취소'].includes(r.status);
+          const team=tryP(r.team_members,[]);
+          const comp=tryP(r.competitors,[]);
+          const goColor={'Go':'var(--success)','NoGo':'var(--danger)','검토중':'var(--warning)'}[r.go_nogo]||'var(--text-muted)';
           return `<tr style="${urgent?'background:var(--warning-light)':''}" onclick="openEditRfp('${r.id}')" class="cursor-pointer">
             <td>
               <div style="font-weight:700;font-size:13px">${escHtml(r.title||'(미입력)')}</div>
-              <div style="font-size:11px;color:var(--text-muted)">${r.project_type||''} ${r.location?'· '+r.location:''}</div>
+              <div style="font-size:11px;color:var(--text-muted)">${r.project_type||''} ${r.location?'· '+r.location:''} ${r.area?'· '+r.area+'평':''}</div>
             </td>
             <td>${escHtml(r.client_name||'-')}</td>
             <td style="font-weight:600;font-size:12px">${r.budget_min||r.budget_max?fmtShort(r.budget_min||0)+' ~ '+fmtShort(r.budget_max||0):'-'}</td>
-            <td>${r.area?r.area+'평':'-'}</td>
             <td>
               <div style="font-size:12px">${r.deadline||'-'}</div>
               ${daysLeft!==null&&!['수주','탈락','취소'].includes(r.status)?`<div style="font-size:10px;color:${daysLeft<=3?'var(--danger)':daysLeft<=7?'var(--warning)':'var(--text-muted)'};font-weight:600">${daysLeft<0?'마감 초과':daysLeft===0?'오늘 마감':'D-'+daysLeft}</div>`:''}
+              ${r.presentation_date?`<div style="font-size:9px;color:var(--purple,#8b5cf6)">PT: ${r.presentation_date}</div>`:''}
             </td>
             <td>
               <div style="display:flex;align-items:center;gap:4px">
@@ -7412,7 +7582,17 @@ function renderRfpTable(rs){
                 <span style="font-size:11px;font-weight:700">${r.win_probability||0}%</span>
               </div>
             </td>
-            <td style="font-size:12px">${r.assignee||'-'}</td>
+            <td>
+              ${r.evaluation_score?`<span style="font-size:12px;font-weight:700;color:${r.evaluation_score>=80?'var(--success)':r.evaluation_score>=60?'var(--warning)':'var(--danger)'}">${r.evaluation_score}점</span>`:`<span style="font-size:11px;color:var(--text-muted)">-</span>`}
+            </td>
+            <td>
+              ${r.go_nogo?`<span style="font-size:10px;font-weight:700;color:${goColor};padding:2px 6px;border-radius:6px;background:${goColor}15">${r.go_nogo}</span>`:`<span style="font-size:11px;color:var(--text-muted)">미정</span>`}
+            </td>
+            <td style="font-size:11px">
+              ${team.length?`<div style="color:var(--primary)">${svgIcon('user',10)} ${team.slice(0,2).join(', ')}${team.length>2?' +..':''}</div>`:''}
+              ${comp.length?`<div style="color:var(--danger);margin-top:2px">${svgIcon('shield',10)} ${comp.slice(0,2).join(', ')}${comp.length>2?' +':''}</div>`:''}
+              ${!team.length&&!comp.length?'-':''}
+            </td>
             <td><span style="background:${stColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${r.status}</span></td>
             <td onclick="event.stopPropagation()">
               <div style="display:flex;gap:4px">
@@ -7461,9 +7641,23 @@ function openAddRfp(){
         <div><label class="lbl">담당자</label><select class="sel" id="rf_assign">${TEAM_MEMBERS.map(m=>`<option>${m}</option>`).join('')}</select></div>
         <div><label class="lbl">수주확률(%)</label><input class="inp" id="rf_prob" type="number" value="30" min="0" max="100"></div>
       </div>
+      <!-- P2: 강화 필드 -->
+      <div style="padding:10px 12px;background:var(--purple,#8b5cf6)08;border:1px solid var(--purple,#8b5cf6)25;border-radius:8px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:var(--purple,#8b5cf6);margin-bottom:8px">🏆 입찰 관리</div>
+        <div class="form-row form-row-4" style="margin-bottom:8px">
+          <div><label class="lbl">평가점수(100점)</label><input class="inp" id="rf_eval" type="number" min="0" max="100" placeholder="85"></div>
+          <div><label class="lbl">프레젠테이션일</label><input class="inp" id="rf_presdate" type="date"></div>
+          <div><label class="lbl">Go/NoGo</label><select class="sel" id="rf_gonogo"><option value="">미정</option><option value="Go">Go</option><option value="NoGo">NoGo</option><option value="검토중">검토중</option></select></div>
+          <div><label class="lbl">우선순위</label><select class="sel" id="rf_priority"><option>보통</option><option>긴급</option><option>높음</option><option>낮음</option></select></div>
+        </div>
+        <div class="form-row form-row-2">
+          <div><label class="lbl">팀 배정 (쉼표 구분)</label><input class="inp" id="rf_team" placeholder="김대리, 이과장, 박부장"></div>
+          <div><label class="lbl">경쟁사 (쉼표 구분)</label><input class="inp" id="rf_comp" placeholder="A사, B사, C사"></div>
+        </div>
+      </div>
       <div class="form-row form-row-2" style="margin-bottom:12px">
-        <div><label class="lbl">우선순위</label><select class="sel" id="rf_priority"><option>보통</option><option>긴급</option><option>높음</option><option>낮음</option></select></div>
         <div><label class="lbl">상태</label><select class="sel" id="rf_status">${RFP_STATUSES.map(s=>`<option>${s}</option>`).join('')}</select></div>
+        <div></div>
       </div>
       <div style="margin-bottom:12px"><label class="lbl">요구사항</label><textarea class="inp" id="rf_req" rows="3" placeholder="고객 요구사항, 프로젝트 범위 등"></textarea></div>
       <div><label class="lbl">메모</label><textarea class="inp" id="rf_notes" rows="2"></textarea></div>
@@ -7477,6 +7671,8 @@ function openAddRfp(){
 async function saveNewRfpItem(){
   const title=document.getElementById('rf_title')?.value?.trim();
   if(!title){toast('프로젝트명을 입력하세요','error');return;}
+  const teamStr=v('rf_team')||'';
+  const compStr=v('rf_comp')||'';
   const r={
     id:uid(), title, client_name:v('rf_client'), client_contact:'',
     budget_min:Number(v('rf_bmin')||0), budget_max:Number(v('rf_bmax')||0),
@@ -7484,6 +7680,11 @@ async function saveNewRfpItem(){
     deadline:v('rf_deadline'), assignee:v('rf_assign'), status:v('rf_status')||'접수',
     requirements:v('rf_req'), notes:v('rf_notes'), priority:v('rf_priority')||'보통',
     win_probability:Number(v('rf_prob')||30),
+    evaluation_score:Number(v('rf_eval')||0),
+    team_members:JSON.stringify(teamStr?teamStr.split(',').map(s=>s.trim()).filter(Boolean):[]),
+    competitors:JSON.stringify(compStr?compStr.split(',').map(s=>s.trim()).filter(Boolean):[]),
+    presentation_date:v('rf_presdate')||'',
+    go_nogo:v('rf_gonogo')||'',
     created_at:new Date().toISOString(), updated_at:new Date().toISOString()
   };
   await saveRfpItem(r);closeModal();toast('RFP가 등록되었습니다','success');renderRfp();
@@ -7491,8 +7692,16 @@ async function saveNewRfpItem(){
 
 function openEditRfp(id){
   const r=getRfpList().find(x=>x.id===id);if(!r)return;
+  function tryP(s,d){if(!s)return d;if(typeof s==='object')return s;try{return JSON.parse(s)}catch{return d}}
+  const team=tryP(r.team_members,[]);
+  const comp=tryP(r.competitors,[]);
+  const stColor=RFP_STATUS_COLORS[r.status]||'var(--gray-400)';
   openModal(`<div class="modal-bg"><div class="modal modal-lg">
-    <div class="modal-hdr"><span class="modal-title">📋 RFP 편집 — ${escHtml(r.title)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-hdr">
+      <span class="modal-title">📋 RFP 편집 — ${escHtml(r.title)}</span>
+      <span style="background:${stColor};color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;margin-left:8px">${r.status}</span>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
     <div class="modal-body">
       <div class="form-row form-row-2" style="margin-bottom:12px">
         <div><label class="lbl">프로젝트명 *</label><input class="inp" id="er_title" value="${escHtml(r.title||'')}"></div>
@@ -7510,9 +7719,23 @@ function openEditRfp(id){
         <div><label class="lbl">담당자</label><select class="sel" id="er_assign">${TEAM_MEMBERS.map(m=>`<option${r.assignee===m?' selected':''}>${m}</option>`).join('')}</select></div>
         <div><label class="lbl">수주확률(%)</label><input class="inp" id="er_prob" type="number" value="${r.win_probability||0}" min="0" max="100"></div>
       </div>
+      <!-- P2: 입찰 관리 강화 -->
+      <div style="padding:10px 12px;background:#8b5cf608;border:1px solid #8b5cf625;border-radius:8px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:#8b5cf6;margin-bottom:8px">🏆 입찰 관리</div>
+        <div class="form-row form-row-4" style="margin-bottom:8px">
+          <div><label class="lbl">평가점수(100)</label><input class="inp" id="er_eval" type="number" min="0" max="100" value="${r.evaluation_score||''}"></div>
+          <div><label class="lbl">프레젠테이션일</label><input class="inp" id="er_presdate" type="date" value="${r.presentation_date||''}"></div>
+          <div><label class="lbl">Go/NoGo</label><select class="sel" id="er_gonogo"><option value=""${!r.go_nogo?' selected':''}>미정</option><option value="Go"${r.go_nogo==='Go'?' selected':''}>Go</option><option value="NoGo"${r.go_nogo==='NoGo'?' selected':''}>NoGo</option><option value="검토중"${r.go_nogo==='검토중'?' selected':''}>검토중</option></select></div>
+          <div><label class="lbl">우선순위</label><select class="sel" id="er_priority"><option${r.priority==='보통'?' selected':''}>보통</option><option${r.priority==='긴급'?' selected':''}>긴급</option><option${r.priority==='높음'?' selected':''}>높음</option><option${r.priority==='낮음'?' selected':''}>낮음</option></select></div>
+        </div>
+        <div class="form-row form-row-2">
+          <div><label class="lbl">팀 배정 (쉼표 구분)</label><input class="inp" id="er_team" value="${team.join(', ')}"></div>
+          <div><label class="lbl">경쟁사 (쉼표 구분)</label><input class="inp" id="er_comp" value="${comp.join(', ')}"></div>
+        </div>
+      </div>
       <div class="form-row form-row-2" style="margin-bottom:12px">
-        <div><label class="lbl">우선순위</label><select class="sel" id="er_priority"><option${r.priority==='보통'?' selected':''}>보통</option><option${r.priority==='긴급'?' selected':''}>긴급</option><option${r.priority==='높음'?' selected':''}>높음</option><option${r.priority==='낮음'?' selected':''}>낮음</option></select></div>
         <div><label class="lbl">상태</label><select class="sel" id="er_status">${RFP_STATUSES.map(s=>`<option${r.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
+        <div></div>
       </div>
       <div class="form-row form-row-2" style="margin-bottom:12px">
         <div><label class="lbl">제출일</label><input class="inp" id="er_submitted" type="date" value="${r.submitted_date||''}"></div>
@@ -7531,6 +7754,8 @@ function openEditRfp(id){
 }
 async function saveEditRfpItem(id){
   const r=getRfpList().find(x=>x.id===id);if(!r)return;
+  const teamStr=v('er_team')||'';
+  const compStr=v('er_comp')||'';
   Object.assign(r,{
     title:v('er_title'),client_name:v('er_client'),
     budget_min:Number(v('er_bmin')||0),budget_max:Number(v('er_bmax')||0),
@@ -7538,6 +7763,11 @@ async function saveEditRfpItem(id){
     deadline:v('er_deadline'),assignee:v('er_assign'),status:v('er_status'),
     requirements:v('er_req'),notes:v('er_notes'),priority:v('er_priority'),
     win_probability:Number(v('er_prob')||0),submitted_date:v('er_submitted'),result:v('er_result'),
+    evaluation_score:Number(v('er_eval')||0),
+    team_members:JSON.stringify(teamStr?teamStr.split(',').map(s=>s.trim()).filter(Boolean):[]),
+    competitors:JSON.stringify(compStr?compStr.split(',').map(s=>s.trim()).filter(Boolean):[]),
+    presentation_date:v('er_presdate')||'',
+    go_nogo:v('er_gonogo')||'',
     updated_at:new Date().toISOString()
   });
   await saveRfpItem(r);closeModal();toast('저장되었습니다','success');renderRfp();

@@ -96,6 +96,17 @@ async function ensureTables(db: D1Database) {
     "ALTER TABLE consultations ADD COLUMN privacy_agreed INTEGER DEFAULT 0",
     "ALTER TABLE consultations ADD COLUMN marketing_agreed INTEGER DEFAULT 0",
     "ALTER TABLE consultations ADD COLUMN area_text TEXT DEFAULT ''",
+    // P2: consultations 파이프라인 단계
+    "ALTER TABLE consultations ADD COLUMN pipeline_stage TEXT DEFAULT '초기상담'",
+    "ALTER TABLE consultations ADD COLUMN expected_amount REAL DEFAULT 0",
+    "ALTER TABLE consultations ADD COLUMN expected_close_date TEXT DEFAULT ''",
+    "ALTER TABLE consultations ADD COLUMN lost_reason TEXT DEFAULT ''",
+    // P2: RFP 강화 — 평가점수·팀배정·경쟁사
+    "ALTER TABLE rfp ADD COLUMN evaluation_score REAL DEFAULT 0",
+    "ALTER TABLE rfp ADD COLUMN team_members TEXT DEFAULT '[]'",
+    "ALTER TABLE rfp ADD COLUMN competitors TEXT DEFAULT '[]'",
+    "ALTER TABLE rfp ADD COLUMN presentation_date TEXT DEFAULT ''",
+    "ALTER TABLE rfp ADD COLUMN go_nogo TEXT DEFAULT ''",
   ]
   for (const stmt of alterStmts) {
     try { await db.prepare(stmt).run() } catch(e) { /* column already exists */ }
