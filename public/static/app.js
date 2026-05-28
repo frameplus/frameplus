@@ -238,7 +238,9 @@ function dbToProject(row) {
     region:row.region||'', contractStatus:row.contract_status||'미생성',
     contractDate:row.contract_date||'', contractNote:row.contract_note||'',
     contractClauses:tryP(row.contract_clauses,[]), payments:tryP(row.payments,[]),
-    ganttTasks:tryP(row.gantt_tasks,[]), items:tryP(row.items,[]), createdAt:row.created_at };
+    ganttTasks:tryP(row.gantt_tasks,[]), items:tryP(row.items,[]), createdAt:row.created_at,
+    projectType:row.project_type||'', constructionStatus:row.construction_status||'',
+    scopeTags:tryP(row.scope_tags,[]), updatedAt:row.updated_at||'' };
 }
 
 function projectToDb(p) {
@@ -252,6 +254,8 @@ function projectToDb(p) {
     payments:JSON.stringify(p.payments||[]),
     gantt_tasks:JSON.stringify(p.ganttTasks||[]),
     items:JSON.stringify(p.items||[]),
+    project_type:p.projectType||'', construction_status:p.constructionStatus||'',
+    scope_tags:JSON.stringify(p.scopeTags||[]),
     created_at:p.createdAt||today(), updated_at:today() };
 }
 
@@ -1819,7 +1823,7 @@ function filterProjects(){
   const dt=document.getElementById('dateTo')?.value||'';
   const mg=document.getElementById('month-group-toggle')?.checked;
   let ps=getProjects().filter(p=>{
-    const text=!q||(p.nm+p.client+p.loc).toLowerCase().includes(q);
+    const text=!q||(p.nm+p.client+p.loc+(p.projectType||'')+(p.scopeTags||[]).join(' ')+(p.mgr||'')).toLowerCase().includes(q);
     const status=!st||p.status===st;
     const dateOk=(!df||p.date>=df)&&(!dt||p.date<=dt);
     return text&&status&&dateOk;
@@ -1834,18 +1838,39 @@ function filterProjects(){
     if(body)body.innerHTML=renderProjectRows(ps);
   }
 }
+function projTypeBadge(t){
+  if(!t)return '';
+  const colors={'인테리어':'#6366f1','리모델링':'#f59e0b','신축':'#10b981','부분시공':'#8b5cf6','설계':'#3b82f6','AS':'#ef4444'};
+  const c=colors[t]||'#6b7280';
+  return `<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;background:${c}18;color:${c};font-weight:600;border:1px solid ${c}33">${t}</span>`;
+}
+function scopeTagBadges(tags){
+  if(!tags||!tags.length)return '';
+  return tags.slice(0,3).map(t=>`<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:var(--gray-100);color:var(--text-muted);margin-right:2px">${t}</span>`).join('')+(tags.length>3?`<span style="font-size:9px;color:var(--text-muted)">+${tags.length-3}</span>`:'');
+}
+function constrStatusBadge(s){
+  if(!s)return '';
+  const map={'시공예정':'🟡','시공중':'🔵','시공완료':'🟢','하자보수':'🔴','미정':'⚪'};
+  return `<span style="font-size:10px">${map[s]||'⚪'} ${s}</span>`;
+}
 function renderProjectRowSingle(p){
   const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
   const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
   return`<tr>
-    <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
+    <td>
+      <div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div>
+      <div style="font-size:11px;color:var(--g500);display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:2px">
+        ${projTypeBadge(p.projectType)}${p.loc?`<span>${p.loc}</span>`:''}
+      </div>
+      ${p.scopeTags&&p.scopeTags.length?`<div style="margin-top:3px">${scopeTagBadges(p.scopeTags)}</div>`:''}
+    </td>
     <td><div style="font-size:12.5px">${p.client}</div></td>
     <td>${p.area||'-'}평</td>
     <td style="font-weight:600">${isAdmin()?(tot>0?fmt(tot)+'원':'-'):'—'}</td>
     ${isAdmin()?`<td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>`:''}
     <td><div class="prog prog-blue" style="width:60px"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px">${prog}%</span></td>
     <td><div class="prog prog-green" style="width:60px"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px">${paidPct}%</span></td>
-    <td>${statusBadge(p.status)}</td>
+    <td>${statusBadge(p.status)}${p.constructionStatus?`<div style="margin-top:2px">${constrStatusBadge(p.constructionStatus)}</div>`:''}</td>
     <td style="font-size:11px">${p.date||''}</td>
     <td><div style="display:flex;gap:4px">
       <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditProject('${p.id}')" title="편집">${svgIcon('edit',13)}</button>
@@ -1874,14 +1899,20 @@ function renderProjectRows(ps){
     const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
     const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
     return`<tr>
-      <td><div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div><div style="font-size:11px;color:var(--g500)">${p.loc||''}</div></td>
+      <td>
+        <div style="font-weight:600;font-size:12.5px;cursor:pointer;color:var(--blue)" onclick="enterProject('${p.id}')">${p.nm}</div>
+        <div style="font-size:11px;color:var(--g500);display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:2px">
+          ${projTypeBadge(p.projectType)}${p.loc?`<span>${p.loc}</span>`:''}
+        </div>
+        ${p.scopeTags&&p.scopeTags.length?`<div style="margin-top:3px">${scopeTagBadges(p.scopeTags)}</div>`:''}
+      </td>
       <td><div style="font-size:12.5px">${p.client}</div><div style="font-size:11px;color:var(--g500)">${p.contact||''}</div></td>
       <td>${p.area||'-'}평</td>
       <td style="font-weight:600">${tot>0?fmt(tot)+'원':'-'}</td>
       <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
       <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-blue" style="width:60px"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px;color:var(--blue)">${prog}%</span></div></td>
       <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-green" style="width:60px"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px;color:var(--green)">${paidPct}%</span></div></td>
-      <td>${statusBadge(p.status)}</td>
+      <td>${statusBadge(p.status)}${p.constructionStatus?`<div style="margin-top:2px">${constrStatusBadge(p.constructionStatus)}</div>`:''}</td>
       <td style="font-size:11px;color:var(--g500)">${p.date||''}</td>
       <td>
         <div style="display:flex;gap:4px">
@@ -1921,6 +1952,11 @@ function openAddProject(){
         <div><label class="lbl">기업이윤(%)</label><input class="inp" id="profit" type="number" value="10"></div>
         <div><label class="lbl">상태</label><select class="sel" id="status">${Object.keys(STATUS_LABELS).map(s=>`<option>${s}</option>`).join('')}</select></div>
       </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트 구분</label><select class="sel" id="projectType"><option value="">선택</option><option>인테리어</option><option>리모델링</option><option>신축</option><option>부분시공</option><option>설계</option><option>AS</option></select></div>
+        <div><label class="lbl">공사 상태</label><select class="sel" id="constructionStatus"><option value="">선택</option><option>시공예정</option><option>시공중</option><option>시공완료</option><option>하자보수</option><option>미정</option></select></div>
+        <div><label class="lbl">공사 범위 (콤마구분)</label><input class="inp" id="scopeTags" placeholder="철거, 목공, 도장, 타일"></div>
+      </div>
       <div><label class="lbl">메모</label><textarea class="inp" id="memo" rows="2" style="resize:vertical"></textarea></div>
     </div>
     <div class="modal-footer">
@@ -1940,6 +1976,9 @@ async function saveNewProject(){
     roundUnit:'십만원',memo:v('memo'),region:'',
     items:[],ganttTasks:[],contractStatus:'미생성',contractDate:'',
     contractNote:'',contractClauses:[],
+    projectType:v('projectType')||'',
+    constructionStatus:v('constructionStatus')||'',
+    scopeTags:(v('scopeTags')||'').split(',').map(s=>s.trim()).filter(Boolean),
     payments:[
       {label:'계약금',pct:30,due:'',paid:false,paidDate:''},
       {label:'중도금',pct:40,due:'',paid:false,paidDate:''},
@@ -1976,6 +2015,11 @@ function openEditProject(pid){
         <div><label class="lbl">상태</label><select class="sel" id="ep_status">${Object.keys(STATUS_LABELS).map(s=>`<option${p.status===s?' selected':''}>${s}</option>`).join('')}</select></div>
         <div><label class="lbl">목표금액</label><input class="inp" id="ep_target" type="number" value="${p.targetAmt||''}"></div>
       </div>
+      <div class="form-row form-row-3" style="margin-bottom:12px">
+        <div><label class="lbl">프로젝트 구분</label><select class="sel" id="ep_projectType"><option value="">선택</option>${['인테리어','리모델링','신축','부분시공','설계','AS'].map(t=>`<option${p.projectType===t?' selected':''}>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">공사 상태</label><select class="sel" id="ep_constructionStatus"><option value="">선택</option>${['시공예정','시공중','시공완료','하자보수','미정'].map(t=>`<option${p.constructionStatus===t?' selected':''}>${t}</option>`).join('')}</select></div>
+        <div><label class="lbl">공사 범위 (콤마구분)</label><input class="inp" id="ep_scopeTags" value="${(p.scopeTags||[]).join(', ')}"></div>
+      </div>
       <div><label class="lbl">메모</label><textarea class="inp" id="ep_memo" rows="2">${p.memo||''}</textarea></div>
     </div>
     <div class="modal-footer">
@@ -1991,6 +2035,9 @@ async function saveEditProject(pid){
   p.mgr=[...document.querySelectorAll('.ep-mgr-cb:checked')].map(cb=>cb.value).join(',')||p.mgr;
   p.date=v('ep_date');p.profit=Number(v('ep_profit')||10);
   p.status=v('ep_status');p.memo=v('ep_memo');p.targetAmt=Number(v('ep_target')||0);
+  p.projectType=v('ep_projectType')||'';
+  p.constructionStatus=v('ep_constructionStatus')||'';
+  p.scopeTags=(v('ep_scopeTags')||'').split(',').map(s=>s.trim()).filter(Boolean);
   await saveProject(p);closeModal();toast('저장되었습니다','success');renderProjects();
 }
 async function deleteProject(pid){
@@ -7559,6 +7606,8 @@ function renderErpOverview(){
             <span>📅 ${p.date||'-'}</span>
             <span>👷 ${p.mgr||'-'}</span>
             ${statusBadge(p.status)}
+            ${projTypeBadge(p.projectType)}
+            ${constrStatusBadge(p.constructionStatus)}
           </div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -7751,6 +7800,55 @@ function renderErpOverview(){
         </table>
       </div>`:
       `<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:13px">수금 일정이 설정되지 않았습니다</div>`}
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+      <!-- Project Info Detail -->
+      <div class="card">
+        <div class="card-title">📋 프로젝트 정보</div>
+        <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 12px;font-size:12.5px">
+          <span style="color:var(--text-muted);font-weight:600">프로젝트 구분</span><span>${projTypeBadge(p.projectType)||'-'}</span>
+          <span style="color:var(--text-muted);font-weight:600">공사 상태</span><span>${constrStatusBadge(p.constructionStatus)||'-'}</span>
+          <span style="color:var(--text-muted);font-weight:600">계약 상태</span><span>${statusBadge(p.contractStatus||'미생성')}</span>
+          <span style="color:var(--text-muted);font-weight:600">공사 범위</span><span>${(p.scopeTags||[]).length?scopeTagBadges(p.scopeTags):'-'}</span>
+          <span style="color:var(--text-muted);font-weight:600">현장 주소</span><span>${escHtml(p.loc||'-')}</span>
+          <span style="color:var(--text-muted);font-weight:600">연락처</span><span>${escHtml(p.contact||'-')}</span>
+          <span style="color:var(--text-muted);font-weight:600">이메일</span><span>${escHtml(p.email||'-')}</span>
+          <span style="color:var(--text-muted);font-weight:600">메모</span><span>${escHtml(p.memo||'-')}</span>
+        </div>
+      </div>
+
+      <!-- Linked Consultations + Recent Activity -->
+      <div class="card">
+        <div class="card-title">💬 연관 상담 & 최근 활동</div>
+        ${(()=>{
+          const consults=(_d.consultations||[]).filter(c=>c.client_name&&p.client&&c.client_name.includes(p.client));
+          return consults.length?`<div style="margin-bottom:12px">
+            <div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:6px">📞 관련 상담 (${consults.length}건)</div>
+            ${consults.slice(0,3).map(c=>`<div style="padding:6px 10px;background:var(--gray-50);border-radius:var(--radius-sm);margin-bottom:4px;font-size:12px;display:flex;justify-content:space-between;align-items:center">
+              <span>👤 ${escHtml(c.client_name)} · ${escHtml(c.client_phone||'')}</span>
+              <span>${statusBadge(c.status||'신규')}</span>
+            </div>`).join('')}${consults.length>3?`<div style="font-size:11px;color:var(--text-muted);text-align:center;margin-top:4px">외 ${consults.length-3}건 더</div>`:''}
+          </div>`:
+          `<div style="padding:12px;font-size:12px;color:var(--text-muted)">연관 상담이 없습니다</div>`;
+        })()}
+        <div style="border-top:1px solid var(--border);padding-top:10px">
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);margin-bottom:6px">📅 최근 활동</div>
+          ${(()=>{
+            const timeline=[];
+            orders.slice(-3).reverse().forEach(o=>timeline.push({date:o.created_at||'',icon:'🚚',text:'발주: '+(o.vendor_name||o.nm||'자재발주')}));
+            labor.slice(-3).reverse().forEach(l=>timeline.push({date:l.created_at||l.work_date||'',icon:'👷',text:'노무: '+(l.worker_name||l.nm||'인건비')}));
+            expenses.slice(-3).reverse().forEach(e=>timeline.push({date:e.created_at||'',icon:'💳',text:'지출: '+(e.title||'지출결의')}));
+            timeline.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+            return timeline.length?timeline.slice(0,5).map(t=>`<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;font-size:12px;border-bottom:1px solid var(--border-light)">
+              <span style="flex-shrink:0">${t.icon}</span>
+              <div style="flex:1"><span>${escHtml(t.text)}</span></div>
+              <span style="color:var(--text-muted);font-size:10px;white-space:nowrap">${(t.date||'').slice(0,10)}</span>
+            </div>`).join(''):
+            `<div style="font-size:12px;color:var(--text-muted)">활동 내역이 없습니다</div>`;
+          })()}
+        </div>
+      </div>
     </div>
   </div>`;
 }
