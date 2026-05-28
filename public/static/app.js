@@ -2059,7 +2059,8 @@ function renderEstimate(){
   document.getElementById('tb-title').textContent='견적 작성';
   document.getElementById('tb-actions').innerHTML=`
     <button class="btn btn-outline btn-sm" onclick="nav('pricedb')">${svgIcon('tool',12)} 단가DB</button>
-    <button class="btn btn-outline btn-sm" onclick="previewEstCurrent()">${svgIcon('eye',12)} 미리보기</button>
+    <button class="btn btn-outline btn-sm" onclick="previewEstCurrent()">${svgIcon('eye',12)} 프리뷰</button>
+    <button class="btn btn-outline btn-sm" onclick="if(S.editingEstPid){autoGenerateGantt(S.editingEstPid);toast('공정표 자동생성 완료','success')}else{toast('프로젝트를 먼저 선택하세요','warning')}">${svgIcon('activity',12)} 공정표 자동생성</button>
     <button class="btn btn-outline btn-sm" onclick="sendEstMailCurrent()">${svgIcon('mail',12)} 이메일</button>
     <button class="btn btn-outline btn-sm" onclick="printPage()">${svgIcon('print',12)} 인쇄</button>
     <button class="btn btn-primary btn-sm" onclick="saveEstimate()">저장</button>`;
@@ -2400,7 +2401,7 @@ function openPreviewModal(pid){
       </div>
     </div>
     <div class="pv-tab-bar" style="flex-shrink:0;display:flex;border-bottom:2px solid var(--g200);background:var(--g50);padding:0 16px">
-      ${[{id:'cover',icon:'📋',label:'표지'},{id:'summary',icon:'📊',label:'내역서'},{id:'aggregate',icon:'📈',label:'집계표'},{id:'detail',icon:'📝',label:'상세내역'},{id:'gantt',icon:'📅',label:'공정표'}].map(t=>
+      ${[{id:'cover',icon:'📋',label:'표지'},{id:'summary',icon:'📊',label:'요약'},{id:'detail',icon:'📝',label:'상세내역서'},{id:'aggregate',icon:'📈',label:'집계표'},{id:'gantt',icon:'📅',label:'공정표'},{id:'payment',icon:'💰',label:'대금조건'}].map(t=>
         `<button class="pv-tab-btn${t.id==='cover'?' active':''}" data-tab="${t.id}" onclick="switchPvTab('${t.id}','${pid}')" style="padding:10px 16px;border:none;background:${t.id==='cover'?'#fff':'transparent'};font-size:12px;font-weight:600;cursor:pointer;border-bottom:${t.id==='cover'?'2px solid var(--blue)':'2px solid transparent'};margin-bottom:-2px;color:${t.id==='cover'?'var(--blue)':'var(--g600)'};transition:all .2s;display:flex;align-items:center;gap:5px">${t.icon} ${t.label}</button>`
       ).join('')}
     </div>
@@ -2426,6 +2427,7 @@ function switchPvTab(tab,pid){
     case 'aggregate':el.innerHTML=buildPvAggregate(p);break;
     case 'detail':el.innerHTML=buildPvDetail(p);break;
     case 'gantt':el.innerHTML=buildPvGantt(p);break;
+    case 'payment':el.innerHTML=buildPvPayment(p);break;
   }
 }
 function _pvDocNo(p){return`FP-${p.date?.replace(/-/g,'').slice(2)||'000000'}-${p.id.slice(-3).toUpperCase()}`;}
@@ -2760,10 +2762,28 @@ function buildPvGantt(p){
       </div>
       <div style="font-size:13px"><strong>총 ${totalDays}일</strong> · 전체 진행률 <strong>${avgProg}%</strong></div>
     </div>
+    <!-- Phase summary -->
+    ${(()=>{
+      const phaseGroups=GANTT_PHASES.map(ph=>{
+        const phaseTasks=tasks.filter(t=>ph.cats.includes(t.catId));
+        if(!phaseTasks.length)return null;
+        const days=phaseTasks.reduce((a,t)=>a+diffDays(t.start,t.end),0);
+        const avgPr=Math.round(phaseTasks.reduce((a,t)=>a+Number(t.progress||0),0)/phaseTasks.length);
+        return{...ph,tasks:phaseTasks,days,avgPr};
+      }).filter(Boolean);
+      if(!phaseGroups.length) return '';
+      return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">${phaseGroups.map(ph=>
+        `<div style="flex:1;min-width:90px;padding:8px;border-radius:6px;background:${ph.color}10;border:1px solid ${ph.color}25;text-align:center">
+          <div style="font-size:14px">${ph.icon}</div>
+          <div style="font-size:10px;font-weight:700;color:${ph.color}">${ph.nm}</div>
+          <div style="font-size:9px;color:var(--g500)">${ph.days}일 · ${ph.avgPr}%</div>
+        </div>`).join('')}</div>`;
+    })()}
     <!-- Task list table -->
     <table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid var(--g200);border-radius:6px;overflow:hidden">
       <thead><tr style="background:var(--g50)">
         <th style="padding:8px;text-align:left;border-bottom:1px solid var(--g200)">NO</th>
+        <th style="padding:8px;text-align:left;border-bottom:1px solid var(--g200)">단계</th>
         <th style="padding:8px;text-align:left;border-bottom:1px solid var(--g200)">공정명</th>
         <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">시작일</th>
         <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">종료일</th>
@@ -2772,9 +2792,12 @@ function buildPvGantt(p){
         <th style="padding:8px;text-align:center;border-bottom:1px solid var(--g200)">진도</th>
       </tr></thead>
       <tbody>
-        ${tasks.map((t,i)=>{const dur=diffDays(t.start,t.end);const prog=Number(t.progress||0);const isLate=t.end&&new Date(t.end)<new Date()&&prog<100;
+        ${tasks.map((t,i)=>{const dur=diffDays(t.start,t.end);const prog=Number(t.progress||0);const isLate=t.end&&new Date(t.end)<new Date()&&prog<100;const ph=getCatPhase(t.catId);
           return`<tr style="${isLate?'background:#fef2f2':''}">
             <td style="padding:6px 8px;border-bottom:1px solid var(--g100)">${i+1}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid var(--g100)">
+              ${ph?`<span style="font-size:9px;padding:1px 5px;border-radius:6px;background:${ph.color}15;color:${ph.color};font-weight:600">${ph.icon} ${ph.nm}</span>`:''}
+            </td>
             <td style="padding:6px 8px;border-bottom:1px solid var(--g100);font-weight:600;${isLate?'color:var(--red)':''}">${isLate?'⚠️ ':''}${t.nm}</td>
             <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center">${t.start}</td>
             <td style="padding:6px 8px;border-bottom:1px solid var(--g100);text-align:center">${t.end}</td>
@@ -2793,15 +2816,149 @@ function buildPvGantt(p){
   </div>`;
 }
 
+// TAB 6: 대금조건 (Payment Terms)
+function buildPvPayment(p){
+  const co=getCompany();
+  const total=getTotal(p);
+  const payments=p.payments||[{label:'계약금',pct:30,due:'',paid:false},{label:'중도금',pct:40,due:'',paid:false},{label:'잔금',pct:30,due:'',paid:false}];
+  const ganttTasks=p.ganttTasks||[];
+  const hasGantt=ganttTasks.length>0;
+  // Milestone mapping from gantt
+  const milestones=hasGantt?[
+    {label:'착공',date:ganttTasks[0]?.start||''},
+    {label:'중간 검수',date:ganttTasks[Math.floor(ganttTasks.length/2)]?.end||''},
+    {label:'준공',date:ganttTasks[ganttTasks.length-1]?.end||''}
+  ]:[];
+
+  return`<div class="pv-page pv-ep">
+    ${_pvHeader(co,p,'대금조건')}
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-size:20px;font-weight:800;color:var(--dark)">대 금 조 건</div>
+      <div style="font-size:12px;color:var(--g500);margin-top:4px">${p.nm} — ${p.client||'고객사'}</div>
+    </div>
+
+    <!-- Total Amount -->
+    <div style="background:var(--dark);color:#fff;padding:16px 24px;border-radius:8px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:11px;opacity:.7">총 계약금액 (VAT 포함)</div>
+        <div style="font-size:24px;font-weight:800">₩${fmt(total)}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:11px;opacity:.7">공급가</div>
+        <div style="font-size:14px;font-weight:600">₩${fmt(Math.round(total/1.1))}</div>
+      </div>
+    </div>
+
+    <!-- Payment Schedule Table -->
+    <table style="width:100%;border-collapse:collapse;border:1px solid var(--g200);border-radius:8px;overflow:hidden;margin-bottom:20px">
+      <thead>
+        <tr style="background:var(--g50)">
+          <th style="padding:10px 12px;text-align:left;font-size:12px;font-weight:700;border-bottom:2px solid var(--g200)">구분</th>
+          <th style="padding:10px 12px;text-align:center;font-size:12px;font-weight:700;border-bottom:2px solid var(--g200)">비율</th>
+          <th style="padding:10px 12px;text-align:right;font-size:12px;font-weight:700;border-bottom:2px solid var(--g200)">금액 (VAT포함)</th>
+          <th style="padding:10px 12px;text-align:center;font-size:12px;font-weight:700;border-bottom:2px solid var(--g200)">납부기한</th>
+          <th style="padding:10px 12px;text-align:center;font-size:12px;font-weight:700;border-bottom:2px solid var(--g200)">비고</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${payments.map((pm,i)=>{
+          const amt=Math.round(total*(pm.pct||0)/100);
+          const milestone=milestones[i]||{};
+          return`<tr style="border-bottom:1px solid var(--g100)">
+            <td style="padding:10px 12px;font-weight:700;font-size:13px">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${['#3b82f6','#f59e0b','#10b981'][i]||'var(--g400)'};margin-right:8px"></span>
+              ${pm.label}
+            </td>
+            <td style="padding:10px 12px;text-align:center;font-size:14px;font-weight:800;color:${['#3b82f6','#f59e0b','#10b981'][i]||'var(--text)'}">${pm.pct||0}%</td>
+            <td style="padding:10px 12px;text-align:right;font-size:13px;font-weight:700">₩${fmt(amt)}</td>
+            <td style="padding:10px 12px;text-align:center;font-size:12px">${pm.due||milestone.date||'협의'}</td>
+            <td style="padding:10px 12px;text-align:center;font-size:11px;color:var(--g500)">${milestone.label?milestone.label+' 기준':i===0?'계약 체결시':i===payments.length-1?'준공 후 7일':'중간검수 완료시'}</td>
+          </tr>`;
+        }).join('')}
+        <tr style="background:var(--g50);font-weight:700">
+          <td style="padding:10px 12px;font-size:13px">합계</td>
+          <td style="padding:10px 12px;text-align:center;font-size:14px;font-weight:800">100%</td>
+          <td style="padding:10px 12px;text-align:right;font-size:13px;font-weight:800;color:var(--primary)">₩${fmt(total)}</td>
+          <td colspan="2"></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Payment Progress Visual -->
+    <div style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:8px">💰 대금 지급 일정</div>
+      <div style="display:flex;height:32px;border-radius:8px;overflow:hidden;border:1px solid var(--g200)">
+        ${payments.map((pm,i)=>{
+          const colors=['#3b82f6','#f59e0b','#10b981','#8b5cf6','#ef4444'];
+          return`<div style="width:${pm.pct}%;background:${colors[i]||'var(--g300)'};display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:700;border-right:${i<payments.length-1?'2px solid #fff':'none'}">${pm.label} ${pm.pct}%</div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    ${hasGantt?`
+    <!-- Timeline -->
+    <div style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:12px">📅 공정 연계 마일스톤</div>
+      <div style="display:flex;align-items:center;gap:0;position:relative;padding:0 20px">
+        <div style="position:absolute;top:14px;left:40px;right:40px;height:2px;background:var(--g200)"></div>
+        ${milestones.map((m,i)=>`<div style="flex:1;text-align:center;position:relative;z-index:1">
+          <div style="width:28px;height:28px;border-radius:50%;background:${['#3b82f6','#f59e0b','#10b981'][i]};color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 6px;font-size:12px;font-weight:800">${i+1}</div>
+          <div style="font-size:11px;font-weight:700">${m.label}</div>
+          <div style="font-size:10px;color:var(--g500)">${m.date||'미정'}</div>
+        </div>`).join('')}
+      </div>
+    </div>`:''}
+
+    <!-- Terms & Conditions -->
+    <div style="background:var(--g50);border-radius:8px;padding:16px;margin-bottom:16px">
+      <div style="font-size:12px;font-weight:700;margin-bottom:8px">📋 대금지급 조건</div>
+      <ol style="font-size:11px;color:var(--g700);line-height:1.8;margin:0;padding-left:20px">
+        <li>계약금은 계약 체결일에 지급하며, 공사 착수의 전제조건입니다.</li>
+        <li>중도금은 공정률 50% 달성 시점(중간 검수 완료) 기준으로 지급합니다.</li>
+        <li>잔금은 준공 후 최종 검수 완료 후 7일 이내에 지급합니다.</li>
+        <li>지급 지연 시 연 ${p.memo?.includes('연이율')?'지정이율':'5%'}의 지연이자가 발생합니다.</li>
+        <li>설계변경 등 추가 공사비는 별도 협의 후 변경계약서를 통해 처리합니다.</li>
+        <li>세금계산서는 각 대금 지급 시점에 발행합니다.</li>
+      </ol>
+    </div>
+
+    <!-- Account Info -->
+    <div style="background:var(--blue)08;border:1px solid var(--blue)20;border-radius:8px;padding:14px 16px">
+      <div style="font-size:12px;font-weight:700;color:var(--blue);margin-bottom:6px">🏦 입금계좌 안내</div>
+      <div style="font-size:12px;display:grid;grid-template-columns:80px 1fr;gap:4px 12px">
+        <span style="color:var(--g500)">은행명</span><span style="font-weight:600">기업은행</span>
+        <span style="color:var(--g500)">계좌번호</span><span style="font-weight:600">000-000000-00-000</span>
+        <span style="color:var(--g500)">예금주</span><span style="font-weight:600">${co.name||'프레임플러스'}</span>
+        <span style="color:var(--g500)">사업자번호</span><span style="font-weight:600">${co.biz_no||'000-00-00000'}</span>
+      </div>
+    </div>
+
+    ${_pvFooter(co)}
+  </div>`;
+}
+
 // For backward compat: buildPreviewHTML still works for print
 function buildPreviewHTML(p,co){
   return buildPvCover(p)+buildPvSummary(p)+buildPvDetail(p)+(p.ganttTasks&&p.ganttTasks.length?buildPvGantt(p):'');
 }
 
 // ===== GANTT AUTO-GENERATION ENGINE =====
+// P3: 9단계 공정 Phase (준비/선행/골조/설비마감/마감1/마감2/설치/부속/마무리)
+const GANTT_PHASES=[
+  {id:'PH1',nm:'준비',cats:['C01'],color:'#6366f1',icon:'🏗️'},
+  {id:'PH2',nm:'선행',cats:['C02','C03'],color:'#8b5cf6',icon:'⚡'},
+  {id:'PH3',nm:'골조',cats:['C04'],color:'#3b82f6',icon:'🧱'},
+  {id:'PH4',nm:'설비마감',cats:['C05','C06','C07','C08'],color:'#14b8a6',icon:'🔧'},
+  {id:'PH5',nm:'마감1',cats:['C09','C10'],color:'#eab308',icon:'🎨'},
+  {id:'PH6',nm:'마감2',cats:['C11','C12'],color:'#f97316',icon:'✨'},
+  {id:'PH7',nm:'설치',cats:['C13','C14'],color:'#ec4899',icon:'📦'},
+  {id:'PH8',nm:'부속',cats:['C15','C16','C17'],color:'#64748b',icon:'🔩'},
+  {id:'PH9',nm:'마무리',cats:['C18'],color:'#22c55e',icon:'✅'},
+];
 const GANTT_CAT_ORDER=['C01','C02','C03','C04','C05','C06','C07','C08','C09','C10','C11','C12','C13','C14','C15','C16','C17','C18'];
 const GANTT_CAT_DAYS={C01:7,C02:5,C03:5,C04:7,C05:5,C06:4,C07:5,C08:7,C09:5,C10:3,C11:3,C12:3,C13:5,C14:4,C15:3,C16:3,C17:3,C18:2};
 const GANTT_CAT_COLORS={C01:'#6366f1',C02:'#8b5cf6',C03:'#a855f7',C04:'#3b82f6',C05:'#0ea5e9',C06:'#14b8a6',C07:'#22c55e',C08:'#84cc16',C09:'#eab308',C10:'#f59e0b',C11:'#f97316',C12:'#ef4444',C13:'#ec4899',C14:'#d946ef',C15:'#64748b',C16:'#78716c',C17:'#0d9488',C18:'#7c3aed'};
+function getCatPhase(cid){return GANTT_PHASES.find(ph=>ph.cats.includes(cid))||null;}
 // Overlap groups: categories that can partially overlap
 const GANTT_OVERLAP_GROUPS=[
   ['C01','C02'],        // demolition + frame can overlap
