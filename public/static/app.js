@@ -2135,12 +2135,13 @@ function renderEstimate(){
       </div>
     </div>
     
-    <!-- 기본공사 프리셋 -->
-    ${pid?`<div style="background:var(--blue-l);border:1px solid var(--blue);border-radius:var(--radius-lg);padding:12px 16px;margin-bottom:12px">
-      <div style="font-size:11px;font-weight:600;color:var(--blue);margin-bottom:8px">📋 기본공사 프리셋 (클릭 시 자동 입력)</div>
-      <div style="display:flex;flex-wrap:wrap;gap:6px">
-        ${(_d.presets||[]).map(pr=>`<button class="btn btn-outline btn-sm" style="border-color:var(--blue);color:var(--blue)" onclick="applyPreset('${pr.cid}','${pid}')">${CATS.find(c=>c.id===pr.cid)?.icon||'📦'} ${pr.name}</button>`).join('')}
+    <!-- P6: 3단 드릴다운 프리셋 (Phase → 공종 → 항목) -->
+    ${pid?`<div id="preset-drilldown" style="background:linear-gradient(135deg,#eff6ff,#f5f3ff);border:1px solid var(--blue);border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:700;color:var(--blue)">📋 공사 프리셋 3단 드릴다운</div>
+        <div id="preset-breadcrumb" style="font-size:11px;color:var(--g400)"></div>
       </div>
+      <div id="preset-drill-content">${renderPresetPhases()}</div>
     </div>`:''}
     
     <!-- Summary -->
@@ -3372,7 +3373,7 @@ function renderOrderRow(o){
     <td style="font-size:11px">${o.delivDate||o.deliv_date||'-'}</td>
     <td>${o.taxInvoice||o.tax_invoice?'<span class="badge badge-green">완료</span>':'<span class="badge badge-gray">미완료</span>'}</td>
     <td>${o.paid?'<span class="badge badge-green">완료</span>':'<span class="badge badge-red">미지급</span>'}</td>
-    <td><button class="btn btn-outline btn-sm" onclick="openOrderDetail('${o.id}')">편집</button></td>
+    <td style="white-space:nowrap"><button class="btn btn-outline btn-sm" onclick="openOrderDetail('${o.id}')">편집</button> <button class="btn btn-outline btn-sm" style="color:var(--blue);border-color:var(--blue)" onclick="openPOPreview('${o.id}')">PO</button></td>
   </tr>`;
 }
 function filterOrders(){
@@ -3581,6 +3582,7 @@ function renderOrderDetail(){
           <span class="badge ${o.paid?'badge-green':'badge-red'}">${o.paid?'완료':'미지급'}</span>
         </div>
       </div>
+      <button class="btn btn-primary" style="width:100%" onclick="openPOPreview('${o.id}')">📄 발주서 양식 (PO)</button>
       <button class="btn btn-outline" style="width:100%" onclick="copyOrder()">${svgIcon('copy',13)} 발주서 복사</button>
       <button class="btn btn-outline" style="width:100%" onclick="sendOrderMail('${o.id}')">${svgIcon('mail',13)} 이메일 발송</button>
       <button class="btn btn-outline" style="width:100%;color:var(--red)" onclick="deleteOrder('${o.id}')">${svgIcon('trash',13)} 발주서 삭제</button>
@@ -9811,11 +9813,261 @@ function renderSiteAnalysis(){
   </div>`;
 }
 
+// ================================================================
+//  P6: 프리셋 3단 드릴다운 + PO(발주서) 양식
+// ================================================================
+
+// ── 3단 드릴다운: Phase → 공종 → 항목 ──
+let _drillPhase=null, _drillCid=null;
+
+function renderPresetPhases(){
+  _drillPhase=null;_drillCid=null;
+  return`<div style="display:flex;flex-wrap:wrap;gap:6px">${GANTT_PHASES.map(ph=>`<button onclick="drillSelectPhase('${ph.id}')" style="padding:6px 14px;border-radius:20px;border:1px solid ${ph.color};background:${ph.color}12;color:${ph.color};cursor:pointer;font-size:12px;font-weight:600;transition:all .15s" onmouseover="this.style.background='${ph.color}';this.style.color='#fff'" onmouseout="this.style.background='${ph.color}12';this.style.color='${ph.color}'">${ph.icon} ${ph.nm} <span style="opacity:.6">(${ph.cats.length})</span></button>`).join('')}</div>`;
+}
+
+function drillSelectPhase(phId){
+  _drillPhase=phId;_drillCid=null;
+  const ph=GANTT_PHASES.find(p=>p.id===phId);if(!ph)return;
+  const bc=document.getElementById('preset-breadcrumb');
+  if(bc)bc.innerHTML=`<span onclick="drillReset()" style="cursor:pointer;color:var(--blue);text-decoration:underline">전체</span> › <strong>${ph.icon} ${ph.nm}</strong>`;
+  const el=document.getElementById('preset-drill-content');if(!el)return;
+  const cats=ph.cats.map(cid=>CATS.find(c=>c.id===cid)).filter(Boolean);
+  el.innerHTML=`<div style="display:flex;flex-wrap:wrap;gap:6px">${cats.map(c=>{
+    const preset=(_d.presets||[]).find(pr=>pr.cid===c.id);
+    const itemCount=preset?safeParse(preset.items).length:0;
+    return`<button onclick="drillSelectCat('${c.id}')" style="padding:8px 16px;border-radius:var(--radius);border:1px solid var(--g200);background:var(--card);cursor:pointer;font-size:12px;display:flex;align-items:center;gap:6px;transition:all .15s" onmouseover="this.style.borderColor='var(--primary)';this.style.background='var(--primary-light)'" onmouseout="this.style.borderColor='var(--g200)';this.style.background='var(--card)'">${c.icon} <strong>${c.nm}</strong> <span style="padding:1px 6px;border-radius:10px;background:${itemCount?'var(--primary)':'var(--g200)'};color:${itemCount?'#fff':'var(--g400)'};font-size:10px">${itemCount}개</span></button>`;}).join('')}
+    <button onclick="drillReset()" style="padding:8px 12px;border-radius:var(--radius);border:1px dashed var(--g300);background:transparent;cursor:pointer;font-size:12px;color:var(--g400)">← 뒤로</button>
+  </div>`;
+}
+
+function drillSelectCat(cid){
+  _drillCid=cid;
+  const cat=CATS.find(c=>c.id===cid);if(!cat)return;
+  const ph=GANTT_PHASES.find(p=>p.id===_drillPhase);
+  const bc=document.getElementById('preset-breadcrumb');
+  if(bc)bc.innerHTML=`<span onclick="drillReset()" style="cursor:pointer;color:var(--blue);text-decoration:underline">전체</span> › <span onclick="drillSelectPhase('${_drillPhase}')" style="cursor:pointer;color:var(--blue);text-decoration:underline">${ph?.icon||''} ${ph?.nm||''}</span> › <strong>${cat.icon} ${cat.nm}</strong>`;
+  const el=document.getElementById('preset-drill-content');if(!el)return;
+  const preset=(_d.presets||[]).find(pr=>pr.cid===cid);
+  const items=preset?safeParse(preset.items):[];
+  const pid=S.editingEstPid;
+  if(!items.length){
+    el.innerHTML=`<div style="text-align:center;padding:20px;color:var(--g400)">
+      <div style="font-size:24px;margin-bottom:4px">📭</div>
+      <p style="margin:0;font-size:13px">이 공종에 등록된 프리셋이 없습니다</p>
+      <button onclick="drillSelectPhase('${_drillPhase}')" style="margin-top:8px;padding:6px 14px;border:1px dashed var(--g300);background:transparent;border-radius:var(--radius);cursor:pointer;font-size:12px;color:var(--g400)">← 뒤로</button>
+    </div>`;return;
+  }
+  el.innerHTML=`<div style="display:flex;flex-direction:column;gap:4px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <span style="font-size:12px;color:var(--g500)">${items.length}개 항목</span>
+      <div style="display:flex;gap:6px">
+        <button onclick="drillApplyAll('${cid}','${pid}')" style="padding:5px 14px;border-radius:var(--radius);border:none;background:var(--primary);color:#fff;cursor:pointer;font-size:12px;font-weight:600">✅ 전체 적용</button>
+        <button onclick="drillSelectPhase('${_drillPhase}')" style="padding:5px 12px;border-radius:var(--radius);border:1px solid var(--g200);background:var(--card);cursor:pointer;font-size:12px;color:var(--g500)">← 뒤로</button>
+      </div>
+    </div>
+    ${items.map((it,idx)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--card);border:1px solid var(--g100);border-radius:var(--radius);font-size:12px">
+      <input type="checkbox" id="drill_item_${idx}" checked style="width:14px;height:14px;accent-color:var(--primary)">
+      <span style="flex:1;font-weight:500">${escHtml(it.nm||'')}</span>
+      <span style="color:var(--g400);min-width:40px">${escHtml(it.spec||it.unit||'식')}</span>
+      <span style="color:var(--g400);min-width:30px;text-align:right">x${it.qty||1}</span>
+    </div>`).join('')}
+    <button onclick="drillApplyChecked('${cid}','${pid}')" style="margin-top:6px;padding:8px;border-radius:var(--radius);border:1px solid var(--primary);background:var(--primary-light,#eff6ff);cursor:pointer;font-size:12px;font-weight:600;color:var(--primary)">☑️ 선택 항목만 적용</button>
+  </div>`;
+}
+
+function drillReset(){
+  const el=document.getElementById('preset-drill-content');
+  const bc=document.getElementById('preset-breadcrumb');
+  if(el)el.innerHTML=renderPresetPhases();
+  if(bc)bc.innerHTML='';
+}
+
+function drillApplyAll(cid,pid){
+  applyPreset(cid,pid);
+  drillReset();
+}
+
+function drillApplyChecked(cid,pid){
+  const preset=(_d.presets||[]).find(pr=>pr.cid===cid);
+  if(!preset)return;
+  let allItems=safeParse(preset.items);
+  const checked=[];
+  allItems.forEach((it,idx)=>{
+    const cb=document.getElementById('drill_item_'+idx);
+    if(cb&&cb.checked)checked.push(it);
+  });
+  if(!checked.length){toast('선택된 항목이 없습니다','warning');return;}
+  const p=getProject(pid);if(!p)return;
+  const existing=p.items||[];
+  checked.forEach(item=>{
+    existing.push({id:'i'+Math.random().toString(36).slice(2,6),cid,nm:item.nm,spec:item.spec||'',unit:item.unit||'식',qty:item.qty||1,mp:item.mp||0,lp:item.lp||0,ep:item.ep||0,sp:1,cmp:0,clp:0,cep:0,rm:''});
+  });
+  p.items=existing;
+  toast(`✅ ${checked.length}개 항목이 추가되었습니다`,'success');
+  renderEstimate();
+}
+
+// ── PO(발주서) 양식 프리뷰/인쇄 ──
+function openPOPreview(oid){
+  const orders=getOrders();
+  const o=orders.find(x=>x.id===oid);if(!o){toast('발주서를 찾을 수 없습니다','warning');return;}
+  const p=getProject(o.pid);
+  const co=getCompany();
+  const items=typeof o.items==='string'?safeParse(o.items):(o.items||[]);
+  const totalAmt=items.reduce((s,it)=>s+(it.amount||(it.qty||1)*(it.price||0)),0);
+  const vat=Math.round(totalAmt*0.1);
+  const grandTotal=totalAmt+vat;
+  const vnd=getVendors().find(v=>v.nm===o.vendor)||{};
+  const poHtml=`
+  <div id="po-print-area" style="font-family:'Pretendard','Noto Sans KR',sans-serif;max-width:800px;margin:0 auto;padding:40px;background:#fff;color:#1a1a1a">
+    <!-- 헤더 -->
+    <div style="text-align:center;margin-bottom:32px">
+      <h1 style="font-size:28px;font-weight:800;margin:0;letter-spacing:4px;color:#1a1a1a">발 주 서</h1>
+      <div style="width:60px;height:3px;background:#6366f1;margin:12px auto 0"></div>
+    </div>
+    <!-- 문서번호/날짜 -->
+    <div style="display:flex;justify-content:space-between;margin-bottom:24px;font-size:13px">
+      <div><strong>문서번호:</strong> PO-${(o.order_date||o.orderDate||today()).replace(/-/g,'')}-${(o.id||'').slice(0,6).toUpperCase()}</div>
+      <div><strong>발주일자:</strong> ${o.order_date||o.orderDate||today()}</div>
+    </div>
+    <!-- 발주처/수신처 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+      <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+        <div style="background:#f1f5f9;padding:8px 14px;font-size:12px;font-weight:700;color:#475569">발주처 (갑)</div>
+        <div style="padding:12px 14px;font-size:13px;line-height:1.8">
+          <div><strong>회사명:</strong> ${escHtml(co.nameKo||co.name||'Frame Plus')}</div>
+          <div><strong>대표자:</strong> ${escHtml(co.ceo||'')}</div>
+          <div><strong>사업자등록번호:</strong> ${escHtml(co.bizNo||'')}</div>
+          <div><strong>주소:</strong> ${escHtml(co.address||'')}</div>
+          <div><strong>담당자:</strong> ${escHtml(o.assignee||'')}</div>
+        </div>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+        <div style="background:#f1f5f9;padding:8px 14px;font-size:12px;font-weight:700;color:#475569">수신처 (을)</div>
+        <div style="padding:12px 14px;font-size:13px;line-height:1.8">
+          <div><strong>업체명:</strong> ${escHtml(o.vendor||'-')}</div>
+          <div><strong>담당자:</strong> ${escHtml(vnd.contact||'')}</div>
+          <div><strong>연락처:</strong> ${escHtml(vnd.phone||'')}</div>
+          <div><strong>이메일:</strong> ${escHtml(vnd.email||'')}</div>
+          <div><strong>사업자등록번호:</strong> ${escHtml(vnd.bizNo||vnd.biz_no||'')}</div>
+        </div>
+      </div>
+    </div>
+    <!-- 공사 정보 -->
+    <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:24px;font-size:13px;background:#fafbfc">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div><strong>현장명:</strong> ${escHtml(p?.nm||'-')}</div>
+        <div><strong>공종:</strong> ${catNm(o.cid)}</div>
+        <div><strong>납품예정일:</strong> ${o.deliv_date||o.delivDate||'-'}</div>
+      </div>
+    </div>
+    <!-- 금액 요약 -->
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;border:2px solid #1a1a1a;border-radius:8px;overflow:hidden;margin-bottom:24px;text-align:center">
+      <div style="padding:14px;border-right:1px solid #e2e8f0">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">공급가액</div>
+        <div style="font-size:18px;font-weight:800">₩${fmt(totalAmt)}</div>
+      </div>
+      <div style="padding:14px;border-right:1px solid #e2e8f0">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">부가세 (10%)</div>
+        <div style="font-size:18px;font-weight:800">₩${fmt(vat)}</div>
+      </div>
+      <div style="padding:14px;background:#1a1a1a;color:#fff">
+        <div style="font-size:11px;opacity:.7;margin-bottom:4px">합계 금액</div>
+        <div style="font-size:20px;font-weight:800">₩${fmt(grandTotal)}</div>
+      </div>
+    </div>
+    <!-- 품목 테이블 -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px">
+      <thead>
+        <tr style="background:#f8fafc;border-top:2px solid #1a1a1a;border-bottom:1px solid #e2e8f0">
+          <th style="padding:10px 8px;text-align:center;width:36px">No</th>
+          <th style="padding:10px 8px;text-align:left">품명</th>
+          <th style="padding:10px 8px;text-align:center">규격</th>
+          <th style="padding:10px 8px;text-align:center">단위</th>
+          <th style="padding:10px 8px;text-align:right">수량</th>
+          <th style="padding:10px 8px;text-align:right">단가</th>
+          <th style="padding:10px 8px;text-align:right">금액</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map((it,idx)=>{
+          const amt=it.amount||(it.qty||1)*(it.price||0);
+          return`<tr style="border-bottom:1px solid #f1f5f9">
+            <td style="padding:8px;text-align:center;color:#94a3b8">${idx+1}</td>
+            <td style="padding:8px;font-weight:500">${escHtml(it.nm||'')}</td>
+            <td style="padding:8px;text-align:center;color:#64748b">${escHtml(it.spec||'-')}</td>
+            <td style="padding:8px;text-align:center;color:#64748b">${escHtml(it.unit||'식')}</td>
+            <td style="padding:8px;text-align:right">${it.qty||1}</td>
+            <td style="padding:8px;text-align:right">${fmt(it.price||0)}</td>
+            <td style="padding:8px;text-align:right;font-weight:600">${fmt(amt)}</td>
+          </tr>`;}).join('')}
+        ${items.length===0?'<tr><td colspan="7" style="padding:20px;text-align:center;color:#94a3b8">품목 없음</td></tr>':''}
+      </tbody>
+      <tfoot>
+        <tr style="border-top:2px solid #1a1a1a">
+          <td colspan="6" style="padding:10px 8px;text-align:right;font-weight:700">공급가액 합계</td>
+          <td style="padding:10px 8px;text-align:right;font-weight:800;font-size:14px">₩${fmt(totalAmt)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    ${o.memo?`<div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:24px">
+      <div style="font-size:12px;font-weight:700;color:#475569;margin-bottom:6px">비고</div>
+      <div style="font-size:13px;line-height:1.6">${escHtml(o.memo)}</div>
+    </div>`:''}
+    <!-- 약정사항 -->
+    <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:24px;font-size:12px;color:#64748b;line-height:1.8">
+      <div style="font-weight:700;color:#475569;margin-bottom:6px">약정사항</div>
+      <ol style="margin:0;padding-left:18px">
+        <li>상기 품목을 위 조건으로 발주하오니, 납기일을 준수하여 납품하여 주시기 바랍니다.</li>
+        <li>납품 시 품질이 사양과 상이한 경우 반품 및 교환을 요청할 수 있습니다.</li>
+        <li>세금계산서는 납품 완료 후 발행하여 주시기 바랍니다.</li>
+        <li>대금 지급은 세금계산서 수령 후 30일 이내에 처리합니다.</li>
+      </ol>
+    </div>
+    <!-- 서명란 -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px">
+      <div style="text-align:center">
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:40px">발 주 처</div>
+        <div style="border-top:1px solid #1a1a1a;padding-top:8px;font-size:14px;font-weight:600">${escHtml(co.nameKo||co.name||'Frame Plus')}</div>
+        <div style="font-size:12px;color:#64748b;margin-top:2px">대표 ${escHtml(co.ceo||'')}</div>
+      </div>
+      <div style="text-align:center">
+        <div style="font-size:12px;color:#94a3b8;margin-bottom:40px">수 신 처</div>
+        <div style="border-top:1px solid #1a1a1a;padding-top:8px;font-size:14px;font-weight:600">${escHtml(o.vendor||'-')}</div>
+        <div style="font-size:12px;color:#64748b;margin-top:2px">(인)</div>
+      </div>
+    </div>
+    <!-- 푸터 -->
+    <div style="margin-top:40px;text-align:center;font-size:11px;color:#cbd5e1">
+      본 문서는 Frame Plus ERP에서 자동 생성되었습니다 · ${today()}
+    </div>
+  </div>`;
+  openModal('발주서 프리뷰',`
+    <div style="display:flex;gap:8px;margin-bottom:16px;justify-content:flex-end">
+      <button onclick="printPO()" style="padding:8px 16px;background:var(--primary);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600">🖨️ 인쇄</button>
+      <button onclick="closeModal()" style="padding:8px 16px;background:var(--g200);color:var(--g600);border:none;border-radius:var(--radius);cursor:pointer;font-size:13px">닫기</button>
+    </div>
+    <div style="border:1px solid var(--g200);border-radius:var(--radius-lg);overflow:auto;max-height:70vh;background:#fff">${poHtml}</div>
+  `,'860px');
+}
+
+function printPO(){
+  const area=document.getElementById('po-print-area');if(!area)return;
+  const w=window.open('','_blank','width=900,height=1000');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>발주서</title>
+    <link href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css" rel="stylesheet">
+    <style>@page{size:A4;margin:15mm}body{margin:0;padding:20px;font-family:'Pretendard','Noto Sans KR',sans-serif}@media print{button{display:none!important}}</style>
+  </head><body>${area.outerHTML}
+    <div style="text-align:center;margin-top:20px"><button onclick="window.print()" style="padding:10px 24px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600">🖨️ 인쇄하기</button></div>
+  </body></html>`);
+  w.document.close();
+}
+
 // ===== VERSION BADGE UPDATE =====
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.3 Full-Stack · D1 Database · RBAC';
+  if(badge) badge.textContent = 'v8.4 Full-Stack · D1 Database · RBAC';
 })();
 
 // ================================================================
