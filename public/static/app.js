@@ -55,9 +55,9 @@ async function initData() {
       api('templates'), api('team'), api('company'),
       api('labor'), api('expenses'), api('presets'),
       api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs'),
-      api('consultations'), api('rfp'), api('clients'), api('erp-attachments'),
-      api('design-items'), api('site-photos'), api('site-daily-logs'), api('site-issues'),
-      api('leave-requests'), api('leave-types')
+      api('consultations?limit=500'), api('rfp'), api('clients'), api('erp-attachments?limit=500'),
+      api('design-items?limit=500'), api('site-photos?limit=300'), api('site-daily-logs?limit=300'), api('site-issues?limit=300'),
+      api('leave-requests?limit=500'), api('leave-types')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],

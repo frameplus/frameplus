@@ -128,10 +128,38 @@ async function ensureTables(db: D1Database) {
 function crud<T>(tableName: string, idField = 'id') {
   const router = new Hono<App>()
 
-  // GET all
+  // GET all (supports ?limit=&offset=&q=&order_by=&order_dir=)
   router.get('/', async (c) => {
     const db = c.env.DB
-    const { results } = await db.prepare(`SELECT * FROM ${tableName} ORDER BY created_at DESC`).all()
+    const url = new URL(c.req.url)
+    const limit = Math.min(5000, Math.max(0, parseInt(url.searchParams.get('limit') || '0', 10) || 0))
+    const offset = Math.max(0, parseInt(url.searchParams.get('offset') || '0', 10) || 0)
+    const q = (url.searchParams.get('q') || '').trim()
+    const orderByRaw = url.searchParams.get('order_by') || 'created_at'
+    const orderDirRaw = (url.searchParams.get('order_dir') || 'DESC').toUpperCase()
+    // Whitelist columns from PRAGMA
+    const colInfo = await db.prepare(`PRAGMA table_info(${tableName})`).all<any>()
+    const cols = colInfo.results || []
+    const validCols = new Set(cols.map((r: any) => r.name))
+    const orderBy = validCols.has(orderByRaw) ? orderByRaw : (validCols.has('created_at') ? 'created_at' : idField)
+    const orderDir = orderDirRaw === 'ASC' ? 'ASC' : 'DESC'
+    let where = ''
+    const binds: any[] = []
+    if (q) {
+      const textCols = cols.filter((r: any) => !r.type || /text/i.test(r.type)).map((r: any) => r.name).filter((n: string) => n !== idField)
+      if (textCols.length) {
+        where = 'WHERE (' + textCols.map((cn: string) => `${cn} LIKE ?`).join(' OR ') + ')'
+        for (let i = 0; i < textCols.length; i++) binds.push(`%${q}%`)
+      }
+    }
+    let sql = `SELECT * FROM ${tableName} ${where} ORDER BY ${orderBy} ${orderDir}`
+    if (limit > 0) sql += ` LIMIT ${limit} OFFSET ${offset}`
+    const { results } = await db.prepare(sql).bind(...binds).all()
+    // Total count for pagination UI
+    try {
+      const cnt = await db.prepare(`SELECT COUNT(*) AS cnt FROM ${tableName} ${where}`).bind(...binds).first<any>()
+      c.header('X-Total-Count', String(cnt?.cnt || 0))
+    } catch (_) {}
     return c.json(results || [])
   })
 

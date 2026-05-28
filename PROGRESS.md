@@ -1,6 +1,6 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-> 마지막 업데이트: 2026-05-29 (P7-A + P8 전체 완료)
+> 마지막 업데이트: 2026-05-29 (P7-A·B + P8 전체 완료)
 
 ---
 
@@ -141,9 +141,18 @@
 
 ## 🔲 미완료 / 다음 작업
 
-### P7-B: 페이지네이션·서버사이드 필터 (다음 작업)
-- [ ] `/api/projects?limit=50&offset=0&q=&status=` 등 페이지네이션 파라미터
-- [ ] `_d` 메모리 캐시 → 페이지 단위 lazy load 전환 (2,047 레코드 모바일 로딩 단축)
+### P7-B: 페이지네이션·서버사이드 필터 (2026-05-29 완료) ✅
+- [x] **백엔드 crud() 페이지네이션 지원** — `?limit=&offset=&q=&order_by=&order_dir=`
+  - 정렬 컬럼은 PRAGMA로 화이트리스트 검증 (SQL 인젝션 방지)
+  - 검색 `q`는 모든 TEXT 컬럼 OR LIKE
+  - `X-Total-Count` 응답 헤더로 총 개수 반환 (페이지네이션 UI 대응)
+  - `limit` 미지정 시 기존 동작(전체 반환) — 100% 하위 호환
+- [x] **initData 큰 테이블 limit 적용** (모바일 초기 로딩 단축):
+  - consultations 2000+ → 500 (영업 칸반 표시 충분)
+  - erp-attachments 500, design-items 500
+  - site-photos 300, site-daily-logs 300, site-issues 300
+  - leave-requests 500
+  - 다른 페이지/모듈은 기존 동작 유지 (회귀 위험 0)
 
 ### P7-C: 모바일 반응형 점검 (375/768)
 - [ ] 칸반·PO 양식·디자인 모듈·현장관리 모바일 점검
