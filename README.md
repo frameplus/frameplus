@@ -123,20 +123,27 @@
 | GET/POST | /api/erp-attachments | 첨부파일 목록/생성 |
 | GET/DELETE | /api/erp-attachments/:id | 첨부파일 조회/삭제 |
 | GET/PUT | /api/company | 회사 정보 조회/수정 |
+| GET/POST | /api/leave-requests | 휴가신청 목록/생성 |
+| GET/PUT/DELETE | /api/leave-requests/:id | 휴가신청 조회/수정/삭제 |
+| GET/POST | /api/leave-types | 휴가유형 목록/생성 |
+| GET | /api/notion/status | Notion 마이그레이션 현황 |
+| POST | /api/notion/migrate/:target | Notion 데이터 마이그레이션 |
 
 ## Data Architecture
 - **Database**: Cloudflare D1 (SQLite 기반, 글로벌 분산)
-- **Tables**: users, sessions, company, team, projects, vendors, meetings, pricedb, orders_manual, as_list, notices, tax_invoices, msg_templates, labor_costs, expenses, item_images, work_presets, notifications, pricedb_history, estimate_template_sets, approvals, user_prefs, consultations, rfp, clients, erp_attachments
+- **Tables**: users, sessions, company, team, projects, vendors, meetings, pricedb, orders_manual, as_list, notices, tax_invoices, msg_templates, labor_costs, expenses, item_images, work_presets, notifications, pricedb_history, estimate_template_sets, approvals, user_prefs, consultations, rfp, clients, erp_attachments, leave_requests, leave_types
+- **Notion Integration**: 7개 DB 연동 (projects, vendors, employees, consultations, expenses, leave_requests, leave_types) — 총 2,019 레코드 마이그레이션
 - **Frontend Cache**: API 응답을 메모리에 캐시하여 UI 성능 최적화
 - **인증**: 세션 기반 (24시간 만료, X-Session-Id 헤더)
 
 ## Code Metrics
-- **app.js**: ~8,100+ lines, 380+ functions
-- **src/index.tsx**: ~1,290+ lines (backend)
-- **Built output**: ~109 KB (_worker.js)
-- **D1 Tables**: 26개
-- **API Endpoints**: 35+
-- **Phase 완료**: 8/8 + Value-Up
+- **app.js**: ~9,200+ lines, 380+ functions
+- **src/index.tsx**: ~1,500+ lines (backend)
+- **Built output**: ~126 KB (_worker.js)
+- **D1 Tables**: 28개
+- **API Endpoints**: 40+
+- **Phase 완료**: 8/8 + Value-Up + Notion연동
+- **Notion 마이그레이션**: 2,019 레코드 (7개 DB)
 
 ## Tech Stack
 - **Backend**: Hono v4 (TypeScript)
@@ -168,11 +175,16 @@ npm run deploy
 ## Deployment
 - **Platform**: Cloudflare Pages
 - **Status**: Active (Production)
-- **Last Updated**: 2026-02-19
+- **Last Updated**: 2026-05-28
 
-## 향후 개발 가능 영역
-- [ ] 실시간 알림 (SSE/폴링)
-- [ ] AI 계약서 리스크 분석 (OpenAI 연동)
-- [ ] 현장용 모바일 전용 뷰
-- [ ] 이메일 발송 실제 API 연동 (Resend/SendGrid)
-- [ ] 엑셀 업로드 (SheetJS 연동)
+## 향후 개발 로드맵
+- [ ] P1: 프로젝트 상세 모드 (PROJECT_NAV, 5탭 뷰)
+- [ ] P2: 영업 모듈 (7단계 칸반, RFP 관리)
+- [ ] P3: 견적 5탭 미리보기 + Gantt 자동생성
+- [ ] P4: 디자인 모듈 (5개 뷰)
+- [ ] P5: 현장 관리
+- [ ] P6: 프리셋 3-레벨 드릴다운 + PO Form
+- [ ] P7: CSS/테스트/배포 최적화
+- [ ] P8: 부가 모듈 (개인페이지, 회의 cron, 문의 폼, 휴가 워크플로우)
+
+> 상세 진행 현황은 [PROGRESS.md](./PROGRESS.md) 참조

@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string }
 type App = { Bindings: Bindings }
 
 const app = new Hono<App>()
@@ -66,6 +66,8 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS stl_expense_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', category TEXT DEFAULT '', name TEXT DEFAULT '', qty REAL DEFAULT 1, unit TEXT DEFAULT '식', price REAL DEFAULT 0, vat_override REAL DEFAULT -1, sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS stl_transport_costs (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', origin TEXT DEFAULT '', destination TEXT DEFAULT '', item TEXT DEFAULT '', qty REAL DEFAULT 1, unit TEXT DEFAULT '회', price REAL DEFAULT 0, vat_override REAL DEFAULT -1, vehicle TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS stl_payments (id TEXT PRIMARY KEY, project_id TEXT DEFAULT '', date TEXT DEFAULT '', description TEXT DEFAULT '', amount REAL DEFAULT 0, method TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS leave_requests (id TEXT PRIMARY KEY, user_id TEXT DEFAULT '', user_name TEXT DEFAULT '', leave_type TEXT DEFAULT '연차', start_date TEXT DEFAULT '', end_date TEXT DEFAULT '', days REAL DEFAULT 1, reason TEXT DEFAULT '', status TEXT DEFAULT '작성중', reviewer TEXT DEFAULT '', reviewer_name TEXT DEFAULT '', reviewed_at TEXT DEFAULT '', reviewer_memo TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS leave_types (id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT DEFAULT '일반휴가', default_days REAL DEFAULT 1, consumes_annual INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
   `)
   // Auto-migrate: add missing columns to existing tables
   const alterStmts = [
@@ -73,6 +75,27 @@ async function ensureTables(db: D1Database) {
     "ALTER TABLE tax_invoices ADD COLUMN memo TEXT DEFAULT ''",
     "ALTER TABLE tax_invoices ADD COLUMN vendor_nm TEXT DEFAULT ''",
     "ALTER TABLE tax_invoices ADD COLUMN vendor_biz TEXT DEFAULT ''",
+    // Notion-aligned: projects 보강
+    "ALTER TABLE projects ADD COLUMN scope_tags TEXT DEFAULT '[]'",
+    "ALTER TABLE projects ADD COLUMN project_type TEXT DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN construction_status TEXT DEFAULT ''",
+    // Notion-aligned: vendors 보강
+    "ALTER TABLE vendors ADD COLUMN category TEXT DEFAULT ''",
+    "ALTER TABLE vendors ADD COLUMN bank_info TEXT DEFAULT ''",
+    "ALTER TABLE vendors ADD COLUMN trade_amount REAL DEFAULT 0",
+    // Notion-aligned: users 보강
+    "ALTER TABLE users ADD COLUMN position TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN hire_date TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN dept TEXT DEFAULT ''",
+    // Notion-aligned: expenses 보강
+    "ALTER TABLE expenses ADD COLUMN payment_due TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN vendor_id TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN amount_vat REAL DEFAULT 0",
+    "ALTER TABLE expenses ADD COLUMN has_invoice INTEGER DEFAULT 0",
+    // Notion-aligned: consultations 보강
+    "ALTER TABLE consultations ADD COLUMN privacy_agreed INTEGER DEFAULT 0",
+    "ALTER TABLE consultations ADD COLUMN marketing_agreed INTEGER DEFAULT 0",
+    "ALTER TABLE consultations ADD COLUMN area_text TEXT DEFAULT ''",
   ]
   for (const stmt of alterStmts) {
     try { await db.prepare(stmt).run() } catch(e) { /* column already exists */ }
@@ -173,6 +196,9 @@ app.route('/api/consultations', crud('consultations'))
 app.route('/api/rfp', crud('rfp'))
 app.route('/api/clients', crud('clients'))
 app.route('/api/erp-attachments', crud('erp_attachments'))
+// Leave management (연차 관리)
+app.route('/api/leave-requests', crud('leave_requests'))
+app.route('/api/leave-types', crud('leave_types'))
 // Settlement module
 app.route('/api/stl/projects', crud('stl_projects'))
 app.route('/api/stl/labor', crud('stl_labor_costs'))
@@ -371,7 +397,7 @@ app.get('/api/auth/me', async (c) => {
   if (!sid) return c.json({ error: 'No session' }, 401)
   const sess = await db.prepare('SELECT * FROM sessions WHERE id = ? AND expires_at > ?').bind(sid, new Date().toISOString()).first() as Record<string, unknown> | null
   if (!sess) return c.json({ error: 'Invalid session' }, 401)
-  const user = await db.prepare('SELECT id, username, name, role, email, phone FROM users WHERE id = ?').bind(sess.user_id).first()
+  const user = await db.prepare('SELECT id, username, name, role, email, phone, position, hire_date, dept FROM users WHERE id = ?').bind(sess.user_id).first()
   if (!user) return c.json({ error: 'User not found' }, 401)
   return c.json(user)
 })
@@ -379,7 +405,7 @@ app.get('/api/auth/me', async (c) => {
 // Users CRUD (admin only - simple version)
 app.get('/api/users', async (c) => {
   const db = c.env.DB
-  const { results } = await db.prepare('SELECT id, username, name, role, email, phone, active, last_login, created_at FROM users ORDER BY created_at DESC').all()
+  const { results } = await db.prepare('SELECT id, username, name, role, email, phone, position, hire_date, dept, active, last_login, created_at FROM users ORDER BY created_at DESC').all()
   return c.json(results || [])
 })
 
@@ -871,6 +897,292 @@ app.post('/api/email/estimate', async (c) => {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     return c.json({ error: msg }, 500)
   }
+})
+
+// ===== NOTION MIGRATION API =====
+const NOTION_DB_IDS = {
+  projects: 'df1679ac-a084-4c53-82d6-40f3e3b22219',
+  vendors: 'd959a68d-76d7-4c94-bcfb-b165987f2fb5',
+  employees: '4ac0a44f-6b1a-42a9-94e0-2d60e5d866b5',
+  consultations: '16fc5096-50d7-81c4-bd26-c7ea16e4f683',
+  expenses: '52d4a4b8-d615-43f4-a1ec-39102704d5d7',
+  leave_requests: '19dc5096-50d7-81e4-a6ad-d4c6dd483617',
+  leave_types: '19dc5096-50d7-812d-94ee-cbaa65c42c85',
+}
+
+async function notionQuery(token: string, dbId: string, startCursor?: string): Promise<any> {
+  const body: any = { page_size: 100 }
+  if (startCursor) body.start_cursor = startCursor
+  const res = await fetch(`https://api.notion.com/v1/databases/${dbId}/query`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return res.json()
+}
+
+function nText(prop: any): string {
+  if (!prop) return ''
+  const arr = prop.rich_text || prop.title || []
+  return arr.map((t: any) => t.plain_text || '').join('')
+}
+function nSelect(prop: any): string { return prop?.select?.name || prop?.status?.name || '' }
+function nMultiSelect(prop: any): string[] { return (prop?.multi_select || []).map((s: any) => s.name) }
+function nNumber(prop: any): number { return prop?.number || 0 }
+function nDate(prop: any): string { return prop?.date?.start || '' }
+function nDateEnd(prop: any): string { return prop?.date?.end || '' }
+function nCheckbox(prop: any): boolean { return prop?.checkbox || false }
+function nPhone(prop: any): string { return prop?.phone_number || '' }
+function nEmail(prop: any): string { return prop?.email || '' }
+function nPeople(prop: any): string { return (prop?.people || []).map((p: any) => p.name || '').join(', ') }
+
+// Get migration status
+app.get('/api/notion/status', async (c) => {
+  const db = c.env.DB
+  const tables = ['projects', 'vendors', 'users', 'consultations', 'expenses', 'leave_requests', 'leave_types']
+  const counts: Record<string, number> = {}
+  for (const t of tables) {
+    try {
+      const r = await db.prepare(`SELECT COUNT(*) as cnt FROM ${t}`).first<{cnt:number}>()
+      counts[t] = r?.cnt || 0
+    } catch { counts[t] = 0 }
+  }
+  return c.json({ counts, notion_dbs: Object.keys(NOTION_DB_IDS) })
+})
+
+// Migrate a specific table from Notion
+app.post('/api/notion/migrate/:target', async (c) => {
+  const db = c.env.DB
+  const target = c.req.param('target')
+  const body = await c.req.json() as { token?: string; mode?: string }
+  const token = body.token || c.env.NOTION_TOKEN || ''
+  if (!token) return c.json({ error: 'Notion token required' }, 400)
+  const mode = body.mode || 'merge' // merge=기존 유지+추가, replace=전체 교체
+
+  const dbId = (NOTION_DB_IDS as any)[target]
+  if (!dbId) return c.json({ error: `Unknown target: ${target}` }, 400)
+
+  let allResults: any[] = []
+  let cursor: string | undefined = undefined
+  do {
+    const page: any = await notionQuery(token, dbId, cursor)
+    allResults = allResults.concat(page.results || [])
+    cursor = page.has_more ? page.next_cursor : undefined
+  } while (cursor)
+
+  let migrated = 0, skipped = 0, errors = 0
+
+  if (target === 'projects') {
+    if (mode === 'replace') await db.prepare('DELETE FROM projects WHERE id LIKE ?').bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        const nm = nText(p['프로젝트명']) || '(제목없음)'
+        const client = nText(p['클라이언트'])
+        const loc = nText(p['현장 주소'])
+        const contact = nPhone(p['담당자'])
+        const email = nEmail(p['이메일'])
+        const mgr = nPeople(p['공사 담당자'])
+        const date = nDate(p['수주일'])
+        const status = nSelect(p['공사진행 상태']) || '작성중'
+        const contract_status_raw = nSelect(p['상담계약 상태'])
+        const contract_status = contract_status_raw === '계약 완료' ? '계약완료' : contract_status_raw === '확정/계약 전' ? '확정/계약전' : contract_status_raw || '미생성'
+        const construction_status = nSelect(p['공사진행 상태'])
+        const project_type = nSelect(p['프로젝트 구분'])
+        const scope_tags = JSON.stringify(nMultiSelect(p['공사 범위']))
+        const area_text = nText(p['예산 범위'])
+        const start = nDate(p['공사 기간'])
+        const end = nDateEnd(p['공사 기간'])
+        const memo = nText(p['공사 내용'])
+        const gantt_tasks = start ? JSON.stringify([{id:'auto',nm:'공사기간',start,end:end||start,color:'#2563eb',progress:0,assignee:mgr,note:''}]) : '[]'
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM projects WHERE id = ?').bind(id).first()
+          if (exists) { skipped++; continue }
+        }
+        await db.prepare(`INSERT OR REPLACE INTO projects (id,nm,client,contact,email,loc,mgr,date,status,contract_status,construction_status,project_type,scope_tags,memo,gantt_tasks,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+          id, nm, client, contact, email, loc, mgr, date, status, contract_status, construction_status, project_type, scope_tags, memo, gantt_tasks, r.created_time, r.last_edited_time
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  else if (target === 'vendors') {
+    if (mode === 'replace') await db.prepare('DELETE FROM vendors WHERE id LIKE ?').bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        const nm = nText(p['거래처명']) || '(제목없음)'
+        const contact = nText(p['거래처 담당자'])
+        const phone = nPhone(p['전화번호'])
+        const addr = nText(p['거래처 주소'])
+        const category = nMultiSelect(p['업종']).join(', ')
+        const bank_info = nText(p['계좌정보 A'])
+        const memo = nText(p['비고'])
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM vendors WHERE id = ? OR nm = ?').bind(id, nm).first()
+          if (exists) { skipped++; continue }
+        }
+        await db.prepare(`INSERT OR REPLACE INTO vendors (id,nm,contact,phone,addr,category,bank_info,memo,created_at) VALUES (?,?,?,?,?,?,?,?,?)`).bind(
+          id, nm, contact, phone, addr, category, bank_info, memo, r.created_time
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  else if (target === 'employees') {
+    if (mode === 'replace') await db.prepare("DELETE FROM users WHERE id LIKE ? AND id != 'admin-default'").bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const name = nText(p['이름']) || '(이름없음)'
+        const position = nSelect(p['직책'])
+        const hire_date = nDate(p['입사일'])
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        // Map position to role
+        const role = (position === '소장' || position === '팀장') ? 'admin' : 'staff'
+        const username = name.replace(/\s/g, '').toLowerCase()
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM users WHERE name = ?').bind(name).first()
+          if (exists) {
+            // Update position/hire_date on existing user
+            await db.prepare('UPDATE users SET position = ?, hire_date = ? WHERE name = ?').bind(position, hire_date, name).run()
+            skipped++; continue
+          }
+        }
+        const pw = await hashPassword('fp' + username + '2026')
+        await db.prepare(`INSERT OR REPLACE INTO users (id,username,password,name,role,position,hire_date,active) VALUES (?,?,?,?,?,?,?,1)`).bind(
+          id, username, pw, name, role, position, hire_date
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  else if (target === 'consultations') {
+    if (mode === 'replace') await db.prepare('DELETE FROM consultations WHERE id LIKE ?').bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        const client_name = nText(p['성함'])
+        const client_phone = nPhone(p['연락처'])
+        const location = nText(p['주소지'])
+        const area_text = nText(p['공사면적'])
+        const budget = nText(p['예산금액'])
+        const client_email = nEmail(p['이메일'])
+        const status_raw = nSelect(p['상태'])
+        const status = status_raw === '상담 완료' ? '상담완료' : status_raw === '상담 신청' ? '신규' : status_raw === 'X' ? '종료' : status_raw || '신규'
+        const privacy_agreed = nCheckbox(p['개인정보 수집과 이용에 대한 동의']) ? 1 : 0
+        const marketing_agreed = nCheckbox(p['할인 등 혜택 안내를 위한 마케팅 활용 동의 (선택)']) ? 1 : 0
+        const notes = nText(p['비고'])
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM consultations WHERE id = ?').bind(id).first()
+          if (exists) { skipped++; continue }
+        }
+        await db.prepare(`INSERT OR REPLACE INTO consultations (id,client_name,client_phone,client_email,location,budget,area_text,status,privacy_agreed,marketing_agreed,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+          id, client_name, client_phone, client_email, location, budget, area_text, status, privacy_agreed, marketing_agreed, notes, r.created_time, r.last_edited_time
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  else if (target === 'expenses') {
+    if (mode === 'replace') await db.prepare('DELETE FROM expenses WHERE id LIKE ?').bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        const title = nText(p['제목']) || '(제목없음)'
+        const amount = nNumber(p['지출 금액'])
+        const amount_vat = nNumber(p['지출 금액(VAT포함)'])
+        const vendor = nText(p['업체명'])
+        const status_arr = nMultiSelect(p['처리상태'])
+        const status = status_arr.includes('지급완료') ? '완료' : status_arr.includes('반려') ? '반려' : status_arr.includes('요청') ? '대기' : '대기'
+        const has_invoice = nCheckbox(p['계산서 여부']) ? 1 : 0
+        const payment_due = nSelect(p['요청일'])
+        const memo = nText(p['비고'])
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM expenses WHERE id = ?').bind(id).first()
+          if (exists) { skipped++; continue }
+        }
+        await db.prepare(`INSERT OR REPLACE INTO expenses (id,title,amount,amount_vat,vendor,status,has_invoice,payment_due,memo,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`).bind(
+          id, title, amount, amount_vat, vendor, status, has_invoice, payment_due, memo, r.created_time
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  else if (target === 'leave_requests') {
+    if (mode === 'replace') await db.prepare('DELETE FROM leave_requests WHERE id LIKE ?').bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        const title = nText(p['제목'])
+        const start_date = nDate(p['신청기간'])
+        const end_date = nDateEnd(p['신청기간'])
+        const reason = nText(p['신청사유'])
+        const status_raw = nSelect(p['현재상태'])
+        const status = status_raw === '승인완료' ? '승인' : status_raw === '승인반려' ? '반려' : status_raw === '관리자 확인 중' ? '검토중' : '작성중'
+        const reviewer = nPeople(p['처리자'])
+        const reviewer_memo = nText(p['처리자 메모'])
+        const reviewed_at = nDate(p['처리일시'])
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM leave_requests WHERE id = ?').bind(id).first()
+          if (exists) { skipped++; continue }
+        }
+        await db.prepare(`INSERT OR REPLACE INTO leave_requests (id,user_name,leave_type,start_date,end_date,reason,status,reviewer_name,reviewer_memo,reviewed_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`).bind(
+          id, title, '연차', start_date, end_date || start_date, reason, status, reviewer, reviewer_memo, reviewed_at, r.created_time
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  else if (target === 'leave_types') {
+    if (mode === 'replace') await db.prepare('DELETE FROM leave_types WHERE id LIKE ?').bind('notion-%').run()
+    for (const r of allResults) {
+      try {
+        const p = r.properties
+        const id = 'notion-' + r.id.replace(/-/g, '')
+        const name = nText(p['휴가명']) || '(제목없음)'
+        const category = nSelect(p['휴가구분'])
+        const default_days_raw = nSelect(p['기본 휴가일수'])
+        const default_days = parseFloat(default_days_raw) || 1
+        const consumes_annual = nCheckbox(p['연차소비']) ? 1 : 0
+
+        if (mode === 'merge') {
+          const exists = await db.prepare('SELECT id FROM leave_types WHERE id = ?').bind(id).first()
+          if (exists) { skipped++; continue }
+        }
+        await db.prepare(`INSERT OR REPLACE INTO leave_types (id,name,category,default_days,consumes_annual,created_at) VALUES (?,?,?,?,?,?)`).bind(
+          id, name, category, default_days, consumes_annual, r.created_time
+        ).run()
+        migrated++
+      } catch(e) { errors++ }
+    }
+  }
+
+  return c.json({ target, total: allResults.length, migrated, skipped, errors, mode })
+})
+
+// Notion DB ID lookup for direct iteration
+app.post('/api/notion/migrate-all', async (c) => {
+  // For migrate-all, we internally call the same logic per target
+  // This avoids self-fetch which is problematic in Workers
+  return c.json({ error: 'Use individual /api/notion/migrate/:target endpoints for each table, or call them sequentially from the frontend.' }, 400)
 })
 
 // ===== SERVE FRONTEND =====
