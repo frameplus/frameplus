@@ -116,12 +116,23 @@
 - [x] **initData()에 3개 API 연결** — `_d.sitePhotos`, `_d.siteDailyLogs`, `_d.siteIssues`
 - [x] 버전 v8.3
 
+### P6: 프리셋 3단 드릴다운 + PO 양식 (2026-05-28)
+- [x] **프리셋 3단 드릴다운**: Phase(9단계) → 공종(C01~C18) → 항목(체크박스 선택)
+  - GANTT_PHASES 색상/아이콘 버튼, breadcrumb 네비게이션
+  - 항목별 체크박스: 전체 적용 / 선택 항목만 적용
+  - 프리셋 없는 공종 안내 메시지
+- [x] **PO(발주서) 양식**: A4 전문 레이아웃
+  - 발주처/수신처 정보 (회사/거래처 DB 연동)
+  - 품목 테이블 + 공급가액/부가세/합계 자동계산
+  - 문서번호 자동생성 (PO-날짜-ID)
+  - 약정사항 4조항 + 서명란
+  - 새 창 인쇄 (@page A4)
+- [x] 발주 목록/상세에 PO 프리뷰 버튼 추가
+- [x] 버전 v8.4
+
 ---
 
 ## 🔲 미완료 / 다음 작업
-
-### P6: 프리셋 3-레벨 드릴다운 + PO Form
-- [ ] 프리셋 → 공종 → 항목 3단계 + 발주서 양식
 
 ### P7: CSS/테스트/배포 최적화
 - [ ] UI 다듬기, 성능 개선
@@ -136,7 +147,7 @@
 | 항목 | 수치 |
 |------|------|
 | src/index.tsx (백엔드) | ~1,740+ lines |
-| public/static/app.js (프론트) | ~10,760+ lines, 490+ functions |
+| public/static/app.js (프론트) | ~11,020+ lines, 510+ functions |
 | D1 테이블 | 32개 (+site_photos, site_daily_logs, site_issues) |
 | API 엔드포인트 | 46+ |
 | 빌드 크기 | ~129 KB (_worker.js) |
@@ -145,6 +156,7 @@
 ## 🔗 Git Log (최근)
 | 커밋 | 내용 |
 |------|------|
+| `607fa34` | P6: Preset 3-level drilldown + PO form preview/print |
 | `bda8606` | P5: Site Management Module - 4 views (Photos/DailyLog/Issues/Analysis) |
 | `c55e286` | P4: 디자인 모듈 5개 뷰 (컨셉보드/도면관리/자재보드/시안비교/디자인일정) |
 | `e8f6258` | PROGRESS.md 업데이트: P2+P3 완료, P4~P8 잔여 |
