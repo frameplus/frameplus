@@ -214,6 +214,69 @@ app.route('/api/erp-attachments', crud('erp_attachments'))
 // Leave management (연차 관리)
 app.route('/api/leave-requests', crud('leave_requests'))
 app.route('/api/leave-types', crud('leave_types'))
+
+// Leave workflow (approve / reject / balance)
+app.post('/api/leave-requests/:id/approve', async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json<any>().catch(() => ({}))
+  const now = new Date().toISOString()
+  await c.env.DB.prepare(
+    `UPDATE leave_requests SET status='승인', reviewer=?, reviewer_name=?, reviewed_at=?, reviewer_memo=?, updated_at=? WHERE id=?`
+  ).bind(body.reviewer || '', body.reviewer_name || '', now, body.memo || '', now, id).run()
+  return c.json({ ok: true })
+})
+app.post('/api/leave-requests/:id/reject', async (c) => {
+  const id = c.req.param('id')
+  const body = await c.req.json<any>().catch(() => ({}))
+  const now = new Date().toISOString()
+  await c.env.DB.prepare(
+    `UPDATE leave_requests SET status='반려', reviewer=?, reviewer_name=?, reviewed_at=?, reviewer_memo=?, updated_at=? WHERE id=?`
+  ).bind(body.reviewer || '', body.reviewer_name || '', now, body.memo || '반려', now, id).run()
+  return c.json({ ok: true })
+})
+app.post('/api/leave-requests/:id/cancel', async (c) => {
+  const id = c.req.param('id')
+  const now = new Date().toISOString()
+  await c.env.DB.prepare(
+    `UPDATE leave_requests SET status='취소', updated_at=? WHERE id=?`
+  ).bind(now, id).run()
+  return c.json({ ok: true })
+})
+// GET balance: accrued (from hire_date) - used (approved) = remaining
+app.get('/api/leave-balance/:userId', async (c) => {
+  const uid = c.req.param('userId')
+  let user: any = null
+  try {
+    user = await c.env.DB.prepare('SELECT id, username, name, hire_date FROM users WHERE id=? OR username=?').bind(uid, uid).first()
+  } catch (_) { /* hire_date column may not exist yet */ }
+  let accrued = 0
+  if (user?.hire_date) {
+    const hire = new Date(user.hire_date)
+    const now = new Date()
+    if (!isNaN(hire.getTime())) {
+      const months = (now.getFullYear() - hire.getFullYear()) * 12 + (now.getMonth() - hire.getMonth())
+      if (months < 12) {
+        accrued = Math.min(11, Math.max(0, months))
+      } else {
+        const yearsAfter1 = Math.floor((months - 12) / 12)
+        accrued = Math.min(25, 15 + Math.floor(yearsAfter1 / 2))
+      }
+    }
+  }
+  const usedRow = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(days), 0) AS used FROM leave_requests
+     WHERE (user_id=? OR user_name=?) AND status='승인' AND leave_type IN ('연차','반차','반반차')`
+  ).bind(uid, user?.name || uid).first<any>()
+  const used = Number(usedRow?.used || 0)
+  return c.json({
+    userId: uid,
+    name: user?.name || null,
+    hire_date: user?.hire_date || null,
+    accrued,
+    used,
+    remaining: Math.max(0, accrued - used)
+  })
+})
 app.route('/api/design-items', crud('design_items'))
 app.route('/api/site-photos', crud('site_photos'))
 app.route('/api/site-daily-logs', crud('site_daily_logs'))

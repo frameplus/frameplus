@@ -49,14 +49,15 @@ async function initData() {
   if (_initializing) return;
   _initializing = true;
   try {
-    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList, clients, erpAttachments, designItems, sitePhotos, siteDailyLogs, siteIssues] = await Promise.all([
+    const [projects, vendors, meetings, pricedb, orders, as_list, notices, tax, templates, team, company, labor, expenses, presets, notifications, estTemplates, approvals, userPrefs, consultations, rfpList, clients, erpAttachments, designItems, sitePhotos, siteDailyLogs, siteIssues, leaveRequests, leaveTypes] = await Promise.all([
       api('projects'), api('vendors'), api('meetings'), api('pricedb'),
       api('orders'), api('as'), api('notices'), api('tax'),
       api('templates'), api('team'), api('company'),
       api('labor'), api('expenses'), api('presets'),
       api('notifications'), api('estimate-templates'), api('approvals'), api('user-prefs'),
       api('consultations'), api('rfp'), api('clients'), api('erp-attachments'),
-      api('design-items'), api('site-photos'), api('site-daily-logs'), api('site-issues')
+      api('design-items'), api('site-photos'), api('site-daily-logs'), api('site-issues'),
+      api('leave-requests'), api('leave-types')
     ]);
     _d = { projects: (projects||[]).map(dbToProject), vendors: vendors||[], meetings: meetings||[],
       pricedb: pricedb||[], orders: orders||[], as_list: as_list||[], notices: notices||[],
@@ -65,6 +66,7 @@ async function initData() {
       notifications: notifications||[], estTemplates: estTemplates||[], approvals: approvals||[],
       consultations: consultations||[], rfpList: rfpList||[], clients: clients||[], erpAttachments: erpAttachments||[],
       designItems: designItems||[], sitePhotos: sitePhotos||[], siteDailyLogs: siteDailyLogs||[], siteIssues: siteIssues||[],
+      leaveRequests: leaveRequests||[], leaveTypes: leaveTypes||[],
       userPrefs: (Array.isArray(userPrefs)?userPrefs[0]:userPrefs)||{} };
     // Apply dark mode from saved prefs
     if (_d.userPrefs?.dark_mode) applyDarkMode(true);
@@ -601,6 +603,7 @@ const NAV=[
   {section:'기타'},
   {id:'as',label:'AS·하자보수',icon:'wrench'},
   {id:'team',label:'팀원 관리',icon:'users'},
+  {id:'leave',label:'연차 관리',icon:'calendar'},
   {id:'reports',label:'리포트',icon:'chart'},
   {section:'시스템'},
   {id:'notifications',label:'알림 센터',icon:'alert'},
@@ -772,6 +775,7 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'tax':renderTax();break;
     case 'as':renderAS();break;
     case 'team':renderTeam();break;
+    case 'leave':renderLeave();break;
     case 'labor':renderLabor();break;
     case 'expenses':sub==='detail'?renderExpenseDetail():renderExpenses();break;
     case 'reports':renderReports();break;
@@ -6934,6 +6938,154 @@ async function doSendExpenseApproval(id){
     if(res?.success){closeModal();toast('✉️ 결재요청 이메일이 발송되었습니다!','success');}
     else toast('발송 실패: '+(res?.error||''),'error');
   }catch(err){toast('오류: '+err.message,'error');}
+}
+
+// ===== LEAVE MANAGEMENT (연차 관리) =====
+async function renderLeave(){
+  const isAdmin = _authUser?.role === 'admin';
+  const me = _authUser?.username || '';
+  const myName = _authUser?.name || me;
+  const reqs = _d.leaveRequests || [];
+  let bal = null;
+  try { bal = await api('leave-balance/' + encodeURIComponent(me)); } catch(_) {}
+  const myReqs = reqs.filter(r => r.user_id===me || r.user_name===myName || r.user_name===me);
+  const pendingReqs = reqs.filter(r => r.status==='신청' || r.status==='대기' || r.status==='작성중');
+  const stBadge = (s)=>{
+    const map = {'작성중':['#E5E7EB','#374151'],'신청':['#FEF3C7','#92400E'],'대기':['#FEF3C7','#92400E'],'승인':['#D1FAE5','#065F46'],'반려':['#FEE2E2','#991B1B'],'취소':['#E5E7EB','#6B7280']};
+    const [bg,fg] = map[s]||['#E5E7EB','#6B7280'];
+    return `<span style="background:${bg};color:${fg};padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600">${s||'-'}</span>`;
+  };
+  document.getElementById('content').innerHTML = `
+    <div style="padding:24px;max-width:1200px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+        <h1 style="font-size:22px;font-weight:800">🏖️ 연차 관리</h1>
+        <button class="btn btn-primary" onclick="openLeaveRequestModal()">+ 연차 신청</button>
+      </div>
+      ${bal ? `
+      <div class="card" style="margin-bottom:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px">
+        <div><div style="font-size:12px;color:var(--text-muted)">발생 연차</div><div style="font-size:24px;font-weight:700;color:var(--primary);margin-top:4px">${bal.accrued}일</div></div>
+        <div><div style="font-size:12px;color:var(--text-muted)">사용 연차</div><div style="font-size:24px;font-weight:700;color:var(--text);margin-top:4px">${bal.used}일</div></div>
+        <div><div style="font-size:12px;color:var(--text-muted)">잔여 연차</div><div style="font-size:24px;font-weight:700;color:#10B981;margin-top:4px">${bal.remaining}일</div></div>
+        <div><div style="font-size:12px;color:var(--text-muted)">입사일</div><div style="font-size:14px;font-weight:600;padding-top:8px">${bal.hire_date||'-'}</div></div>
+      </div>` : ''}
+      ${isAdmin && pendingReqs.length ? `
+      <div class="card" style="margin-bottom:20px;border-left:4px solid #F59E0B">
+        <div class="card-title">⏳ 결재 대기 (${pendingReqs.length})</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>신청자</th><th>유형</th><th>시작일</th><th>종료일</th><th>일수</th><th>사유</th><th>상태</th><th>결재</th></tr></thead>
+          <tbody>${pendingReqs.map(r=>`
+            <tr>
+              <td>${escHtml(r.user_name||r.user_id||'-')}</td>
+              <td>${escHtml(r.leave_type||'연차')}</td>
+              <td>${escHtml(r.start_date||'-')}</td>
+              <td>${escHtml(r.end_date||'-')}</td>
+              <td>${r.days||0}일</td>
+              <td style="max-width:240px">${escHtml(r.reason||'-')}</td>
+              <td>${stBadge(r.status)}</td>
+              <td style="white-space:nowrap"><button class="btn btn-sm btn-primary" onclick="approveLeave('${r.id}')">승인</button> <button class="btn btn-sm btn-outline" onclick="rejectLeave('${r.id}')">반려</button></td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+      </div>` : ''}
+      <div class="card">
+        <div class="card-title">📋 ${isAdmin ? '전체 신청 내역' : '내 신청 내역'}</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>신청자</th><th>유형</th><th>시작일</th><th>종료일</th><th>일수</th><th>상태</th><th>결재자</th><th>결재일</th><th>액션</th></tr></thead>
+          <tbody>${(isAdmin?reqs:myReqs).slice(0,100).map(r=>`
+            <tr>
+              <td>${escHtml(r.user_name||r.user_id||'-')}</td>
+              <td>${escHtml(r.leave_type||'연차')}</td>
+              <td>${escHtml(r.start_date||'-')}</td>
+              <td>${escHtml(r.end_date||'-')}</td>
+              <td>${r.days||0}일</td>
+              <td>${stBadge(r.status)}</td>
+              <td>${escHtml(r.reviewer_name||'-')}</td>
+              <td>${r.reviewed_at?String(r.reviewed_at).slice(0,10):'-'}</td>
+              <td>${(r.status==='신청'||r.status==='대기')&&(r.user_name===myName||r.user_id===me)?`<button class="btn btn-sm btn-outline" onclick="cancelLeave('${r.id}')">취소</button>`:''}</td>
+            </tr>`).join('') || `<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:32px">신청 내역이 없습니다</td></tr>`}</tbody>
+        </table></div>
+      </div>
+    </div>
+  `;
+}
+
+function openLeaveRequestModal(){
+  const today = new Date().toISOString().slice(0,10);
+  openModal(`<div class="modal-bg open"><div class="modal">
+    <div class="modal-hdr">
+      <span class="modal-title">🏖️ 연차 신청</span>
+      <button class="modal-close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <div class="form-row form-row-2">
+        <div><label>휴가 유형</label>
+          <select id="lv-type" class="sel">
+            <option value="연차">연차 (1일)</option>
+            <option value="반차">반차 (0.5일)</option>
+            <option value="반반차">반반차 (0.25일)</option>
+            <option value="병가">병가</option>
+            <option value="경조사">경조사</option>
+            <option value="공가">공가</option>
+          </select></div>
+        <div><label>일수 (자동계산)</label><input id="lv-days" type="number" step="0.25" min="0" value="1" class="inp" /></div>
+      </div>
+      <div class="form-row form-row-2">
+        <div><label>시작일</label><input id="lv-start" type="date" value="${today}" class="inp" /></div>
+        <div><label>종료일</label><input id="lv-end" type="date" value="${today}" class="inp" /></div>
+      </div>
+      <div class="form-row"><label>사유</label><textarea id="lv-reason" class="inp" rows="3" placeholder="휴가 사유를 입력하세요"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="submitLeaveRequest()">신청</button>
+    </div>
+  </div></div>`);
+  const start=document.getElementById('lv-start'), end=document.getElementById('lv-end'), days=document.getElementById('lv-days'), type=document.getElementById('lv-type');
+  const recalc=()=>{
+    if(type.value==='반차'){days.value=0.5;return;}
+    if(type.value==='반반차'){days.value=0.25;return;}
+    const s=new Date(start.value), e=new Date(end.value);
+    if(!isNaN(s.getTime())&&!isNaN(e.getTime())&&e>=s){
+      let count=0; const d=new Date(s);
+      while(d<=e){const dow=d.getDay();if(dow!==0&&dow!==6)count++;d.setDate(d.getDate()+1);}
+      days.value=count;
+    }
+  };
+  start.addEventListener('change',recalc); end.addEventListener('change',recalc); type.addEventListener('change',recalc);
+}
+
+async function submitLeaveRequest(){
+  const type=document.getElementById('lv-type').value;
+  const start=document.getElementById('lv-start').value;
+  const end=document.getElementById('lv-end').value;
+  const days=parseFloat(document.getElementById('lv-days').value);
+  const reason=document.getElementById('lv-reason').value.trim();
+  if(!start||!end||!days){toast('필수 항목을 입력하세요','error');return;}
+  const me=_authUser?.username||'';
+  const id='lv-'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+  const now=new Date().toISOString();
+  await api('leave-requests','POST',{id,user_id:me,user_name:_authUser?.name||me,leave_type:type,start_date:start,end_date:end,days,reason,status:'신청',created_at:now,updated_at:now});
+  _d.leaveRequests=await api('leave-requests');
+  closeModal(); toast('연차 신청이 접수되었습니다','success'); renderLeave();
+}
+async function approveLeave(id){
+  if(!confirm('이 신청을 승인하시겠습니까?'))return;
+  const memo=prompt('승인 메모 (선택)')||'';
+  await api('leave-requests/'+id+'/approve','POST',{reviewer:_authUser?.username||'',reviewer_name:_authUser?.name||'',memo});
+  _d.leaveRequests=await api('leave-requests');
+  toast('승인되었습니다','success'); renderLeave();
+}
+async function rejectLeave(id){
+  const memo=prompt('반려 사유를 입력하세요');
+  if(memo===null)return;
+  await api('leave-requests/'+id+'/reject','POST',{reviewer:_authUser?.username||'',reviewer_name:_authUser?.name||'',memo});
+  _d.leaveRequests=await api('leave-requests');
+  toast('반려되었습니다','warning'); renderLeave();
+}
+async function cancelLeave(id){
+  if(!confirm('신청을 취소하시겠습니까?'))return;
+  await api('leave-requests/'+id+'/cancel','POST',{});
+  _d.leaveRequests=await api('leave-requests');
+  toast('취소되었습니다'); renderLeave();
 }
 
 // ===== TEAM DELETE (팀원 삭제) =====
