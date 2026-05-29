@@ -459,8 +459,10 @@ function calcP(p){
 function getTotal(p){return calcP(p).finalTotal}
 function getMR(p){const c=calcP(p);return c.finalTotal>0?((c.finalTotal-c.costDirect)/c.finalTotal*100):0}
 function getProg(p){const ts=p.ganttTasks||[];if(!ts.length)return 0;return Math.round(ts.reduce((a,t)=>a+Number(t.progress||0),0)/ts.length)}
-function getPaid(p){return(p.payments||[]).filter(x=>x.paid).reduce((a,x)=>a+(getTotal(p)*Number(x.pct||0)/100),0)}
-function getUnpaid(p){return Math.max(0,getTotal(p)-getPaid(p))}
+// v8.6.2: 계약 금액 동결 — 계약 생성 시 저장된 contract_amt 사용, 없으면 견적 실시간(getTotal) fallback
+function getContractAmt(p){const v=Number((p&&(p.contract_amt||p.contractAmt))||0);return v>0?v:getTotal(p);}
+function getPaid(p){return(p.payments||[]).filter(x=>x.paid).reduce((a,x)=>a+(getContractAmt(p)*Number(x.pct||0)/100),0)}
+function getUnpaid(p){return Math.max(0,getContractAmt(p)-getPaid(p))}
 
 // ===== FINANCIAL SUMMARY ENGINE (from v8 — 통합 수익 계산) =====
 function getFinSummary(pid){
@@ -2112,8 +2114,16 @@ async function saveEditProject(pid){
 }
 async function deleteProject(pid){
   if(!confirm('삭제하시겠습니까?'))return;
-  
-  await deleteProjectRemote(pid);toast('삭제되었습니다');renderProjects();
+  const res=await api('projects/'+pid,'DELETE');
+  if(res&&res.__error){
+    if(res.status===409&&res.blocked){
+      const det=Object.entries(res.counts||{}).map(([k,v])=>`${k} ${v}건`).join(', ');
+      toast(`연결된 재무기록(${det})이 있어 삭제할 수 없습니다. 해당 기록을 먼저 정리하세요.`,'error');
+    } else { toast('삭제 실패: '+(res.error||res.message||'오류'),'error'); }
+    return;
+  }
+  _d.projects=(_d.projects||[]).filter(p=>p.id!==pid);
+  toast('삭제되었습니다');renderProjects();
 }
 function newEstimate(){
   S.editingEstPid=null;nav('estimate');
@@ -3734,11 +3744,11 @@ function renderCollection(){
   const ps=getProjects();
   const totalUnpaid=ps.reduce((a,p)=>a+getUnpaid(p),0);
   const totalPaid=ps.reduce((a,p)=>a+getPaid(p),0);
-  const totalContract=ps.reduce((a,p)=>a+getTotal(p),0);
+  const totalContract=ps.reduce((a,p)=>a+getContractAmt(p),0);
   const collRate=totalContract>0?Math.round(totalPaid/totalContract*100):0;
   // Overdue: unpaid payments past their due date
   const overdueItems=[];const upcomingItems=[];
-  ps.forEach(p=>{const tot=getTotal(p);(p.payments||[]).forEach((pm,i)=>{
+  ps.forEach(p=>{const tot=getContractAmt(p);(p.payments||[]).forEach((pm,i)=>{
     if(!pm.paid&&pm.due){
       const dday=diffDays(today(),pm.due);const amt=Math.round(tot*Number(pm.pct||0)/100);
       const item={pid:p.id,pnm:p.nm,client:p.client,label:pm.label,amt,due:pm.due,dday,idx:i};
@@ -3752,7 +3762,7 @@ function renderCollection(){
     const d=new Date(now.getFullYear(),now.getMonth()-m,1);
     const ym=d.toISOString().slice(0,7);
     let paid=0;
-    ps.forEach(p=>{const tot=getTotal(p);(p.payments||[]).forEach(pm=>{
+    ps.forEach(p=>{const tot=getContractAmt(p);(p.payments||[]).forEach(pm=>{
       if(pm.paid&&pm.paidDate&&pm.paidDate.startsWith(ym))paid+=Math.round(tot*Number(pm.pct||0)/100);
     });});
     monthlyData.push({label:`${d.getMonth()+1}월`,amt:paid});
@@ -6352,6 +6362,7 @@ async function generateContractFromEstimate(pid){
   
   // Update project
   const updateData={
+    contract_amt:tot,
     contract_status:'초안작성',
     contract_date:today(),
     contract_note:'견적서 기반 자동생성',
@@ -6365,6 +6376,7 @@ async function generateContractFromEstimate(pid){
   // Update local cache
   const idx=_d.projects.findIndex(x=>x.id===pid);
   if(idx>=0){
+    _d.projects[idx].contract_amt=tot;
     _d.projects[idx].contractStatus='초안작성';
     _d.projects[idx].contractDate=today();
     _d.projects[idx].contractNote='견적서 기반 자동생성';
@@ -9213,9 +9225,9 @@ function renderErpSettlement(){
   const transTotal=transExp.reduce((a,e)=>a+Number(e.amount||0),0);
   const expTotal=normExp.reduce((a,e)=>a+Number(e.amount||0),0);
   const totalCost=laborTotal+matTotal+subTotal+ordTotal+transTotal+expTotal;
-  const contractAmount=(typeof getTotal==='function')?getTotal(p):Number(p.contractAmount||p.amount||0);
+  const contractAmount=getContractAmt(p);
   const payments=p.payments||[];
-  const paidTotal=payments.filter(pay=>pay.paid).reduce((a,pay)=>a+Number(pay.amount||0),0);
+  const paidTotal=payments.filter(pay=>pay.paid).reduce((a,pay)=>a+(Number(pay.amount)||Math.round(contractAmount*Number(pay.pct||0)/100)),0);
   const unpaidTotal=Math.max(0,contractAmount-paidTotal);
   const margin=contractAmount-totalCost;
   const marginRate=contractAmount>0?(margin/contractAmount*100):0;

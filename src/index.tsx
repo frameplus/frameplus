@@ -83,6 +83,7 @@ async function ensureTables(db: D1Database) {
     "ALTER TABLE projects ADD COLUMN scope_tags TEXT DEFAULT '[]'",
     "ALTER TABLE projects ADD COLUMN project_type TEXT DEFAULT ''",
     "ALTER TABLE projects ADD COLUMN construction_status TEXT DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN contract_amt REAL DEFAULT 0",
     // Notion-aligned: vendors 보강
     "ALTER TABLE vendors ADD COLUMN category TEXT DEFAULT ''",
     "ALTER TABLE vendors ADD COLUMN bank_info TEXT DEFAULT ''",
@@ -226,6 +227,25 @@ function crud<T>(tableName: string, idField = 'id') {
 }
 
 // ===== MOUNT API ROUTES =====
+// v8.6.2 정합성: 프로젝트 삭제 시 재무기록(노무·발주·경비·세금계산서) 있으면 차단
+app.delete('/api/projects/:id', async (c) => {
+  const db = c.env.DB
+  const id = c.req.param('id')
+  const force = new URL(c.req.url).searchParams.get('force') === '1'
+  const counts: Record<string, number> = {}
+  for (const [label, tbl] of [['노무비','labor_costs'],['발주','orders_manual'],['경비','expenses'],['세금계산서','tax_invoices']] as const) {
+    try {
+      const r = await db.prepare(`SELECT COUNT(*) AS n FROM ${tbl} WHERE pid = ?`).bind(id).first<any>()
+      if (r && r.n > 0) counts[label] = r.n
+    } catch (_) {}
+  }
+  const hasFin = Object.keys(counts).length > 0
+  if (hasFin && !force) {
+    return c.json({ error: '연결된 재무기록이 있어 삭제할 수 없습니다', blocked: true, counts }, 409)
+  }
+  await db.prepare('DELETE FROM projects WHERE id = ?').bind(id).run()
+  return c.json({ success: true, deletedFinancial: force ? counts : undefined })
+})
 app.route('/api/projects', crud('projects'))
 app.route('/api/vendors', crud('vendors'))
 app.route('/api/meetings', crud('meetings'))
