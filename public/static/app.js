@@ -531,6 +531,44 @@ function statusBadge(st){const c=STATUS_COLORS[st]||'gray';return '<span class="
 function diffDays(a,b){return Math.round((new Date(b)-new Date(a))/(1000*60*60*24))}
 function addDays(d,n){const dt=new Date(d);dt.setDate(dt.getDate()+n);return dt.toISOString().split('T')[0]}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+
+// ===== PAGINATION HELPERS (v8.6 P3) =====
+// Usage: const slice = paginate(arr, page, size); const html = renderPaginator(arr.length, page, size, 'changePage');
+function paginate(arr, page, size){
+  const p = Math.max(0, page|0);
+  const s = Math.max(1, size|0);
+  return (arr||[]).slice(p*s, p*s+s);
+}
+function filterByQuery(arr, q, keys){
+  if(!q) return arr||[];
+  const lq = String(q).toLowerCase();
+  return (arr||[]).filter(it => keys.some(k => String(it?.[k]??'').toLowerCase().includes(lq)));
+}
+function renderPaginator(total, page, size, fnName){
+  total = Math.max(0, total|0);
+  const pageCount = Math.max(1, Math.ceil(total/size));
+  const p = Math.min(pageCount-1, Math.max(0, page|0));
+  const btn = (label, np, dis, active) => `<button onclick="${dis?'':fnName+'('+np+')'}" ${dis?'disabled':''} style="padding:6px 11px;border:1px solid var(--border);background:${active?'var(--primary)':'#fff'};color:${active?'#fff':'var(--text)'};border-radius:var(--radius-sm);font-size:12px;font-weight:600;cursor:${dis?'not-allowed':'pointer'};${dis?'opacity:.4':''};min-width:34px">${label}</button>`;
+  const pages = [];
+  const maxBtn = 5;
+  let from = Math.max(0, p - Math.floor(maxBtn/2));
+  let to = Math.min(pageCount, from+maxBtn);
+  if (to-from < maxBtn) from = Math.max(0, to-maxBtn);
+  for (let i=from; i<to; i++) pages.push(btn(String(i+1), i, false, i===p));
+  return `<div style="display:flex;gap:6px;align-items:center;justify-content:center;padding:16px 0;flex-wrap:wrap">
+    <span style="font-size:11.5px;color:var(--text-muted);margin-right:8px">총 ${total.toLocaleString()}건 · ${p+1}/${pageCount}</span>
+    ${btn('‹‹', 0, p===0)}
+    ${btn('‹', p-1, p===0)}
+    ${pages.join('')}
+    ${btn('›', p+1, p>=pageCount-1)}
+    ${btn('››', pageCount-1, p>=pageCount-1)}
+  </div>`;
+}
+// State holder for pagination/search across pages
+window._pag = window._pag || { expenses:{p:0,s:25,q:''}, consultations:{p:0,s:25,q:''}, labor:{p:0,s:25,q:''}, projects:{p:0,s:50,q:''} };
+function pageOf(key){ return (_pag[key] = _pag[key] || { p:0, s:25, q:'' }); }
+function setPage(key, p){ pageOf(key).p = Math.max(0,p|0); }
+function setPageSearch(key, q){ pageOf(key).q = String(q||''); pageOf(key).p = 0; }
 function v(id){return document.getElementById(id)?.value||''}
 function svgIcon(name,size=14){
   const icons={
@@ -6692,9 +6730,100 @@ async function deleteLabor(id){
 
 // ===== EXPENSE DETAIL (stub — route fallback) =====
 function renderExpenseDetail(){
-  // Fallback: redirect to expenses list since detail view is not implemented
-  S.subPage = null;
-  renderExpenses();
+  document.getElementById('tb-title').textContent='지출 결의 상세';
+  const eid = S.selExpenseId || (new URLSearchParams(location.search).get('id')) || '';
+  const e = (_d.expenses||[]).find(x => x.id === eid);
+  if(!e){
+    document.getElementById('content').innerHTML = `
+      <div style="padding:40px;text-align:center;color:var(--text-muted)">
+        <div style="font-size:32px;margin-bottom:12px">📄</div>
+        <div style="font-size:14px;margin-bottom:16px">지출 결의를 찾을 수 없습니다</div>
+        <button class="btn btn-outline" onclick="nav('expenses')">← 결의서 목록</button>
+      </div>`;
+    return;
+  }
+  const proj = (getProjects()||[]).find(p => p.id === e.pid);
+  const stBadge = (s)=>{
+    const map={'대기':['#FEF3C7','#92400E','⏳'],'승인':['#DCFCE7','#15803D','✓'],'반려':['#FEE2E2','#991B1B','✗'],'완료':['#F3F1E9','#4B4A45','●']};
+    const [bg,fg,ic] = map[s||'대기']||['#F3F1E9','#4B4A45','●'];
+    return `<span style="background:${bg};color:${fg};padding:5px 12px;border-radius:99px;font-size:12px;font-weight:600">${ic} ${s||'대기'}</span>`;
+  };
+  const fmtKRW=(n)=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(n)||0));
+  const row=(k,v,opts={})=>`<div style="display:flex;padding:10px 0;border-bottom:1px solid var(--border-light)">
+    <div style="width:120px;font-size:12.5px;color:var(--text-muted);font-weight:500">${k}</div>
+    <div style="flex:1;font-size:13px;color:var(--text);font-weight:${opts.b?700:500}">${v||'-'}</div>
+  </div>`;
+  document.getElementById('content').innerHTML = `
+  <div style="padding:24px;max-width:980px;margin:0 auto">
+    <button onclick="nav('expenses')" style="display:inline-flex;align-items:center;gap:6px;padding:8px 14px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:12.5px;font-weight:600;cursor:pointer;margin-bottom:16px">← 결의서 목록</button>
+    <!-- Hero -->
+    <div class="card" style="margin-bottom:20px;padding:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:600;letter-spacing:.04em">${escHtml(e.category||'경비')}</div>
+        <div style="font-size:22px;font-weight:700;color:var(--text);margin-top:4px">${escHtml(e.title||'-')}</div>
+        <div style="font-size:12.5px;color:var(--text-muted);margin-top:4px">${escHtml(e.date||'')} ${proj?'· '+escHtml(proj.nm):''}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:28px;font-weight:800;color:var(--primary);line-height:1">${fmtKRW(e.amount||0)}<span style="font-size:14px;color:var(--text-muted);font-weight:500">원</span></div>
+        ${e.tax_amount>0?`<div style="font-size:11px;color:var(--text-muted);margin-top:4px">부가세 ${fmtKRW(e.tax_amount)}원 포함</div>`:''}
+        <div style="margin-top:10px">${stBadge(e.status)}</div>
+      </div>
+    </div>
+    <!-- Two col grid -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px">
+      <div class="card">
+        <div class="card-title">📋 기본 정보</div>
+        ${row('프로젝트', proj?escHtml(proj.nm):'-')}
+        ${row('카테고리', escHtml(e.category||'-'))}
+        ${row('지출 일자', escHtml(e.date||'-'))}
+        ${row('업체', escHtml(e.vendor||'-'))}
+        ${row('결제 방법', escHtml(e.payment_method||'-'))}
+        ${e.is_transport?row('운반 경로', `${escHtml(e.origin||'-')} → ${escHtml(e.destination||'-')}${e.vehicle?' ('+escHtml(e.vehicle)+')':''}`):''}
+      </div>
+      <div class="card">
+        <div class="card-title">💰 금액·증빙</div>
+        ${row('공급가액', fmtKRW(e.amount||0)+'원', {b:1})}
+        ${row('부가세', fmtKRW(e.tax_amount||0)+'원')}
+        ${row('합계', fmtKRW((Number(e.amount||0)+Number(e.tax_amount||0)))+'원', {b:1})}
+        ${row('증빙 종류', escHtml(e.receipt_type||'-'))}
+        ${row('증빙 번호', escHtml(e.receipt_no||'-'))}
+        ${e.receipt_image?`<div style="margin-top:10px"><a href="${e.receipt_image}" target="_blank" style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:var(--primary-light);color:var(--primary);border-radius:var(--radius-sm);text-decoration:none;font-size:12px;font-weight:600">📎 증빙 이미지 보기</a></div>`:''}
+      </div>
+      <div class="card">
+        <div class="card-title">👤 결재 흐름</div>
+        ${row('신청자', escHtml(e.requester||'-'))}
+        ${row('결재자', escHtml(e.approver||'-'))}
+        ${row('승인 일자', escHtml(e.approved_date||'-'))}
+        ${row('상태', stBadge(e.status))}
+        ${e.reject_reason?row('반려 사유', escHtml(e.reject_reason)):''}
+      </div>
+      ${e.memo?`<div class="card">
+        <div class="card-title">📝 메모</div>
+        <div style="font-size:13px;color:var(--text);white-space:pre-wrap;line-height:1.7">${escHtml(e.memo)}</div>
+      </div>`:''}
+    </div>
+    <!-- Actions -->
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn btn-outline" onclick="nav('expenses')">목록</button>
+      ${(_authUser?.role==='admin' && (e.status==='대기' || !e.status))?`
+        <button onclick="approveExpenseFromDetail('${e.id}')" style="padding:8px 16px;background:#15803D;color:#fff;border:none;border-radius:var(--radius);font-size:13px;font-weight:600;cursor:pointer">✓ 승인</button>
+        <button onclick="rejectExpenseFromDetail('${e.id}')" style="padding:8px 16px;background:#DC2626;color:#fff;border:none;border-radius:var(--radius);font-size:13px;font-weight:600;cursor:pointer">✗ 반려</button>
+      `:''}
+    </div>
+  </div>`;
+}
+function openExpenseDetail(eid){ S.selExpenseId=eid; nav('expenses','detail'); }
+async function approveExpenseFromDetail(eid){
+  if(!confirm('이 지출 결의를 승인하시겠습니까?'))return;
+  await api('expenses/'+eid,'PUT',{status:'승인',approved_date:new Date().toISOString().slice(0,10),approver:_authUser?.name||_authUser?.username||''});
+  _d.expenses=await api('expenses');
+  toast('승인되었습니다','success'); renderExpenseDetail();
+}
+async function rejectExpenseFromDetail(eid){
+  const reason=prompt('반려 사유를 입력하세요'); if(reason===null)return;
+  await api('expenses/'+eid,'PUT',{status:'반려',reject_reason:reason,approver:_authUser?.name||_authUser?.username||''});
+  _d.expenses=await api('expenses');
+  toast('반려되었습니다','warning'); renderExpenseDetail();
 }
 
 // ===== EXPENSES (지출결의서) =====

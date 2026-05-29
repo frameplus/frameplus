@@ -1,6 +1,42 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-## v8.6 폰트·컬러 리디자인 + 페이지 점검 (2026-05-29) ✅ Step 1·2/3
+## v8.6 사이클 1 — ABCD 동시 진행 (2026-05-29) ✅
+
+### A. 페이지네이션·검색 헬퍼 정의 (P3 일부)
+- [x] `paginate(arr, page, size)` — 클라이언트 사이드 슬라이스
+- [x] `filterByQuery(arr, q, keys)` — 다중 키 검색
+- [x] `renderPaginator(total, page, size, fnName)` — 페이지 컨트롤 HTML (‹‹ ‹ 1 2 3 › ››)
+- [x] `_pag` 상태 — expenses/consultations/labor/projects별 page·size·query 저장
+- [x] `pageOf` / `setPage` / `setPageSearch` 헬퍼
+- [ ] 다음 사이클: renderExpenses / renderConsultations / renderLabor에 실제 통합
+
+### B. renderExpenseDetail 실제 구현 (P4 완료)
+- [x] 빈 스텁 → 본격 상세 화면
+- [x] Hero 카드 — 카테고리·제목·금액·VAT·상태
+- [x] 4개 카드 그리드 — 기본 정보 / 금액·증빙 / 결재 흐름 / 메모
+- [x] 운반 경로 표시 (is_transport·origin·destination·vehicle)
+- [x] 증빙 이미지 보기 링크
+- [x] admin 권한 — ✓ 승인 / ✗ 반려 버튼 즉시 호출 (PUT /api/expenses/:id)
+- [x] `openExpenseDetail(eid)` 헬퍼
+
+### C. 정산관리 통합 DB 컬럼 확장 (P5 단계 1 완료)
+- [x] **labor_costs** → `work_type`, `job`, `surcharge` 추가
+- [x] **orders_manual** → `cost_type` ('order'/'material'/'subcontract'/'install') 추가
+- [x] **expenses** → `is_transport`, `origin`, `destination`, `vehicle` 추가 (운반비 호환)
+- [x] **projects** → `settlement_meta` JSON 추가 (정산서 단위 메모·결재선)
+- [ ] 다음 사이클: `POST /api/migrate-settlement` 마이그레이션 라우트 + 데이터 이관
+
+### D. app.js 모놀리스 분할 가이드
+- [x] 분할 계획 명세 — core/dash/project/sales/design/hr/admin 7개 모듈, 예상 라인 명시
+- [x] 안전한 진행 순서: vite 동적 import + 기존 함수 전역 노출 유지하면서 점진 분할
+- [ ] 다음 사이클: core.js placeholder 분리부터 시작 (사이드바·init·router·apiHelper)
+
+## 다음 사이클 (사이클 2) 우선순위
+1. A 적용 — renderExpenses에 검색·페이지네이션 통합 (가장 빠른 체감)
+2. C 마이그레이션 — POST /api/migrate-settlement 라우트 + dry-run + 실 이관
+3. A 적용 — renderConsultations / renderLabor에 동일 통합
+4. D 시작 — core.js 분리 첫 단계
+
 
 ### Step 2 — UX 핵심 결함 수정 (완료)
 - [x] **사이드바 토글 강화** — `.sb-toggle` 28→34px, 흰배경 + 보더 + 호버 시 레드 fill + scale, 접힌 상태에서도 가운데 정렬로 명확히 보임

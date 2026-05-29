@@ -111,6 +111,16 @@ async function ensureTables(db: D1Database) {
     "ALTER TABLE rfp ADD COLUMN competitors TEXT DEFAULT '[]'",
     "ALTER TABLE rfp ADD COLUMN presentation_date TEXT DEFAULT ''",
     "ALTER TABLE rfp ADD COLUMN go_nogo TEXT DEFAULT ''",
+    // v8.6 P5 단계1: 정산관리 → ERP 본체 통합용 컬럼 확장
+    "ALTER TABLE labor_costs ADD COLUMN work_type TEXT DEFAULT ''",
+    "ALTER TABLE labor_costs ADD COLUMN job TEXT DEFAULT ''",
+    "ALTER TABLE labor_costs ADD COLUMN surcharge REAL DEFAULT 0",
+    "ALTER TABLE orders_manual ADD COLUMN cost_type TEXT DEFAULT 'order'",
+    "ALTER TABLE expenses ADD COLUMN is_transport INTEGER DEFAULT 0",
+    "ALTER TABLE expenses ADD COLUMN origin TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN destination TEXT DEFAULT ''",
+    "ALTER TABLE expenses ADD COLUMN vehicle TEXT DEFAULT ''",
+    "ALTER TABLE projects ADD COLUMN settlement_meta TEXT DEFAULT '{}'",
   ]
   for (const stmt of alterStmts) {
     try { await db.prepare(stmt).run() } catch(e) { /* column already exists */ }
