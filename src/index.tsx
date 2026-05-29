@@ -453,7 +453,7 @@ app.post('/api/init', async (c) => {
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.5' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.6' }))
 
 // ===== PASSWORD HASHING (PBKDF2-SHA256) =====
 async function hashPassword(password: string, salt?: string): Promise<string> {
@@ -1427,21 +1427,28 @@ function getIndexHTML() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Frame Plus ERP</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Noto+Sans+KR:wght@300;400;500;600;700&family=Noto+Serif+KR:wght@300;400;500;600;700;900&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;500;600;700;800&family=Noto+Sans+KR:wght@300;400;500;600;700;800&family=Noto+Serif+KR:wght@400;500;600;700;900&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
 <style>
-/* ===== FRAME PLUS ERP v8.5 - Pluuug-Inspired SaaS Design ===== */
+/* ===== FRAME PLUS ERP v8.6 - Claude-Inspired Editorial Design ===== */
 :root{
-  --primary:#4F46E5;--primary-light:#EEF2FF;--primary-dark:#3730A3;--primary-50:#EEF2FF;--primary-100:#E0E7FF;--primary-500:#6366F1;--primary-600:#4F46E5;--primary-700:#4338CA;
-  --gray-50:#F9FAFB;--gray-100:#F3F4F6;--gray-200:#E5E7EB;--gray-300:#D1D5DB;--gray-400:#9CA3AF;--gray-500:#6B7280;--gray-600:#4B5563;--gray-700:#374151;--gray-800:#1F2937;--gray-900:#111827;
-  --success:#10B981;--success-light:#D1FAE5;--danger:#EF4444;--danger-light:#FEE2E2;--warning:#F59E0B;--warning-light:#FEF3C7;--info:#3B82F6;--info-light:#DBEAFE;
-  --purple:#8B5CF6;--purple-light:#EDE9FE;--teal:#14B8A6;--teal-light:#CCFBF1;--pink:#EC4899;--pink-light:#FCE7F3;
-  --white:#FFFFFF;--bg:#F8FAFC;--card:#FFFFFF;--border:#E2E8F0;--border-light:#F1F5F9;
-  --text:#0F172A;--text-secondary:#475569;--text-muted:#94A3B8;
-  --font-sans:'Inter','Noto Sans KR',system-ui,-apple-system,sans-serif;--font-serif:'Noto Serif KR',serif;
+  /* Accent — Red as point color */
+  --primary:#DC2626;--primary-light:#FEF2F2;--primary-dark:#991B1B;--primary-50:#FEF2F2;--primary-100:#FEE2E2;--primary-500:#DC2626;--primary-600:#B91C1C;--primary-700:#991B1B;
+  /* Neutrals — warm beige/ivory scale */
+  --gray-50:#FAF9F4;--gray-100:#F3F1E9;--gray-200:#E5E3DC;--gray-300:#D1CFC8;--gray-400:#9C9B95;--gray-500:#6B6A65;--gray-600:#4B4A45;--gray-700:#373633;--gray-800:#1F1E1C;--gray-900:#0F0E0C;
+  /* Status colors — muted */
+  --success:#15803D;--success-light:#DCFCE7;--danger:#DC2626;--danger-light:#FEE2E2;--warning:#B45309;--warning-light:#FEF3C7;--info:#1F1F1F;--info-light:#F3F1E9;
+  --purple:#7C3AED;--purple-light:#EDE9FE;--teal:#0F766E;--teal-light:#CCFBF1;--pink:#BE185D;--pink-light:#FCE7F3;
+  /* Backgrounds & surfaces — Claude.ai warm ivory */
+  --white:#FFFFFF;--bg:#F5F4EE;--card:#FFFFFF;--border:#E5E3DC;--border-light:#F3F1E9;
+  /* Text — near-black on warm bg */
+  --text:#1F1E1C;--text-secondary:#4B4A45;--text-muted:#6B6A65;
+  --font-sans:'Noto Sans','Noto Sans KR','Apple SD Gothic Neo',system-ui,-apple-system,sans-serif;--font-serif:'Noto Serif KR',serif;
   --sidebar-w:260px;--sidebar-collapsed:68px;--topbar-h:56px;
   --radius-sm:6px;--radius:10px;--radius-lg:14px;--radius-xl:20px;
   --shadow-xs:0 1px 2px rgba(0,0,0,.04);--shadow-sm:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);--shadow:0 4px 6px -1px rgba(0,0,0,.07),0 2px 4px -2px rgba(0,0,0,.05);--shadow-md:0 10px 15px -3px rgba(0,0,0,.08),0 4px 6px -4px rgba(0,0,0,.04);--shadow-lg:0 20px 25px -5px rgba(0,0,0,.08),0 8px 10px -6px rgba(0,0,0,.04);
@@ -1461,17 +1468,17 @@ function getIndexHTML() {
 }
 *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
 
-/* ===== DARK MODE ===== */
+/* ===== DARK MODE — Claude-inspired warm dark ===== */
 html.dark{
-  --primary:#818CF8;--primary-light:rgba(129,140,248,.12);--primary-dark:#6366F1;--primary-50:rgba(129,140,248,.08);--primary-100:rgba(129,140,248,.15);--primary-500:#818CF8;--primary-600:#6366F1;--primary-700:#4F46E5;
-  --gray-50:#0F172A;--gray-100:#1E293B;--gray-200:#334155;--gray-300:#475569;--gray-400:#64748B;--gray-500:#94A3B8;--gray-600:#CBD5E1;--gray-700:#E2E8F0;--gray-800:#F1F5F9;--gray-900:#F8FAFC;
+  --primary:#EF4444;--primary-light:rgba(239,68,68,.12);--primary-dark:#DC2626;--primary-50:rgba(239,68,68,.06);--primary-100:rgba(239,68,68,.14);--primary-500:#EF4444;--primary-600:#DC2626;--primary-700:#B91C1C;
+  --gray-50:#1A1917;--gray-100:#262421;--gray-200:#363330;--gray-300:#4A4744;--gray-400:#6B6863;--gray-500:#8F8C86;--gray-600:#B5B2AC;--gray-700:#D2CFC9;--gray-800:#E8E5DF;--gray-900:#F5F4EE;
   --success:#34D399;--success-light:rgba(52,211,153,.15);--danger:#F87171;--danger-light:rgba(248,113,113,.15);--warning:#FBBF24;--warning-light:rgba(251,191,36,.15);--info:#60A5FA;--info-light:rgba(96,165,250,.15);
   --purple:#A78BFA;--purple-light:rgba(167,139,250,.15);--teal:#2DD4BF;--teal-light:rgba(45,212,191,.15);--pink:#F472B6;--pink-light:rgba(244,114,182,.15);
-  --white:#0F172A;--bg:#020617;--card:#0F172A;--border:#1E293B;--border-light:#1E293B;
-  --text:#F8FAFC;--text-secondary:#CBD5E1;--text-muted:#64748B;
+  --white:#1A1917;--bg:#13110F;--card:#1F1D1A;--border:#363330;--border-light:#2A2825;
+  --text:#F5F4EE;--text-secondary:#D2CFC9;--text-muted:#8F8C86;
 }
 html.dark body{background:var(--bg);color:var(--text)}
-html.dark #sidebar{background:#020617;border-color:#1E293B}
+html.dark #sidebar{background:#13110F;border-color:#363330}
 html.dark .sb-item:hover{background:rgba(255,255,255,.04)}
 html.dark .sb-item.active{background:var(--primary-light);color:var(--primary)}
 html.dark .sb-item.active .sb-icon{color:var(--primary)}
@@ -1920,7 +1927,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       </div>
       <span class="sb-logo-text">Frame Plus</span>
-      <span class="sb-logo-ver">v8.5</span>
+      <span class="sb-logo-ver">v8.6</span>
     </div>
     <button class="sb-toggle" onclick="toggleSidebar()" title="메뉴 접기">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -1973,7 +1980,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
     </button>
   </div>
 </div>
-<div class="fs-badge">v8.5 Full-Stack ERP</div>
+<div class="fs-badge">v8.6 Full-Stack ERP</div>
 <script src="/static/app.js"></script>
 </body>
 </html>`

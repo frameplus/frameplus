@@ -1,9 +1,9 @@
-// ===== Frame Plus ERP v8.5 - Full-Stack D1 SaaS Design =====
+// ===== Frame Plus ERP v8.6 - Full-Stack D1 SaaS Design =====
 // D1 Database backend with in-memory cache for UI performance
 // v7: Complete UI redesign inspired by Pluuug.com SaaS platform
 //     Modern card-based dashboard, purple accent, clean typography,
 //     Cost flow visualization, enhanced KPI cards, professional tables
-//     v8.5: Dark mode polish, focus-visible, version sync, P3~P6 modules complete
+//     v8.6: Dark mode polish, focus-visible, version sync, P3~P6 modules complete
 
 // ===== AUTH STATE =====
 let _authUser = null; // { id, username, name, role, email }
@@ -121,7 +121,7 @@ function renderLoginScreen() {
         </div>
       </div>
       <div style="text-align:center;margin-top:20px;font-size:11px;color:rgba(255,255,255,.3)">
-        © ${new Date().getFullYear()} Frame Plus ERP v8.5
+        © ${new Date().getFullYear()} Frame Plus ERP v8.6
       </div>
     </div>
   </div>`;
@@ -5788,7 +5788,7 @@ function _adminSystem(){
       <div class="card">
         <div class="card-title">ℹ️ 시스템 정보</div>
         <div style="font-size:12px;line-height:2;color:var(--g600)">
-          <div><strong>버전:</strong> v8.5 Full-Stack (Auth+RBAC+Polish)</div>
+          <div><strong>버전:</strong> v8.6 Full-Stack (Auth+RBAC+Polish)</div>
           <div><strong>플랫폼:</strong> Cloudflare Pages + D1</div>
           <div><strong>프레임워크:</strong> Hono + Vanilla JS</div>
           <div><strong>데이터:</strong> D1 SQLite (Cloud Sync)</div>
@@ -10403,7 +10403,7 @@ function printPO(){
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.5 Full-Stack · D1 Database · RBAC';
+  if(badge) badge.textContent = 'v8.6 Full-Stack · D1 Database · RBAC';
 })();
 
 // ================================================================
