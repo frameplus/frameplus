@@ -23,6 +23,13 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Cache-bust asset versions (app.js/style.css 내용 해시 주입)
+        run: |
+          APPVER=$(md5sum public/static/app.js | cut -c1-10)
+          CSSVER=$(md5sum public/static/style.css | cut -c1-10)
+          sed -i "s/__APPVER__/$APPVER/g; s/__CSSVER__/$CSSVER/g" src/index.tsx
+          echo "cache-bust → app.js?v=$APPVER, style.css?v=$CSSVER"
+
       - name: Build
         run: npm run build
 

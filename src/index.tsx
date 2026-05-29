@@ -1602,7 +1602,7 @@ function getIndexHTML() {
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
-<link rel="stylesheet" href="/static/style.css?v=8.6.2">
+<link rel="stylesheet" href="/static/style.css?v=__CSSVER__">
 <style>
 /* ===== FRAME PLUS ERP v8.6 - Claude-Inspired Editorial Design ===== */
 :root{
@@ -2155,7 +2155,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
   </div>
 </div>
 <div class="fs-badge">v8.6.2 Full-Stack ERP</div>
-<script src="/static/app.js?v=8.6.2"></script>
+<script src="/static/app.js?v=__APPVER__"></script>
 </body>
 </html>`
 }
