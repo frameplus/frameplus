@@ -1839,6 +1839,29 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
   .order-detail-wrap{grid-template-columns:1fr}
   .cost-flow{flex-wrap:wrap;gap:12px}
   .cost-flow-item::after{display:none}
+  /* P7-C: tables stay scrollable horizontally; cards tighter */
+  .tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .tbl{min-width:600px}
+  .card{padding:16px}
+  .card-title{font-size:13px}
+  .filter-bar{flex-wrap:wrap;gap:8px}
+  .filter-bar .inp,.filter-bar .sel{flex:1 1 140px;min-width:120px}
+}
+@media(max-width:480px){
+  /* P7-C: full-screen modal on small phones, tighter spacing */
+  .modal-bg{padding:0}
+  .modal,.modal-lg,.modal-xl{width:100vw!important;max-width:100vw!important;max-height:100vh!important;border-radius:0!important;height:100vh}
+  .modal-hdr{padding:14px}
+  .modal-body{padding:14px!important}
+  .modal-footer{padding:12px;position:sticky;bottom:0;background:var(--card)}
+  #content{padding:12px;padding-bottom:80px}
+  .card{padding:12px;border-radius:10px}
+  h1{font-size:18px!important}
+  .kpi-value{font-size:18px}
+  .btn{padding:7px 12px;font-size:12.5px}
+  .btn-sm{padding:5px 10px;font-size:11.5px}
+  /* Buttons that look like toolbars wrap nicely */
+  .topbar-actions{gap:4px}
 }
 @media(max-width:480px){
   .dash-grid{grid-template-columns:1fr}
