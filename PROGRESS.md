@@ -75,6 +75,11 @@
   - 결산 카드: 계약 - 원가 = 마진 + 마진율
 - [x] 데이터 소스가 ERP 본체 테이블 — labor_costs · orders_manual(cost_type) · expenses(is_transport) · projects.payments
 
+## v8.6 Hotfix — 정산관리 401 Unauthorized (2026-05-29) ✅
+- [x] **stlApi 인증 헤더 자동 첨부** — `_sessionId` 있으면 `X-Session-Id` 헤더 동봉
+- [x] 401 응답 시 세션 자동 정리 + 새로고침 (로그인 유도)
+- [x] 정산관리 페이지 진입 시 `{"error":"Unauthorized"}` 표시 문제 해결
+
 ## 사이클 4 우선순위 (다음)
 1. 마이그레이션 dry-run 검증 후 실 실행
 2. 글로벌 "정산관리" 메뉴 → 프로젝트별 정산서로 안내 (배너 + 마이그레이션 버튼)

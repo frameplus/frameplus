@@ -10681,9 +10681,19 @@ function printPO(){
 /* ── D1 REST 헬퍼 ──────────────────────────────────── */
 async function stlApi(endpoint, method='GET', body=null) {
   const opts = { method, headers: {'Content-Type':'application/json'} };
+  // v8.6 hotfix: attach session id so settlement module passes auth middleware
+  if (_sessionId) opts.headers['X-Session-Id'] = _sessionId;
   if (body !== null && method !== 'GET') opts.body = JSON.stringify(body);
   const r = await fetch('/api/' + endpoint, opts);
-  if (!r.ok) { const txt = await r.text().catch(()=>String(r.status)); throw new Error(txt.slice(0,120)); }
+  if (!r.ok) {
+    const txt = await r.text().catch(()=>String(r.status));
+    if (r.status === 401) {
+      // Session expired — bounce to login
+      try { localStorage.removeItem('fp_session'); } catch(_){}
+      location.reload();
+    }
+    throw new Error(txt.slice(0,120));
+  }
   return r.json();
 }
 
