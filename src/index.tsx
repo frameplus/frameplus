@@ -463,7 +463,7 @@ app.post('/api/init', async (c) => {
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.6' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.6.1' }))
 
 // ===== PASSWORD HASHING (PBKDF2-SHA256) =====
 async function hashPassword(password: string, salt?: string): Promise<string> {
@@ -2080,7 +2080,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       </div>
       <span class="sb-logo-text">Frame Plus</span>
-      <span class="sb-logo-ver">v8.6</span>
+      <span class="sb-logo-ver">v8.6.1</span>
     </div>
     <button class="sb-toggle" onclick="toggleSidebar()" title="메뉴 접기">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -2133,8 +2133,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
     </button>
   </div>
 </div>
-<div class="fs-badge">v8.6 Full-Stack ERP</div>
-<script src="/static/app.js"></script>
+<div class="fs-badge">v8.6.1 Full-Stack ERP</div>
+<script src="/static/app.js?v=8.6.1"></script>
 </body>
 </html>`
 }
