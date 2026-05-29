@@ -395,6 +395,7 @@ const PROJECT_NAV = [
     {id:'erp_budget',label:'Budget',icon:'dollar'},
     {id:'erp_attachments',label:'Attachments',icon:'file'},
     {id:'estimate',label:'견적서',icon:'file'},
+    {id:'erp_settlement',label:'정산서',icon:'dollar'},
     {id:'erp_report',label:'Report',icon:'chart'},
   ]},
   { section:'시공', icon:'🏗️', items:[
@@ -825,6 +826,7 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     case 'erp_overview':renderErpOverview();break;
     case 'erp_budget':renderErpBudget();break;
     case 'erp_attachments':renderErpAttachments();break;
+    case 'erp_settlement':renderErpSettlement();break;
     case 'erp_report':renderErpReport();break;
     case 'settlement':renderSettlement();break;
     case 'design_concept':renderDesignConcept();break;
@@ -6520,11 +6522,29 @@ function renderLabor(){
   </div>`:``}
   
   ${filterBar({statuses:['미지급','지급완료'],placeholder:'작업자명 검색...',showMonthGroup:true,onFilter:'filterLabor()'})}
-  
+
   <div id="labor-list-wrap">
-  ${_laborMonthView?_laborMonthlyView(groups,ps):_laborFlatView(labor,ps)}
+  ${(() => {
+    if (_laborMonthView) return _laborMonthlyView(groups, ps);
+    const pag = pageOf('labor');
+    const filtered = filterByQuery(labor, pag.q, ['worker_name','worker_type','memo']);
+    const paged = paginate(filtered, pag.p, pag.s);
+    let html = _laborFlatView(paged, ps);
+    if (filtered.length > pag.s) html += renderPaginator(filtered.length, pag.p, pag.s, 'changeLaborPage');
+    if (filtered.length > 50) html += `<div style="display:flex;justify-content:center;margin-top:6px;flex-wrap:wrap;gap:6px;align-items:center">
+      <input type="text" placeholder="작업자·유형·메모 검색…" value="${escHtml(pag.q||'')}" oninput="clearTimeout(window._laborSrchT);window._laborSrchT=setTimeout(()=>searchLabor(this.value),250)" style="padding:6px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;width:220px;background:#fff;color:var(--text)">
+      <select onchange="pageOf('labor').s=parseInt(this.value)||25;changeLaborPage(0)" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:#fff;color:var(--text)">
+        <option value="25" ${pag.s==25?'selected':''}>25건</option>
+        <option value="50" ${pag.s==50?'selected':''}>50건</option>
+        <option value="100" ${pag.s==100?'selected':''}>100건</option>
+      </select>
+    </div>`;
+    return html;
+  })()}
   </div>`;
 }
+function changeLaborPage(p){ setPage('labor', p); renderLabor(); }
+function searchLabor(q){ setPageSearch('labor', q); renderLabor(); }
 
 let _laborMonthView=false;
 function filterLabor(){
@@ -7971,11 +7991,22 @@ function openAddConsultWithStage(stage){
 }
 
 // ── P2 리스트 보기 (기존 카드+필터 유지) ──
+function changeConsultPage(p){ setPage('consultations', p); renderConsult(); }
 function renderConsultListView(cs){
+  const pag = pageOf('consultations');
+  const pagedCs = paginate(cs, pag.p, pag.s);
   return `<div style="margin-bottom:12px">
     ${filterBar({searchId:'cs-search',statuses:PIPELINE_STAGES,statusId:'cs-stage',placeholder:'고객명, 연락처 검색...',showDate:true,dateId:'cs-from',dateToId:'cs-to',onFilter:'filterConsultList()'})}
   </div>
-  <div id="consult-list">${renderConsultCards(cs)}</div>`;
+  <div id="consult-list">${renderConsultCards(pagedCs)}</div>
+  ${cs.length>pag.s?renderPaginator(cs.length, pag.p, pag.s, 'changeConsultPage'):''}
+  ${cs.length>50?`<div style="display:flex;justify-content:center;margin-top:6px;flex-wrap:wrap;gap:6px">
+    <select onchange="pageOf('consultations').s=parseInt(this.value)||25;changeConsultPage(0)" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:#fff;color:var(--text)">
+      <option value="25" ${pag.s==25?'selected':''}>25건</option>
+      <option value="50" ${pag.s==50?'selected':''}>50건</option>
+      <option value="100" ${pag.s==100?'selected':''}>100건</option>
+    </select>
+  </div>`:''}`;
 }
 
 function renderConsultCards(cs){
@@ -9130,6 +9161,96 @@ function addAttachmentFolder(pid){
   if(!name||!name.trim())return;
   toast(`"${name.trim()}" 폴더가 추가되었습니다. 파일을 업로드하면 표시됩니다.`,'success');
   // Folders are created dynamically when files are uploaded into them
+}
+
+// ── ERP SETTLEMENT (v8.6 정산서 흡수) ──
+function renderErpSettlement(){
+  const pid=S.selPid;const p=getProject(pid);if(!p){backToBoard();return;}
+  document.getElementById('tb-title').textContent=`${p.nm} - 정산서`;
+  const labor=(_d.labor||[]).filter(l=>l.pid===pid);
+  const orders=(_d.orders||[]).filter(o=>o.pid===pid);
+  const expenses=(_d.expenses||[]).filter(e=>e.pid===pid);
+  const laborTotal=labor.reduce((a,l)=>a+Number(l.net_amount||l.total||0),0);
+  const matOrders=orders.filter(o=>o.cost_type==='material');
+  const subOrders=orders.filter(o=>o.cost_type==='subcontract');
+  const normOrders=orders.filter(o=>!o.cost_type||o.cost_type==='order'||o.cost_type==='install');
+  const matTotal=matOrders.reduce((a,o)=>a+Number(o.amount||0),0);
+  const subTotal=subOrders.reduce((a,o)=>a+Number(o.amount||0),0);
+  const ordTotal=normOrders.reduce((a,o)=>a+Number(o.amount||0),0);
+  const transExp=expenses.filter(e=>Number(e.is_transport)===1);
+  const normExp=expenses.filter(e=>!Number(e.is_transport));
+  const transTotal=transExp.reduce((a,e)=>a+Number(e.amount||0),0);
+  const expTotal=normExp.reduce((a,e)=>a+Number(e.amount||0),0);
+  const totalCost=laborTotal+matTotal+subTotal+ordTotal+transTotal+expTotal;
+  const contractAmount=(typeof getTotal==='function')?getTotal(p):Number(p.contractAmount||p.amount||0);
+  const payments=p.payments||[];
+  const paidTotal=payments.filter(pay=>pay.paid).reduce((a,pay)=>a+Number(pay.amount||0),0);
+  const unpaidTotal=Math.max(0,contractAmount-paidTotal);
+  const margin=contractAmount-totalCost;
+  const marginRate=contractAmount>0?(margin/contractAmount*100):0;
+  const fmtKRW=(n)=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(n)||0));
+  const row=(label,amt,pct,cnt)=>`<tr><td>${label}</td><td style="text-align:right;font-weight:600">${fmtKRW(amt)}원</td><td style="text-align:right;color:var(--text-muted)">${pct}%</td><td>${cnt}건</td></tr>`;
+  const pctOf=(n)=>totalCost>0?((n/totalCost)*100).toFixed(1):'0.0';
+  document.getElementById('content').innerHTML=`
+    <div style="padding:24px;max-width:1200px;margin:0 auto">
+      <div class="card" style="margin-bottom:20px;padding:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;border-left:4px solid var(--primary)">
+        <div>
+          <div style="font-size:11px;color:var(--text-muted);font-weight:600">정산서 · ${escHtml(p.nm)}</div>
+          <div style="font-size:22px;font-weight:700;margin-top:4px">${escHtml(p.client||'-')}</div>
+          <div style="font-size:12.5px;color:var(--text-muted);margin-top:4px">${escHtml(p.loc||'')} ${p.area?'· '+p.area+'평':''}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:11px;color:var(--text-muted)">총 마진</div>
+          <div style="font-size:28px;font-weight:800;color:${margin>=0?'var(--success)':'var(--danger)'};line-height:1">${margin>=0?'+':''}${fmtKRW(margin)}<span style="font-size:14px">원</span></div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">마진율 ${marginRate.toFixed(1)}%</div>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px">
+        <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">계약 금액</div><div style="font-size:20px;font-weight:700;color:var(--text);margin-top:4px">${fmtKRW(contractAmount)}원</div></div>
+        <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">총 원가</div><div style="font-size:20px;font-weight:700;color:var(--danger);margin-top:4px">${fmtKRW(totalCost)}원</div></div>
+        <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">수금 완료</div><div style="font-size:20px;font-weight:700;color:var(--success);margin-top:4px">${fmtKRW(paidTotal)}원</div></div>
+        <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">미수금</div><div style="font-size:20px;font-weight:700;color:#B45309;margin-top:4px">${fmtKRW(unpaidTotal)}원</div></div>
+      </div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title">💰 원가 상세</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>구분</th><th style="text-align:right">금액</th><th style="text-align:right">비율</th><th>건수</th></tr></thead>
+          <tbody>
+            ${row('👷 노무비', laborTotal, pctOf(laborTotal), labor.length)}
+            ${row('📦 자재비', matTotal, pctOf(matTotal), matOrders.length)}
+            ${row('🤝 외주비', subTotal, pctOf(subTotal), subOrders.length)}
+            ${row('🚚 운반비', transTotal, pctOf(transTotal), transExp.length)}
+            ${row('💳 일반 발주', ordTotal, pctOf(ordTotal), normOrders.length)}
+            ${row('📋 경비', expTotal, pctOf(expTotal), normExp.length)}
+            <tr style="background:var(--gray-50);font-weight:700"><td>합계</td><td style="text-align:right">${fmtKRW(totalCost)}원</td><td style="text-align:right">100.0%</td><td>${labor.length+orders.length+expenses.length}건</td></tr>
+          </tbody>
+        </table></div>
+      </div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title">💵 수금 내역 (${payments.length}건)</div>
+        ${payments.length?`<div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>날짜</th><th>구분</th><th style="text-align:right">금액</th><th>방법</th><th>상태</th></tr></thead>
+          <tbody>
+            ${payments.map(pay=>`<tr>
+              <td>${escHtml(pay.due||pay.date||'-')}</td>
+              <td>${escHtml(pay.description||pay.label||pay.name||'-')}</td>
+              <td style="text-align:right;font-weight:600">${fmtKRW(pay.amount||0)}원</td>
+              <td>${escHtml(pay.method||'-')}</td>
+              <td>${pay.paid?'<span style="background:#DCFCE7;color:#15803D;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">완료</span>':'<span style="background:#FEF3C7;color:#92400E;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">대기</span>'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table></div>`:'<div style="color:var(--text-muted);padding:20px;text-align:center">등록된 수금 내역이 없습니다</div>'}
+      </div>
+      <div class="card" style="padding:20px;background:var(--gray-50);border-left:4px solid ${margin>=0?'var(--success)':'var(--danger)'}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;text-align:center">
+          <div><div style="font-size:11px;color:var(--text-muted)">계약 금액</div><div style="font-size:16px;font-weight:700">${fmtKRW(contractAmount)}원</div></div>
+          <div><div style="font-size:11px;color:var(--text-muted)">- 총 원가</div><div style="font-size:16px;font-weight:700;color:var(--danger)">${fmtKRW(totalCost)}원</div></div>
+          <div><div style="font-size:11px;color:var(--text-muted)">= 마진</div><div style="font-size:18px;font-weight:800;color:${margin>=0?'var(--success)':'var(--danger)'}">${margin>=0?'+':''}${fmtKRW(margin)}원</div></div>
+          <div><div style="font-size:11px;color:var(--text-muted)">마진율</div><div style="font-size:18px;font-weight:800;color:${margin>=0?'var(--success)':'var(--danger)'}">${marginRate.toFixed(1)}%</div></div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // ── ERP REPORT ──

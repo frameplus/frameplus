@@ -57,10 +57,29 @@
 - [ ] consultations / labor 페이지에 페이지네이션 통합 (사이클 3)
 - [ ] core.js 분리 첫 단계 (사이클 4 또는 별도)
 
-## 사이클 3 우선순위 (다음)
-1. consultations / labor / projects 페이지에 페이지네이션 적용
-2. 마이그레이션 실행 — dry-run으로 stats 확인 → 실제 merge
-3. 정산관리 메뉴를 프로젝트 상세 모드 'ERP > 정산서'로 흡수 시작 (UI 통합)
+## 사이클 3 — 페이지네이션 확장 + 정산서 흡수 (2026-05-29) ✅
+
+### A 적용 — consultations / labor 페이지 페이지네이션
+- [x] **consultations** — renderConsultListView에 paginate 통합, 50건 초과 시 페이지 사이즈 셀렉터 자동 표시
+- [x] **labor** — _laborFlatView에 paginate + 검색 박스 + 페이지 사이즈 셀렉터 (월별 뷰 모드는 기존 그대로)
+- [x] `changeConsultPage` / `changeLaborPage` / `searchLabor` 핸들러 신설
+
+### C 적용 — 프로젝트 상세 모드 'ERP > 정산서' 신설
+- [x] **PROJECT_NAV** ERP 섹션에 "정산서" 추가 (Budget과 Attachments 사이)
+- [x] router case `erp_settlement` 추가
+- [x] **renderErpSettlement()** 신규 — 프로젝트별 종합 정산 뷰
+  - Hero: 프로젝트명·고객·총마진·마진율
+  - KPI 4개: 계약금액 / 총원가 / 수금완료 / 미수금
+  - 원가 상세 6분류: 노무비·자재비·외주비·운반비·일반발주·경비 + 합계
+  - 수금 내역 표 (payments JSON에서 자동)
+  - 결산 카드: 계약 - 원가 = 마진 + 마진율
+- [x] 데이터 소스가 ERP 본체 테이블 — labor_costs · orders_manual(cost_type) · expenses(is_transport) · projects.payments
+
+## 사이클 4 우선순위 (다음)
+1. 마이그레이션 dry-run 검증 후 실 실행
+2. 글로벌 "정산관리" 메뉴 → 프로젝트별 정산서로 안내 (배너 + 마이그레이션 버튼)
+3. core.js 분리 시작 (router·init·apiHelper·페이지네이션 헬퍼)
+4. projects 목록에도 페이지네이션 적용 (200건 이상 시)
 
 
 ### Step 2 — UX 핵심 결함 수정 (완료)
