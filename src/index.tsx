@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string }
 type App = { Bindings: Bindings }
 
 const app = new Hono<App>()
@@ -251,6 +251,7 @@ app.post('/api/leave-requests/:id/approve', async (c) => {
   await c.env.DB.prepare(
     `UPDATE leave_requests SET status='승인', reviewer=?, reviewer_name=?, reviewed_at=?, reviewer_memo=?, updated_at=? WHERE id=?`
   ).bind(body.reviewer || '', body.reviewer_name || '', now, body.memo || '', now, id).run()
+  c.executionCtx.waitUntil(notifyLeaveDecision(c.env, id, '승인', body.memo || ''))
   return c.json({ ok: true })
 })
 app.post('/api/leave-requests/:id/reject', async (c) => {
@@ -260,6 +261,7 @@ app.post('/api/leave-requests/:id/reject', async (c) => {
   await c.env.DB.prepare(
     `UPDATE leave_requests SET status='반려', reviewer=?, reviewer_name=?, reviewed_at=?, reviewer_memo=?, updated_at=? WHERE id=?`
   ).bind(body.reviewer || '', body.reviewer_name || '', now, body.memo || '반려', now, id).run()
+  c.executionCtx.waitUntil(notifyLeaveDecision(c.env, id, '반려', body.memo || ''))
   return c.json({ ok: true })
 })
 app.post('/api/leave-requests/:id/cancel', async (c) => {
@@ -1390,6 +1392,16 @@ app.post('/api/inquiry', async (c) => {
         })
       } catch (_) { /* ignore email errors */ }
     }
+    // SMS auto-reply to inquirer (best-effort — needs SOLAPI_* env)
+    if (body.phone) {
+      try {
+        await sendSolapi(c.env, {
+          to: String(body.phone),
+          text: `[프레임플러스] ${String(body.name).slice(0,40)}님, 상담 신청이 접수되었습니다. 영업일 1일 이내 연락드리겠습니다.\n추천 미팅일: ${suggestions.join(', ') || '-'}`,
+          type: 'SMS'
+        })
+      } catch (_) { /* ignore */ }
+    }
     return c.json({
       ok: true,
       id,
@@ -1967,6 +1979,60 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 </html>`
 }
 
+// ===== SOLAPI (알림톡·SMS) HELPER =====
+// Configure via: wrangler pages secret put SOLAPI_API_KEY / SOLAPI_API_SECRET / SOLAPI_SENDER_PHONE (and KAKAO_PF_ID for 알림톡)
+async function _hmacSha256(secret: string, message: string): Promise<string> {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message))
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
+async function sendSolapi(env: Bindings, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string }): Promise<{ ok: boolean; error?: string }> {
+  const apiKey = env.SOLAPI_API_KEY
+  const apiSecret = env.SOLAPI_API_SECRET
+  const from = env.SOLAPI_SENDER_PHONE
+  if (!apiKey || !apiSecret || !from) return { ok: false, error: 'solapi env not configured' }
+  if (!opts.to || !opts.text) return { ok: false, error: 'to, text required' }
+  const date = new Date().toISOString()
+  const salt = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+  const sig = await _hmacSha256(apiSecret, date + salt)
+  const auth = `HMAC-SHA256 apiKey=${apiKey}, date=${date}, salt=${salt}, signature=${sig}`
+  const message: any = { to: opts.to.replace(/\D/g, ''), from: from.replace(/\D/g, ''), text: opts.text }
+  if (opts.type === 'LMS') {
+    message.type = 'LMS'
+    if (opts.subject) message.subject = opts.subject
+  } else if (opts.type === 'ATA' && opts.templateId && env.KAKAO_PF_ID) {
+    message.type = 'ATA'
+    message.kakaoOptions = { pfId: env.KAKAO_PF_ID, templateId: opts.templateId, disableSms: false }
+  }
+  try {
+    const res = await fetch('https://api.solapi.com/messages/v4/send', {
+      method: 'POST',
+      headers: { 'Authorization': auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    })
+    if (!res.ok) return { ok: false, error: await res.text() }
+    return { ok: true }
+  } catch (e: any) { return { ok: false, error: e?.message || 'send failed' } }
+}
+// Admin-only test endpoint
+app.post('/api/solapi/test', async (c) => {
+  const { to, text, type, subject } = await c.req.json<any>().catch(() => ({}))
+  if (!to || !text) return c.json({ error: 'to, text required' }, 400)
+  return c.json(await sendSolapi(c.env, { to, text, type, subject }))
+})
+// Leave approval/reject auto-notification: send SMS to requester (best-effort)
+async function notifyLeaveDecision(env: Bindings, requestId: string, decision: '승인' | '반려', memo: string) {
+  try {
+    const req = await env.DB.prepare(`SELECT user_id, user_name, leave_type, start_date, end_date FROM leave_requests WHERE id=?`).bind(requestId).first<any>()
+    if (!req?.user_id) return
+    const user = await env.DB.prepare(`SELECT phone FROM users WHERE id=? OR username=?`).bind(req.user_id, req.user_id).first<any>()
+    if (!user?.phone) return
+    const txt = `[프레임플러스] ${req.user_name||''}님의 ${req.leave_type||'연차'} 신청(${req.start_date||'-'}~${req.end_date||'-'})이 ${decision}되었습니다.${memo?'\n메모: '+memo.slice(0,80):''}`
+    await sendSolapi(env, { to: user.phone, text: txt, type: 'SMS' })
+  } catch (_) { /* ignore */ }
+}
+
 // ===== SCHEDULED: Meeting D-1 / D-day notification =====
 // Cron: "0 0 * * *" UTC = 09:00 KST (configured in wrangler.jsonc)
 // Sends one digest email to all active admin users listing today's & tomorrow's meetings.
@@ -2034,6 +2100,20 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
         html
       })
     })
+    // Bonus: SMS to admin phones (best-effort — only if SOLAPI configured)
+    if (env.SOLAPI_API_KEY) {
+      try {
+        const phoneRows = await env.DB.prepare(
+          `SELECT phone FROM users WHERE role='admin' AND COALESCE(active,1)=1 AND COALESCE(phone,'') != ''`
+        ).all<any>()
+        const phones = (phoneRows.results || []).map((r: any) => r.phone).filter(Boolean)
+        const firstToday = todayList[0]
+        const smsText = `[프레임플러스] 오늘 미팅 ${todayList.length}건 / 내일 ${tomorrowList.length}건${firstToday ? `\n첫 일정: ${firstToday.time || ''} ${firstToday.title || ''}` : ''}\nERP: https://frameplus-erp.pages.dev/`
+        for (const phone of phones) {
+          try { await sendSolapi(env, { to: phone, text: smsText, type: 'SMS' }) } catch (_) {}
+        }
+      } catch (_) {}
+    }
     return { todayCount: todayList.length, tomorrowCount: tomorrowList.length, sent: true }
   } catch (_) {
     return { todayCount: todayList.length, tomorrowCount: tomorrowList.length, sent: false }

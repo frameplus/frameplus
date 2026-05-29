@@ -1,6 +1,6 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-> 마지막 업데이트: 2026-05-29 (P7-A·B·C + P8 전체 완료)
+> 마지막 업데이트: 2026-05-29 (P7-A·B·C + P8 전체 + D 솔라피 백엔드 완료)
 
 ---
 
@@ -212,9 +212,23 @@
 
 ---
 
-## 🎉 P0 ~ P8 전체 완료
+### D: 솔라피 알림톡·SMS 통합 (2026-05-29 백엔드 완료) ✅
+- [x] **Bindings 타입 확장** — SOLAPI_API_KEY, SOLAPI_API_SECRET, SOLAPI_SENDER_PHONE, KAKAO_PF_ID
+- [x] **`sendSolapi(env, opts)` 헬퍼** — HMAC-SHA256 인증, SMS/LMS/ATA(알림톡) 지원, 미설정 시 best-effort skip
+- [x] **`POST /api/solapi/test`** — 관리자 즉시 테스트 라우트
+- [x] **상담폼 SMS 자동 회신** — `POST /api/inquiry` 제출 시 신청자 번호로 즉시 안내 SMS 발송
+- [x] **연차 결재 자동 알림** — approve/reject 시 신청자 phone으로 SMS (executionCtx.waitUntil로 응답 지연 없음)
+- [x] **미팅 Cron SMS 부가 발송** — KST 09:00에 admin phone으로 SMS도 함께 발송 (Resend 이메일은 그대로 유지)
 
-P7-A(CSS·다크모드·접근성) + P8 전체(B 상담폼 / C 미팅Cron / D 연차결재 / A 개인페이지) 완료.
+**사용자가 할 일** (가입·등록만, 약 1주):
+1. solapi.com 가입 → API Key·Secret 발급
+2. 발신번호 등록 (KISA, 1~3일 무료)
+3. Cloudflare Pages 환경변수 등록: `npx wrangler pages secret put SOLAPI_API_KEY` (그리고 SECRET·SENDER_PHONE)
+4. 알림톡 사용하려면 카카오 비즈니스 채널 + 템플릿 사전 등록
+
+## 🎉 P0 ~ P8 전체 + D 솔라피 완료
+
+P7-A(CSS·다크모드·접근성) + P8 전체(B 상담폼 / C 미팅Cron / D 연차결재 / A 개인페이지) + 알림톡·SMS 백엔드 완료.
 
 ---
 
