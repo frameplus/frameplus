@@ -18,6 +18,20 @@
 - [x] stlApi 경유(인증 헤더 자동) → 브라우저 로그인 상태에서 안전 호출
 - [ ] 다음: 라이브 dry-run 검증 후 실 마이그레이션, 글로벌 정산관리 메뉴 deprecation
 
+## v8.6.2 사이클 6 — 전체 페이지 결함 정적 감사 (2026-05-29) ✅
+
+### 감사 범위 & 결과
+- [x] **라우터 case ↔ 렌더 함수 매핑** — 메인 라우트 46개 렌더 함수 전부 정의 확인(누락 0), default case 스텁 존재
+- [x] **메뉴 ↔ 라우트** — 사이드바 메뉴 전부 라우트 연결(company/users/system/data/notice는 admin 내부 탭, cl/i는 ID 접두사 — 오탐)
+- [x] **미정의 CSS 클래스** — app.js 사용 ≥3회 기준 2개만: `.est-inp`(항상 `.inp` 동반 → 무해), `.sort-icon`(정렬 동작 정상, 아이콘만 미스타일 — 경미)
+- [x] **미정의 함수 호출(onclick 등)** — 핸들러 259종 중 **`editMsgTemplate` 1건 진짜 미정의** 발견(메시지 템플릿 편집 버튼 死)
+
+### 수정
+- [x] **editMsgTemplate(tid) 신규 구현** — 기존 템플릿 값 prefill 편집 모달, escHtml로 안전 이스케이프
+- [x] **saveMsgTemplate 편집 지원** — `_editingTplId` 있으면 동일 id로 POST(백엔드 INSERT OR REPLACE=업데이트), 로컬 `_d.templates` in-place 갱신, 제목 필수 가드, 저장 후 목록 재오픈
+- [x] **캐시버스팅 8.6.1 → 8.6.2** (app.js 변경 반영, 라이브 확인용 버전 표기 동기화)
+- [ ] 경미(후순위): `.sort-icon` 스타일 정의, 글로벌 정산관리 메뉴 deprecation
+
 ## v8.6 사이클 1 — ABCD 동시 진행 (2026-05-29) ✅
 
 ### A. 페이지네이션·검색 헬퍼 정의 (P3 일부)

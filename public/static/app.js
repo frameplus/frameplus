@@ -4424,7 +4424,31 @@ function sendTemplate(tid,mid){
   window.open(`sms:?body=${encodeURIComponent(content)}`);
   toast('문자 앱이 열렸습니다','success');
 }
+let _editingTplId=null;
+function editMsgTemplate(tid){
+  const t=getMsgTemplates().find(x=>x.id===tid);
+  if(!t){toast('템플릿을 찾을 수 없습니다','error');return;}
+  _editingTplId=tid;
+  const cats=['미팅','견적','계약','수금','공지'];
+  openModal(`<div class="modal-bg"><div class="modal">
+    <div class="modal-hdr"><span class="modal-title">템플릿 편집</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-row form-row-2" style="margin-bottom:12px">
+        <div><label class="lbl">카테고리</label><select class="sel" id="tpl_cat">${cats.map(c=>`<option${c===t.cat?' selected':''}>${c}</option>`).join('')}</select></div>
+        <div><label class="lbl">제목</label><input class="inp" id="tpl_title" value="${escHtml(t.title)}"></div>
+      </div>
+      <div><label class="lbl">내용 (((이름)), ((날짜)), ((장소)), ((담당자명)) 사용 가능)</label>
+        <textarea class="inp" id="tpl_content" rows="6">${escHtml(t.content)}</textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="saveMsgTemplate()">저장</button>
+    </div>
+  </div></div>`);
+}
 function addMsgTemplate(){
+  _editingTplId=null;
   openModal(`<div class="modal-bg"><div class="modal">
     <div class="modal-hdr"><span class="modal-title">템플릿 추가</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -4443,10 +4467,17 @@ function addMsgTemplate(){
   </div></div>`);
 }
 async function saveMsgTemplate(){
-  const t={id:uid(),cat:v('tpl_cat'),title:v('tpl_title'),content:v('tpl_content')};
+  const editing=_editingTplId;
+  const t={id:editing||uid(),cat:v('tpl_cat'),title:v('tpl_title'),content:v('tpl_content')};
+  if(!t.title){toast('제목을 입력하세요','error');return;}
   await api('templates','POST',t);
-  (_d.templates=_d.templates||[]).push(t);
-  closeModal();toast('템플릿이 저장되었습니다','success');
+  _d.templates=_d.templates||[];
+  const i=_d.templates.findIndex(x=>x.id===t.id);
+  if(i>=0) _d.templates[i]=t; else _d.templates.push(t);
+  _editingTplId=null;
+  closeModal();
+  toast(editing?'템플릿이 수정되었습니다':'템플릿이 저장되었습니다','success');
+  openMsgTemplate();
 }
 async function deleteMsgTemplate(tid){
   if(!confirm('삭제?'))return;
