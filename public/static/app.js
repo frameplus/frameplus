@@ -10742,6 +10742,55 @@ function renderSettlement() {
   stlInit();
 }
 
+/* ── v8.6.1: 정산관리 → ERP 본체 마이그레이션 UX ─── */
+let _stlMigStats = null;
+function stlMigRenderStats(stats, dryRun){
+  const labels = {labor:'노무비',material:'자재비',subcontract:'외주비',expense:'경비',transport:'운반비',payment:'수금'};
+  const dest = {labor:'labor_costs',material:'orders_manual(자재)',subcontract:'orders_manual(외주)',expense:'expenses',transport:'expenses(운반)',payment:'projects.payments'};
+  let tf=0,tm=0,ts=0,rows='';
+  for(const k of ['labor','material','subcontract','expense','transport','payment']){
+    const s=stats[k]||{found:0,migrated:0,skipped:0};
+    tf+=s.found; tm+=s.migrated; ts+=s.skipped;
+    rows+=`<tr><td style="padding:6px 8px">${labels[k]}</td><td style="padding:6px 8px;color:var(--gray-500);font-size:11px">${dest[k]}</td><td style="padding:6px 8px;text-align:right">${s.found}</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:#DC2626">${s.migrated}</td><td style="padding:6px 8px;text-align:right;color:var(--gray-400)">${s.skipped}</td></tr>`;
+  }
+  return `
+  <div style="font-size:12px;font-weight:700;margin-bottom:6px">${dryRun?'🔍 dry-run 검증 결과 — 실제 변경 없음':'✅ 마이그레이션 완료'}</div>
+  <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid var(--border);border-radius:8px;overflow:hidden">
+    <thead><tr style="background:var(--gray-50)"><th style="padding:6px 8px;text-align:left">분류</th><th style="padding:6px 8px;text-align:left">대상</th><th style="padding:6px 8px;text-align:right">발견</th><th style="padding:6px 8px;text-align:right">${dryRun?'이관예정':'이관'}</th><th style="padding:6px 8px;text-align:right">skip</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--border);font-weight:700"><td style="padding:6px 8px" colspan="2">합계</td><td style="padding:6px 8px;text-align:right">${tf}</td><td style="padding:6px 8px;text-align:right;color:#DC2626">${tm}</td><td style="padding:6px 8px;text-align:right">${ts}</td></tr></tfoot>
+  </table>`;
+}
+async function stlMigrateDryRun(){
+  const btn=document.getElementById('stl-mig-dry'), out=document.getElementById('stl-mig-result'), runBtn=document.getElementById('stl-mig-run');
+  btn.disabled=true; btn.textContent='검증 중…';
+  try{
+    const res=await stlApi('migrate-settlement','POST',{dryRun:true,mode:'merge'});
+    _stlMigStats=res.stats;
+    out.style.display='block'; out.innerHTML=stlMigRenderStats(res.stats,true);
+    const total=Object.values(res.stats).reduce((a,s)=>a+(s.migrated||0),0);
+    if(total>0){ runBtn.disabled=false; runBtn.title='검증된 '+total+'건을 본체로 이관'; runBtn.textContent='마이그레이션 실행 ('+total+'건)'; }
+    else { runBtn.disabled=true; runBtn.title='이관할 신규 데이터 없음'; runBtn.textContent='이관할 신규 없음'; }
+  }catch(e){
+    out.style.display='block'; out.innerHTML='<div style="color:#DC2626;font-size:12px">검증 실패: '+stlEsc(e.message||String(e))+'</div>';
+  } finally { btn.disabled=false; btn.textContent='dry-run 재검증'; }
+}
+async function stlMigrateRun(){
+  if(!_stlMigStats) return;
+  const total=Object.values(_stlMigStats).reduce((a,s)=>a+(s.migrated||0),0);
+  if(!confirm('정산관리 데이터 '+total+'건을 ERP 본체로 이관합니다.\n· 중복 ID는 자동 skip\n· 되돌리려면 수동 삭제 필요\n\n진행할까요?')) return;
+  const btn=document.getElementById('stl-mig-run'), out=document.getElementById('stl-mig-result');
+  btn.disabled=true; btn.textContent='이관 중…';
+  try{
+    const res=await stlApi('migrate-settlement','POST',{dryRun:false,mode:'merge'});
+    out.innerHTML=stlMigRenderStats(res.stats,false);
+    btn.textContent='이관 완료';
+  }catch(e){
+    out.innerHTML='<div style="color:#DC2626;font-size:12px">이관 실패: '+stlEsc(e.message||String(e))+'</div>';
+    btn.disabled=false; btn.textContent='마이그레이션 실행 (재시도)';
+  }
+}
+
 function buildSettlementHTML() {
   return `
 <div id="stl-wrap">
@@ -10772,6 +10821,25 @@ function buildSettlementHTML() {
     <button class="btn btn-primary btn-sm" id="stl-btn-save" style="display:none" onclick="stlSave()">저장</button>
     <button class="btn btn-outline btn-sm" onclick="stlOpenNew()">＋ 새 정산서</button>
   </div>
+</div>
+
+<!-- v8.6.1: 정산관리 → ERP 본체 이관 안내 + 마이그레이션 -->
+<div id="stl-migrate-banner" style="margin:12px 0;padding:14px 16px;background:#FFF8F8;border:1px solid #F3C6C6;border-left:4px solid #DC2626;border-radius:10px">
+  <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+    <div style="flex:1;min-width:240px">
+      <div style="font-weight:700;font-size:13px;color:#991B1B;margin-bottom:4px">정산관리 데이터는 '프로젝트 정산서'로 통합됩니다</div>
+      <div style="font-size:12px;color:#7A1F1F;line-height:1.5">
+        이 화면의 정산 데이터(노무·자재·외주·경비·운반·수금)를 ERP 본체로 이관하면,
+        <b>프로젝트 상세 › ERP › 정산서</b>에서 프로젝트별로 통합 관리됩니다.
+        먼저 <b>dry-run</b>으로 이관 건수를 검증한 뒤 실행하세요 (중복 ID는 자동 skip).
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+      <button class="btn btn-outline btn-sm" id="stl-mig-dry" onclick="stlMigrateDryRun()">dry-run 검증</button>
+      <button class="btn btn-primary btn-sm" id="stl-mig-run" onclick="stlMigrateRun()" disabled title="먼저 dry-run으로 검증하세요">마이그레이션 실행</button>
+    </div>
+  </div>
+  <div id="stl-mig-result" style="display:none;margin-top:12px"></div>
 </div>
 
 <!-- 목록 -->

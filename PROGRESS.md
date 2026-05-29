@@ -1,5 +1,23 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
+## v8.6.1 사이클 5 — 캐시버스팅 + 정산 마이그레이션 UX (2026-05-29) ✅
+
+### 진단 정정 (이전 세션 오진 수정)
+- 정산관리 401 hotfix(`stlApi` X-Session-Id)는 이미 e60c624로 **커밋·push 완료** 상태였음 → "push 안 됨"은 오진
+- 401 잔존 진짜 원인: `app.js`에 캐시버스팅 부재로 옛 JS 캐시 잔존
+- 14개 "수정됨" 파일은 순수 CRLF↔LF 줄바꿈 노이즈(실내용 변경 0)로 확정
+
+### A. 캐시버스팅 + 버전 동기화 (src/index.tsx)
+- [x] `<script src="/static/app.js?v=8.6.1">` — 배포마다 강제 새 JS 로드
+- [x] 화면 버전 표기 v8.6 → **v8.6.1** (sb-logo-ver, fs-badge, /api/health) — 라이브 반영 육안 확인용
+
+### B. 정산 마이그레이션 UX (public/static/app.js)
+- [x] 정산관리 페이지 상단 안내 배너 — "프로젝트 정산서로 통합" 안내
+- [x] `[dry-run 검증]` 버튼 — `POST /api/migrate-settlement {dryRun:true}` 호출, 6분류 found/이관예정/skip 표 표시
+- [x] `[마이그레이션 실행]` 버튼 — **dry-run 통과 전 비활성**(검증 강제), confirm 후 실 이관
+- [x] stlApi 경유(인증 헤더 자동) → 브라우저 로그인 상태에서 안전 호출
+- [ ] 다음: 라이브 dry-run 검증 후 실 마이그레이션, 글로벌 정산관리 메뉴 deprecation
+
 ## v8.6 사이클 1 — ABCD 동시 진행 (2026-05-29) ✅
 
 ### A. 페이지네이션·검색 헬퍼 정의 (P3 일부)
