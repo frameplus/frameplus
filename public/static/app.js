@@ -9234,6 +9234,13 @@ function renderErpSettlement(){
   const fmtKRW=(n)=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(n)||0));
   const row=(label,amt,pct,cnt)=>`<tr><td>${label}</td><td style="text-align:right;font-weight:600">${fmtKRW(amt)}원</td><td style="text-align:right;color:var(--text-muted)">${pct}%</td><td>${cnt}건</td></tr>`;
   const pctOf=(n)=>totalCost>0?((n/totalCost)*100).toFixed(1):'0.0';
+  // v8.6.2 Phase2: 추정(견적 계획) 원가·마진 vs 실적 대조
+  const estCost=calcP(p).costDirect;
+  const estMargin=contractAmount-estCost;
+  const estRate=contractAmount>0?(estMargin/contractAmount*100):0;
+  const costVar=totalCost-estCost;       // +: 원가 초과
+  const marginVar=margin-estMargin;      // -: 마진 악화
+  const rateVar=marginRate-estRate;
   document.getElementById('content').innerHTML=`
     <div style="padding:24px;max-width:1200px;margin:0 auto">
       <div class="card" style="margin-bottom:20px;padding:24px;display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;border-left:4px solid var(--primary)">
@@ -9253,6 +9260,19 @@ function renderErpSettlement(){
         <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">총 원가</div><div style="font-size:20px;font-weight:700;color:var(--danger);margin-top:4px">${fmtKRW(totalCost)}원</div></div>
         <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">수금 완료</div><div style="font-size:20px;font-weight:700;color:var(--success);margin-top:4px">${fmtKRW(paidTotal)}원</div></div>
         <div class="card" style="padding:16px"><div style="font-size:11px;color:var(--text-muted);font-weight:600">미수금</div><div style="font-size:20px;font-weight:700;color:#B45309;margin-top:4px">${fmtKRW(unpaidTotal)}원</div></div>
+      </div>
+      <div class="card" style="margin-bottom:20px;border-left:4px solid ${marginVar>=0?'var(--success)':'var(--danger)'}">
+        <div class="card-title">📊 추정 vs 실적 마진 대조</div>
+        <div class="tbl-wrap"><table class="tbl">
+          <thead><tr><th>항목</th><th style="text-align:right">견적(계획)</th><th style="text-align:right">실적</th><th style="text-align:right">차이</th></tr></thead>
+          <tbody>
+            <tr><td>계약 금액</td><td style="text-align:right">${fmtKRW(contractAmount)}원</td><td style="text-align:right">${fmtKRW(contractAmount)}원</td><td style="text-align:right;color:var(--text-muted)">–</td></tr>
+            <tr><td>원가</td><td style="text-align:right">${fmtKRW(estCost)}원</td><td style="text-align:right">${fmtKRW(totalCost)}원</td><td style="text-align:right;font-weight:700;color:${costVar>0?'var(--danger)':'var(--success)'}">${costVar>0?'+':''}${fmtKRW(costVar)}원</td></tr>
+            <tr><td>마진</td><td style="text-align:right">${fmtKRW(estMargin)}원</td><td style="text-align:right">${fmtKRW(margin)}원</td><td style="text-align:right;font-weight:700;color:${marginVar>=0?'var(--success)':'var(--danger)'}">${marginVar>=0?'+':''}${fmtKRW(marginVar)}원</td></tr>
+            <tr style="background:var(--gray-50);font-weight:700"><td>마진율</td><td style="text-align:right">${estRate.toFixed(1)}%</td><td style="text-align:right">${marginRate.toFixed(1)}%</td><td style="text-align:right;color:${rateVar>=0?'var(--success)':'var(--danger)'}">${rateVar>=0?'+':''}${rateVar.toFixed(1)}%p</td></tr>
+          </tbody>
+        </table></div>
+        <div style="padding:10px 16px;font-size:12px;color:var(--text-muted);line-height:1.5">${totalCost===0?'ℹ️ 실적 원가가 아직 입력되지 않았습니다(노무·발주·경비). 입력 시 실적 마진이 계산됩니다.':(marginVar>=0?'✅ 실적 마진이 견적 계획 이상입니다.':'⚠️ 실적 마진이 견적 계획보다 '+fmtKRW(Math.abs(marginVar))+'원 낮습니다. 원가 초과 항목을 점검하세요.')}</div>
       </div>
       <div class="card" style="margin-bottom:20px">
         <div class="card-title">💰 원가 상세</div>
