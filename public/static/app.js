@@ -497,7 +497,7 @@ function getMonthlyAgg(ym){
   // 수금 (payments that were paid this month)
   let revenue = 0;
   ps.forEach(p=>{
-    const tot = getTotal(p);
+    const tot = getContractAmt(p);
     (p.payments||[]).forEach(pay=>{
       if(pay.paid && pay.paidDate && inMonth(pay.paidDate)) revenue += tot*Number(pay.pct||0)/100;
     });
@@ -1064,12 +1064,12 @@ function renderDash(){
   const weekStarting=ps.filter(p=>p.ganttTasks&&p.ganttTasks.length&&p.ganttTasks[0].start>=thisWeekStart&&p.ganttTasks[0].start<=thisWeekEnd);
   const totalUnpaid=ps.reduce((a,p)=>a+getUnpaid(p),0);
   const weekCollection=ps.reduce((a,p)=>{
-    (p.payments||[]).forEach(pay=>{if(!pay.paid&&pay.due&&pay.due>=thisWeekStart&&pay.due<=thisWeekEnd)a+=getTotal(p)*Number(pay.pct||0)/100;});return a;
+    (p.payments||[]).forEach(pay=>{if(!pay.paid&&pay.due&&pay.due>=thisWeekStart&&pay.due<=thisWeekEnd)a+=getContractAmt(p)*Number(pay.pct||0)/100;});return a;
   },0);
   
   // Cost flow calculations
   const totalEstimate = ps.reduce((a,p)=>a+getTotal(p),0);
-  const totalContract = ps.filter(p=>['계약완료','시공중','완료'].includes(p.status)).reduce((a,p)=>a+getTotal(p),0);
+  const totalContract = ps.filter(p=>['계약완료','시공중','완료'].includes(p.status)).reduce((a,p)=>a+getContractAmt(p),0);
   const laborData = getLabor();
   const expenseData = getExpenses();
   const totalLaborCost = laborData.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
@@ -1209,7 +1209,7 @@ function renderDash(){
             </tr></thead>
             <tbody>
               ${activeProjects.slice(0,6).map(p=>{
-                const prog=getProg(p);const paid=getPaid(p);const tot=getTotal(p);
+                const prog=getProg(p);const paid=getPaid(p);const tot=getContractAmt(p);
                 const paidPct=tot>0?Math.round(paid/tot*100):0;
                 const mr=getMR(p);
                 return `<tr style="cursor:pointer" onclick="enterProject('${p.id}')">
@@ -1349,7 +1349,7 @@ function renderDash(){
           mgrStats[m].total++;
           if(['계약완료','시공중'].includes(p.status)) mgrStats[m].active++;
           if(p.status==='완료') mgrStats[m].completed++;
-          mgrStats[m].revenue+=getTotal(p);
+          mgrStats[m].revenue+=getContractAmt(p);
         });
       });
       // Add labor/expense/order costs
@@ -1408,7 +1408,7 @@ function renderDash(){
     if(isAdmin()){
       const vals=months.map((_,i)=>{
         const m=String(i+1).padStart(2,'0');
-        return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).reduce((a,p)=>a+getTotal(p),0)/10000;
+        return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).reduce((a,p)=>a+getContractAmt(p),0)/10000;
       });
       new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)'}]},
         options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`,color:'#94A3B8'},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
@@ -1935,7 +1935,7 @@ function constrStatusBadge(s){
   return `<span style="font-size:10px">${map[s]||'⚪'} ${s}</span>`;
 }
 function renderProjectRowSingle(p){
-  const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
+  const tot=getContractAmt(p);const prog=getProg(p);const paid=getPaid(p);
   const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
   return`<tr>
     <td>
@@ -1978,7 +1978,7 @@ function renderProjectRows(ps){
   if(!ps.length)return`<tr><td colspan="${isAdmin()?10:9}" style="text-align:center;padding:40px;color:var(--g400)">프로젝트가 없습니다</td></tr>`;
   ps=sortProjects(ps);
   return ps.map(p=>{
-    const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
+    const tot=getContractAmt(p);const prog=getProg(p);const paid=getPaid(p);
     const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);
     return`<tr>
       <td>
@@ -3883,7 +3883,7 @@ function _collTable(ps){
     <th onclick="sortTbl('coll','paid')">수금합계 ↕</th><th>미수금</th><th onclick="sortTbl('coll','rate')">수금률 ↕</th><th></th>
   </tr></thead><tbody>
     ${ps.map(p=>{
-      const tot=getTotal(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
+      const tot=getContractAmt(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
       const paidPct=tot>0?Math.round(paid/tot*100):0;const pmts=p.payments||[];
       function pmtCell(idx){
         const pm=pmts[idx];if(!pm)return'<td style="text-align:center;color:var(--g300)">-</td>';
@@ -3914,7 +3914,7 @@ function _collCalendar(ps){
   const firstDay=new Date(y,m,1).getDay();const daysInMonth=new Date(y,m+1,0).getDate();
   // Collect payment events for this month
   const events={};
-  ps.forEach(p=>{const tot=getTotal(p);(p.payments||[]).forEach((pm,idx)=>{
+  ps.forEach(p=>{const tot=getContractAmt(p);(p.payments||[]).forEach((pm,idx)=>{
     if(!pm.due)return;const d=new Date(pm.due);
     if(d.getFullYear()===y&&d.getMonth()===m){
       const day=d.getDate();if(!events[day])events[day]=[];
@@ -3953,7 +3953,7 @@ function _collClient(ps){
   const clients={};
   ps.forEach(p=>{
     const c=p.client||'미지정';if(!clients[c])clients[c]={projects:[],total:0,paid:0,unpaid:0};
-    const tot=getTotal(p);const paid=getPaid(p);
+    const tot=getContractAmt(p);const paid=getPaid(p);
     clients[c].projects.push(p);clients[c].total+=tot;clients[c].paid+=paid;clients[c].unpaid+=getUnpaid(p);
   });
   const sorted=Object.entries(clients).sort((a,b)=>b[1].total-a[1].total);
@@ -4000,7 +4000,7 @@ function markPaid(pid,idx){
 }
 function openCollectionDetail(pid){
   const p=getProject(pid);if(!p)return;
-  const tot=getTotal(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
+  const tot=getContractAmt(p);const paid=getPaid(p);const unpaid=getUnpaid(p);
   const paidPct=tot>0?Math.round(paid/tot*100):0;
   openModal(`<div class="modal-bg"><div class="modal" style="max-width:640px">
     <div class="modal-hdr"><span class="modal-title">💰 ${p.nm} — 수금 관리</span><button class="modal-close" onclick="closeModal()">✕</button></div>
@@ -4537,7 +4537,7 @@ function renderCRM(){
   // Enrich clients with project data
   const enriched=clients.map(cl=>{
     const cProjects=ps.filter(p=>p.client===cl.name);
-    return {...cl, projects:cProjects, calcAmt:cProjects.reduce((a,p)=>a+getTotal(p),0), calcCount:cProjects.length,
+    return {...cl, projects:cProjects, calcAmt:cProjects.reduce((a,p)=>a+getContractAmt(p),0), calcCount:cProjects.length,
       lastProjDate:cProjects.reduce((a,p)=>(!a||p.date>a)?p.date:a,'')};
   });
   
@@ -4548,7 +4548,7 @@ function renderCRM(){
     if(p.client&&!clientNames.has(p.client)){
       if(!orphanClients[p.client]) orphanClients[p.client]={nm:p.client,contact:p.contact,email:p.email,projects:[],totalAmt:0};
       orphanClients[p.client].projects.push(p);
-      orphanClients[p.client].totalAmt+=getTotal(p);
+      orphanClients[p.client].totalAmt+=getContractAmt(p);
     }
   });
   
@@ -5197,7 +5197,7 @@ function openAddTax(){
 }
 function autoFillTax(pid){
   const p=getProject(pid);if(!p)return;
-  const tot=getTotal(p);const supply=Math.round(tot);
+  const tot=getContractAmt(p);const supply=Math.round(tot);
   document.getElementById('tx_supply').value=supply;
   document.getElementById('tx_tax').value=Math.round(supply*0.1);
 }
@@ -5445,7 +5445,7 @@ async function saveEditTeam(tid){
 function renderReports(){
   const ps=getProjects();
   const completed=ps.filter(p=>p.status==='완료');
-  const totalRevenue=ps.reduce((a,p)=>a+getTotal(p),0);
+  const totalRevenue=ps.reduce((a,p)=>a+getContractAmt(p),0);
   const totalCost=ps.reduce((a,p)=>a+calcP(p).costDirect,0);
   const totalPaid=ps.reduce((a,p)=>a+getPaid(p),0);
   const avgMR=ps.length?ps.reduce((a,p)=>a+getMR(p),0)/ps.length:0;
@@ -5488,7 +5488,7 @@ function renderReports(){
           <tbody>
             ${ps.map(p=>{
               const calc=calcP(p);const mr=getMR(p);
-              const paid=getPaid(p);const tot=getTotal(p);
+              const paid=getPaid(p);const tot=getContractAmt(p);
               const paidPct=tot>0?Math.round(paid/tot*100):0;
               const pLabor=labor.filter(l=>l.pid===p.id).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
               const pExp=expenses.filter(e=>e.pid===p.id).reduce((a,e)=>a+(Number(e.amount)||0),0);
@@ -6208,17 +6208,17 @@ function exportXLSX(type){
     const ps=getProjects();
     data=ps.map(p=>({
       '프로젝트명':p.nm, '고객사':p.client, '담당자':p.mgr,
-      '도급금액':getTotal(p), '마진율':getMR(p).toFixed(1)+'%',
-      '공정%':getProg(p)+'%', '수금%':(getTotal(p)>0?Math.round(getPaid(p)/getTotal(p)*100):0)+'%',
+      '도급금액':getContractAmt(p), '마진율':getMR(p).toFixed(1)+'%',
+      '공정%':getProg(p)+'%', '수금%':(getContractAmt(p)>0?Math.round(getPaid(p)/getContractAmt(p)*100):0)+'%',
       '상태':p.status, '날짜':p.date
     }));
     filename='프로젝트_목록_'+today();
   } else if(type==='collection'){
     const ps=getProjects();
     data=ps.map(p=>({
-      '프로젝트명':p.nm, '고객사':p.client, '계약금액':getTotal(p),
+      '프로젝트명':p.nm, '고객사':p.client, '계약금액':getContractAmt(p),
       '수금완료':getPaid(p), '미수금':getUnpaid(p),
-      '수금률':(getTotal(p)>0?Math.round(getPaid(p)/getTotal(p)*100):0)+'%'
+      '수금률':(getContractAmt(p)>0?Math.round(getPaid(p)/getContractAmt(p)*100):0)+'%'
     }));
     filename='수금관리_'+today();
   } else if(type==='orders'){
@@ -6253,7 +6253,7 @@ function exportXLSX(type){
     const clients={};
     ps.forEach(p=>{
       if(!clients[p.client])clients[p.client]={nm:p.client,contact:p.contact,email:p.email,cnt:0,total:0};
-      clients[p.client].cnt++;clients[p.client].total+=getTotal(p);
+      clients[p.client].cnt++;clients[p.client].total+=getContractAmt(p);
     });
     data=Object.values(clients).map(c=>({'고객사':c.nm,'담당자':c.contact||'-','이메일':c.email||'-','프로젝트수':c.cnt,'총계약금액':c.total}));
     filename='고객CRM_'+today();
@@ -6321,8 +6321,8 @@ function exportAllCSV(){
   const ps=getProjects();
   const rows=[['프로젝트명','고객사','담당자','도급금액','마진율','공정%','수금%','상태','날짜']];
   ps.forEach(p=>{
-    rows.push([p.nm,p.client,p.mgr,getTotal(p),getMR(p).toFixed(1),getProg(p),
-      Math.round(getPaid(p)/Math.max(1,getTotal(p))*100),p.status,p.date]);
+    rows.push([p.nm,p.client,p.mgr,getContractAmt(p),getMR(p).toFixed(1),getProg(p),
+      Math.round(getPaid(p)/Math.max(1,getContractAmt(p))*100),p.status,p.date]);
   });
   const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
   const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8'});
@@ -6352,7 +6352,7 @@ function renderContracts(){
   '<th>프로젝트</th><th>고객사</th><th>도급금액</th><th>계약일</th><th>계약상태</th><th>비고</th><th></th>'+
   '</tr></thead><tbody>'+
   ps.map(p=>{
-    const tot=getTotal(p);
+    const tot=getContractAmt(p);
     const hasEst=(p.items||[]).length>0;
     const needsContract=p.contractStatus==='미생성'&&hasEst;
     return '<tr>'+
@@ -6423,7 +6423,7 @@ async function generateContractFromEstimate(pid){
 }
 function renderContractDetail(){
   const pid=S.selPid;const p=getProject(pid);if(!p){nav('contracts');return;}
-  const co=getCompany();const tot=getTotal(p);const calc=calcP(p);
+  const co=getCompany();const tot=getContractAmt(p);const calc=calcP(p);
   document.getElementById('tb-title').textContent='계약서';
   document.getElementById('tb-actions').innerHTML=
     '<button class="btn btn-outline btn-sm" onclick="nav(\'contracts\')">'+svgIcon('arrow_left',12)+' 목록</button>'+
@@ -10841,6 +10841,7 @@ function renderSettlement() {
 
 /* ── v8.6.1: 정산관리 → ERP 본체 마이그레이션 UX ─── */
 let _stlMigStats = null;
+function stlMigCloseResult(){ const o=document.getElementById('stl-mig-result'); if(o){ o.style.display='none'; o.innerHTML=''; } }
 function stlMigRenderStats(stats, dryRun){
   const labels = {labor:'노무비',material:'자재비',subcontract:'외주비',expense:'경비',transport:'운반비',payment:'수금'};
   const dest = {labor:'labor_costs',material:'orders_manual(자재)',subcontract:'orders_manual(외주)',expense:'expenses',transport:'expenses(운반)',payment:'projects.payments'};
@@ -10851,7 +10852,10 @@ function stlMigRenderStats(stats, dryRun){
     rows+=`<tr><td style="padding:6px 8px">${labels[k]}</td><td style="padding:6px 8px;color:var(--gray-500);font-size:11px">${dest[k]}</td><td style="padding:6px 8px;text-align:right">${s.found}</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:#DC2626">${s.migrated}</td><td style="padding:6px 8px;text-align:right;color:var(--gray-400)">${s.skipped}</td></tr>`;
   }
   return `
-  <div style="font-size:12px;font-weight:700;margin-bottom:6px">${dryRun?'🔍 dry-run 검증 결과 — 실제 변경 없음':'✅ 마이그레이션 완료'}</div>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+    <span style="font-size:12px;font-weight:700">${dryRun?'🔍 dry-run 검증 결과 — 실제 변경 없음':'✅ 마이그레이션 완료'}</span>
+    <button class="btn btn-ghost btn-sm" onclick="stlMigCloseResult()" style="font-size:11px;padding:2px 10px">✕ 닫기</button>
+  </div>
   <table style="width:100%;border-collapse:collapse;font-size:12px;background:#fff;border:1px solid var(--border);border-radius:8px;overflow:hidden">
     <thead><tr style="background:var(--gray-50)"><th style="padding:6px 8px;text-align:left">분류</th><th style="padding:6px 8px;text-align:left">대상</th><th style="padding:6px 8px;text-align:right">발견</th><th style="padding:6px 8px;text-align:right">${dryRun?'이관예정':'이관'}</th><th style="padding:6px 8px;text-align:right">skip</th></tr></thead>
     <tbody>${rows}</tbody>

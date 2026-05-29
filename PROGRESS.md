@@ -43,7 +43,8 @@
 - [x] **B** — erp_settlement paidTotal을 `계약금액×pct/100`로 수정(수금 화면과 일치)
 - [x] **A** — projects.contract_amt 컬럼 추가(auto-migrate) + 계약 생성 시 스냅샷 저장 + `getContractAmt()` 헬퍼(없으면 getTotal fallback) → getPaid/getUnpaid·수금 KPI·정산 화면에 적용. 기존 데이터 무영향, 신규 계약부터 동결
 - [x] **C** — 백엔드 `DELETE /api/projects/:id`에 재무기록(노무·발주·경비·세금계산서) 존재 시 409 차단(force=1 시 강제), 프론트 deleteProject가 차단 사유 안내
-- [ ] 후속: 계약금액 동결을 리포트·대시보드 등 잔여 화면까지 확대(현재 미수금/수금·정산 우선 적용)
+- [x] **계약금액 동결 전체 확대** — 대시보드(매출·주간수금·프로젝트행)·리포트(매출·도급금액·수금률·내보내기)·CRM(고객별 총계약금액)·계약서·세금계산서·수금 화면의 계약금액/도급금액/매출/수금 전부 getContractAmt로 통일. 견적금액·견적 미리보기는 getTotal(실시간) 유지
+- [x] **드라이런 결과 카드 ✕ 닫기** 버튼 추가(정산관리 마이그레이션 배너)
 
 ### Phase 1 마감 항목
 - [x] **캐시버스팅 자동화** — deploy.yml이 빌드 시 app.js/style.css 내용 md5 해시를 `?v=`에 자동 주입(index.tsx 플레이스홀더 `__APPVER__`/`__CSSVER__`). 수동 bump 영구 제거. 표시 버전(v8.6.2)은 사람용으로 분리 유지
