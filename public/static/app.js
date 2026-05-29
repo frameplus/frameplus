@@ -5493,15 +5493,15 @@ function renderReports(){
               const pLabor=labor.filter(l=>l.pid===p.id).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
               const pExp=expenses.filter(e=>e.pid===p.id).reduce((a,e)=>a+(Number(e.amount)||0),0);
               return`<tr>
-                <td style="font-weight:600">\${p.nm}</td>
-                <td class="num">\${tot>0?fmt(tot):'-'}</td>
-                <td class="num">\${calc.costDirect>0?fmt(calc.costDirect):'-'}</td>
-                <td class="num" style="color:var(--orange)">\${pLabor>0?fmt(pLabor):'-'}</td>
-                <td class="num" style="color:var(--purple)">\${pExp>0?fmt(pExp):'-'}</td>
-                <td class="num" style="color:var(--green)">\${tot>0?fmt(tot-calc.costDirect):'-'}</td>
-                <td style="font-weight:700;color:\${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">\${tot>0?mr.toFixed(1)+'%':'-'}</td>
-                <td>\${paidPct}%</td>
-                <td>\${statusBadge(p.status)}</td>
+                <td style="font-weight:600">${p.nm}</td>
+                <td class="num">${tot>0?fmt(tot):'-'}</td>
+                <td class="num">${calc.costDirect>0?fmt(calc.costDirect):'-'}</td>
+                <td class="num" style="color:var(--orange)">${pLabor>0?fmt(pLabor):'-'}</td>
+                <td class="num" style="color:var(--purple)">${pExp>0?fmt(pExp):'-'}</td>
+                <td class="num" style="color:var(--green)">${tot>0?fmt(tot-calc.costDirect):'-'}</td>
+                <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
+                <td>${paidPct}%</td>
+                <td>${statusBadge(p.status)}</td>
               </tr>`;
             }).join('')}
           </tbody>
