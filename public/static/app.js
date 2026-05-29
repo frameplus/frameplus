@@ -95,7 +95,7 @@ function renderLoginScreen() {
     <div style="width:100%;max-width:400px;animation:fadeIn .5s ease">
       <!-- Logo -->
       <div style="text-align:center;margin-bottom:32px">
-        <div style="display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;background:var(--primary,#6366F1);border-radius:16px;margin-bottom:16px">
+        <div style="display:inline-flex;align-items:center;justify-content:center;width:56px;height:56px;background:#DC2626;border-radius:16px;margin-bottom:16px">
           <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" width="28" height="28"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
         </div>
         <h1 style="font-size:24px;font-weight:800;color:#fff;letter-spacing:-.02em;margin:0">Frame Plus ERP</h1>
@@ -107,13 +107,13 @@ function renderLoginScreen() {
         <div id="login-error" style="display:none;background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:#DC2626;text-align:center"></div>
         <div style="margin-bottom:16px">
           <label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:6px">아이디</label>
-          <input id="login-user" type="text" placeholder="아이디를 입력하세요" style="width:100%;padding:12px 14px;border:1px solid #E2E8F0;border-radius:10px;font-size:14px;outline:none;transition:border .2s;box-sizing:border-box" onfocus="this.style.borderColor='#6366F1'" onblur="this.style.borderColor='#E2E8F0'" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+          <input id="login-user" type="text" placeholder="아이디를 입력하세요" style="width:100%;padding:12px 14px;border:1px solid #E5E3DC;border-radius:10px;font-size:14px;outline:none;transition:border .2s;box-sizing:border-box;background:#fff;color:#1F1E1C" onfocus="this.style.borderColor='#DC2626'" onblur="this.style.borderColor='#E5E3DC'" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
         </div>
         <div style="margin-bottom:24px">
           <label style="display:block;font-size:12px;font-weight:600;color:#64748B;margin-bottom:6px">비밀번호</label>
-          <input id="login-pass" type="password" placeholder="비밀번호를 입력하세요" style="width:100%;padding:12px 14px;border:1px solid #E2E8F0;border-radius:10px;font-size:14px;outline:none;transition:border .2s;box-sizing:border-box" onfocus="this.style.borderColor='#6366F1'" onblur="this.style.borderColor='#E2E8F0'" onkeydown="if(event.key==='Enter')doLogin()">
+          <input id="login-pass" type="password" placeholder="비밀번호를 입력하세요" style="width:100%;padding:12px 14px;border:1px solid #E5E3DC;border-radius:10px;font-size:14px;outline:none;transition:border .2s;box-sizing:border-box;background:#fff;color:#1F1E1C" onfocus="this.style.borderColor='#DC2626'" onblur="this.style.borderColor='#E5E3DC'" onkeydown="if(event.key==='Enter')doLogin()">
         </div>
-        <button id="login-btn" onclick="doLogin()" style="width:100%;padding:13px;background:#6366F1;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s" onmouseover="this.style.background='#4F46E5'" onmouseout="this.style.background='#6366F1'">
+        <button id="login-btn" onclick="doLogin()" style="width:100%;padding:13px;background:#DC2626;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s" onmouseover="this.style.background='#991B1B'" onmouseout="this.style.background='#DC2626'">
           로그인
         </button>
         <div style="margin-top:16px;text-align:center;font-size:11px;color:#94A3B8">
@@ -379,7 +379,7 @@ const CATS=[
   {id:'C17',nm:'조화 공사',icon:'🌸'},{id:'C18',nm:'이동가구·기전',icon:'📦'},
 ];
 const STATUS_LABELS={'작성중':'작성중','견적완료':'견적완료','계약완료':'계약완료','시공중':'시공중','완료':'완료','보류':'보류'};
-const STATUS_COLORS={'작성중':'gray','견적완료':'blue','계약완료':'purple','시공중':'orange','완료':'green','보류':'red'};
+const STATUS_COLORS={'작성중':'gray','견적완료':'blue','계약완료':'warm','시공중':'orange','완료':'green','보류':'red','공사 진행 중':'orange','공사 완료':'green'};
 const CONTRACT_STATUS=['미생성','초안작성','고객검토','서명완료','계약완료'];
 const TEAM_MEMBERS=['김승환','박관우','이지현','최민준','정수연','한동욱'];
 
@@ -683,8 +683,8 @@ function renderProjectNav(){
   const progPct=getProg(p);
   let h=`
     <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
-      <button class="btn btn-ghost btn-sm" onclick="backToBoard()" style="margin-bottom:8px;font-size:11px;padding:4px 10px;width:100%">
-        ${svgIcon('arrow_left',12)} 프로젝트 목록
+      <button onclick="backToBoard()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 12px;background:#fff;border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;margin-bottom:10px;transition:var(--transition)" onmouseover="this.style.background='var(--gray-50)';this.style.borderColor='var(--text-muted)'" onmouseout="this.style.background='#fff';this.style.borderColor='var(--border)'">
+        ← 프로젝트 목록
       </button>
       <div style="background:var(--warm-light,#F3EDE5);border-radius:var(--radius);padding:10px 12px">
         <div style="font-size:13px;font-weight:800;color:var(--text);margin-bottom:2px">${escHtml(p.nm)}</div>
@@ -1870,9 +1870,9 @@ function filterProjects(){
 }
 function projTypeBadge(t){
   if(!t)return '';
-  const colors={'인테리어':'#6366f1','리모델링':'#f59e0b','신축':'#10b981','부분시공':'#8b5cf6','설계':'#3b82f6','AS':'#ef4444'};
-  const c=colors[t]||'#6b7280';
-  return `<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;background:${c}18;color:${c};font-weight:600;border:1px solid ${c}33">${t}</span>`;
+  const colors={'인테리어':'#9C6E3F','리모델링':'#B45309','신축':'#15803D','부분시공':'#4B4A45','설계':'#1F1E1C','AS':'#DC2626'};
+  const c=colors[t]||'#6B6A65';
+  return `<span style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:10px;background:${c}14;color:${c};font-weight:600;border:1px solid ${c}33">${t}</span>`;
 }
 function scopeTagBadges(tags){
   if(!tags||!tags.length)return '';
@@ -7020,7 +7020,7 @@ async function renderMe(){
   document.getElementById('content').innerHTML = `
     <div style="padding:24px;max-width:1200px;margin:0 auto">
       <!-- Header -->
-      <div style="background:linear-gradient(135deg,var(--primary) 0%,#818CF8 100%);color:#fff;border-radius:14px;padding:24px 28px;margin-bottom:20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="background:linear-gradient(135deg,#1F1E1C 0%,#4B4A45 100%);color:#FAF9F4;border-radius:14px;padding:24px 28px;margin-bottom:20px;display:flex;align-items:center;gap:20px;flex-wrap:wrap;border:1px solid #2A2825">
         <div style="width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700">${escHtml((myName||'?').slice(0,1))}</div>
         <div style="flex:1;min-width:200px">
           <div style="font-size:22px;font-weight:700;letter-spacing:-.01em">${escHtml(myName)}</div>
@@ -11206,7 +11206,7 @@ function stlRecalc() {
     <div class="kpi-card kpi-info"><div class="kpi-lbl">수금현황</div><div class="kpi-val">${stlF(PAY)}<span style="font-size:13px;font-weight:400">원</span></div><div class="kpi-sub" style="flex-direction:column;align-items:flex-start;gap:3px"><span>미수금 <strong style="color:var(--danger)">${stlF(Math.max(0,GT-PAY))}원</strong></span><div class="prog"><div class="prog-bar" style="width:${pct}%;background:${pct>=100?'var(--success)':pct>=50?'var(--info)':'var(--warning)'}"></div></div><span style="font-size:11px">수금률 ${pct}%</span></div></div>`;
 
   // 집계 카드
-  const CLRS=['#4F46E5','#10B981','#F59E0B','#EF4444','#8B5CF6'];
+  const CLRS=['#DC2626','#1F1E1C','#B45309','#15803D','#6B6A65'];
   const AGGS=[{icon:'👷',title:'노무비',data:aggL,total:TL,free:true},{icon:'🧱',title:'자재비',data:aggM,total:TMs},{icon:'🏗',title:'하도급비',data:aggS,total:TSs},{icon:'🗂',title:'경비',data:aggE,total:TEs},{icon:'🚚',title:'운송비',data:aggT,total:TTs}];
   const agg=stlEl('stl-agg'); if(agg) agg.innerHTML=AGGS.map(({icon,title,data,total,free},gi)=>{
     const entries=Object.entries(data).sort((a,b)=>b[1]-a[1]).slice(0,5);

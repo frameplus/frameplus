@@ -1373,7 +1373,7 @@ app.post('/api/inquiry', async (c) => {
             to: ['main@frameplus.kr'],
             subject: `[상담신청] ${esc(body.name)}${body.company ? ' / ' + esc(body.company) : ''}`,
             html: `
-              <h2 style="font-family:sans-serif;color:#4F46E5">새 상담 신청</h2>
+              <h2 style="font-family:sans-serif;color:#DC2626">새 상담 신청</h2>
               <table cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:14px;border:1px solid #E5E7EB">
                 <tr><td style="background:#F9FAFB"><b>이름</b></td><td>${esc(body.name)}</td></tr>
                 <tr><td style="background:#F9FAFB"><b>연락처</b></td><td>${esc(body.phone || '-')}</td></tr>
@@ -1386,7 +1386,7 @@ app.post('/api/inquiry', async (c) => {
                 <tr><td style="background:#F9FAFB"><b>마케팅 수신</b></td><td>${body.marketing_agreed ? '동의' : '미동의'}</td></tr>
               </table>
               <p style="margin-top:16px;font-family:sans-serif"><b>추천 미팅 후보일:</b> ${suggestions.join(', ') || '-'}</p>
-              <p style="font-family:sans-serif;margin-top:20px"><a href="https://frameplus-erp.pages.dev/" style="background:#4F46E5;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">ERP에서 상담 칸반 보기 →</a></p>
+              <p style="font-family:sans-serif;margin-top:20px"><a href="https://frameplus-erp.pages.dev/" style="background:#DC2626;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none">ERP에서 상담 칸반 보기 →</a></p>
             `
           })
         })
@@ -1537,14 +1537,17 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 #sidebar.collapsed{width:var(--sidebar-collapsed);min-width:var(--sidebar-collapsed)}
 .sb-header{height:var(--topbar-h);display:flex;align-items:center;padding:0 16px;border-bottom:1px solid var(--border-light);flex-shrink:0;gap:10px}
 .sb-logo{display:flex;align-items:center;gap:10px;white-space:nowrap;opacity:1;transition:opacity .2s}
-.sb-logo-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--primary) 0%,#818CF8 100%);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sb-logo-icon{width:32px;height:32px;background:linear-gradient(135deg,#1F1E1C 0%,#4B4A45 100%);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .sb-logo-icon svg{width:18px;height:18px;color:#fff}
 .sb-logo-text{font-size:16px;font-weight:700;color:var(--text);letter-spacing:-.02em}
 .sb-logo-ver{font-size:10px;font-weight:500;color:var(--text-muted);margin-left:2px}
 .collapsed .sb-logo-text,.collapsed .sb-logo-ver{display:none}
-.sb-toggle{margin-left:auto;width:28px;height:28px;border:none;background:none;color:var(--text-muted);display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);transition:var(--transition);flex-shrink:0}
-.sb-toggle:hover{background:var(--gray-100);color:var(--text)}
-.collapsed .sb-toggle{margin-left:auto}
+.sb-toggle{margin-left:auto;width:34px;height:34px;border:1px solid var(--border);background:var(--white);color:var(--text);display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);transition:var(--transition);flex-shrink:0;cursor:pointer}
+.sb-toggle:hover{background:var(--primary);color:#fff;border-color:var(--primary);transform:scale(1.05)}
+.collapsed .sb-toggle{margin-left:auto;margin-right:0}
+.collapsed #sidebar .sb-header{justify-content:center}
+.collapsed #sidebar .sb-logo{display:none}
+.collapsed #sidebar .sb-toggle{margin:0 auto}
 .sb-nav{flex:1;overflow-y:auto;overflow-x:hidden;padding:12px 10px}
 .sb-nav::-webkit-scrollbar{width:3px}
 .sb-nav::-webkit-scrollbar-track{background:transparent}
@@ -1564,7 +1567,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .sb-badge{background:var(--danger);color:#fff;font-size:9px;font-weight:700;border-radius:10px;padding:2px 6px;line-height:1.3;flex-shrink:0;min-width:18px;text-align:center}
 .collapsed .sb-badge{position:absolute;top:4px;right:4px;padding:1px 4px;font-size:8px}
 .sb-user{padding:12px 16px;border-top:1px solid var(--border-light);flex-shrink:0;display:flex;align-items:center;gap:10px}
-.sb-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,var(--primary) 0%,#818CF8 100%);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0}
+.sb-avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#DC2626 0%,#991B1B 100%);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0}
 .sb-user-info{overflow:hidden}
 .sb-user-name{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sb-user-role{font-size:11px;color:var(--text-muted)}
@@ -1636,6 +1639,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .badge-red{background:var(--danger-light);color:var(--danger)}
 .badge-orange{background:var(--warning-light);color:var(--warning)}
 .badge-purple{background:var(--purple-light);color:var(--purple)}
+.badge-warm{background:#F3EDE5;color:#9C6E3F;border:1px solid #E5D9C8}
+.badge-red{background:var(--primary-light);color:var(--primary);border:1px solid var(--primary-100)}
 .badge-gray{background:var(--gray-100);color:var(--gray-500)}
 .badge-primary{background:var(--primary-light);color:var(--primary)}
 
@@ -1735,7 +1740,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .gantt-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-lg)}
 .order-detail-wrap{display:grid;grid-template-columns:1fr 280px;gap:20px}
 .order-right{display:flex;flex-direction:column;gap:12px}
-.order-amt-card{background:linear-gradient(135deg,var(--primary) 0%,#818CF8 100%);color:#fff;border-radius:var(--radius-lg);padding:24px;text-align:center}
+.order-amt-card{background:linear-gradient(135deg,#1F1E1C 0%,#4B4A45 100%);color:#FAF9F4;border-radius:var(--radius-lg);padding:24px;text-align:center;border:1px solid #2A2825}
 .order-amt-label{font-size:12px;color:rgba(255,255,255,.7);margin-bottom:4px}
 .order-amt-value{font-size:30px;font-weight:800;font-variant-numeric:tabular-nums}
 
@@ -2078,7 +2083,7 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
     </tr>`).join('')
   const html = `
     <div style="font-family:'Pretendard','Noto Sans KR',sans-serif;max-width:680px;margin:0 auto;padding:20px">
-      <h2 style="color:#4F46E5;margin:0 0 8px 0">📅 미팅 알림 — ${today}</h2>
+      <h2 style="color:#DC2626;margin:0 0 8px 0">📅 미팅 알림 — ${today}</h2>
       <p style="color:#6B7280;font-size:13px;margin:0 0 24px 0">오늘 ${todayList.length}건 / 내일 ${tomorrowList.length}건</p>
       ${todayList.length ? `
       <h3 style="margin:24px 0 8px 0;font-size:15px;color:#DC2626">🔴 오늘 미팅 (${todayList.length}건)</h3>
@@ -2092,7 +2097,7 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
         <thead><tr style="background:#FEF3C7"><th style="padding:8px;text-align:left">시간</th><th style="padding:8px;text-align:left">제목</th><th style="padding:8px;text-align:left">고객</th><th style="padding:8px;text-align:left">장소</th><th style="padding:8px;text-align:left">담당</th></tr></thead>
         <tbody>${rows(tomorrowList)}</tbody>
       </table>` : ''}
-      <p style="margin-top:28px"><a href="https://frameplus-erp.pages.dev/" style="background:#4F46E5;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600">ERP에서 미팅 캘린더 보기 →</a></p>
+      <p style="margin-top:28px"><a href="https://frameplus-erp.pages.dev/" style="background:#DC2626;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600">ERP에서 미팅 캘린더 보기 →</a></p>
       <p style="color:#9CA3AF;font-size:11px;margin-top:24px">이 메일은 Frame Plus ERP가 매일 KST 09:00에 자동 발송합니다.</p>
     </div>
   `

@@ -1,6 +1,14 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
-## v8.6 폰트·컬러 리디자인 (2026-05-29) ✅ Step 1/3
+## v8.6 폰트·컬러 리디자인 + 페이지 점검 (2026-05-29) ✅ Step 1·2/3
+
+### Step 2 — UX 핵심 결함 수정 (완료)
+- [x] **사이드바 토글 강화** — `.sb-toggle` 28→34px, 흰배경 + 보더 + 호버 시 레드 fill + scale, 접힌 상태에서도 가운데 정렬로 명확히 보임
+- [x] **프로젝트 → 보드 복귀 버튼 강화** — 작은 ghost 버튼(11px) → 큰 outline 버튼(13px, 10px padding, 호버 강조)
+- [x] **보라색 잔존 일괄 제거** — 로그인 화면, /me 헤더, sb-logo-icon, sb-avatar, order-amt-card, chart 컬러 배열, projTypeBadge 팔레트 모두 클로드 톤 또는 레드로 교체
+- [x] **STATUS_COLORS 매핑 개선** — '계약완료' purple→warm(베이지), '공사 진행 중'/'공사 완료' 매핑 추가
+- [x] **badge-warm·badge-red 신규 클래스** — 베이지/레드 톤 뱃지
+- [x] **이메일 HTML 컬러** — Resend 보낼 이메일도 #DC2626 레드로 통일
 - [x] **Google Fonts** — Inter 제거, Noto Sans + Noto Sans KR 추가 (한·영 통일)
 - [x] **컬러 팔레트 전면 교체 — Claude-Inspired Editorial**
   - 배경 `#F5F4EE` 따뜻한 아이보리·베이지
