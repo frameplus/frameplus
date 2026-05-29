@@ -3756,6 +3756,17 @@ function renderCollection(){
     }
   });});
   overdueItems.sort((a,b)=>a.dday-b.dday);upcomingItems.sort((a,b)=>a.dday-b.dday);
+  // v8.6.2 Phase2: 미수금 aging (연체 구간별)
+  const aging={notdue:{amt:0,n:0},d30:{amt:0,n:0},d60:{amt:0,n:0},d90:{amt:0,n:0},over90:{amt:0,n:0},nodate:{amt:0,n:0}};
+  ps.forEach(p=>{const tot=getContractAmt(p);(p.payments||[]).forEach(pm=>{
+    if(pm.paid)return;
+    const amt=Math.round(tot*Number(pm.pct||0)/100); if(amt<=0)return;
+    if(!pm.due){aging.nodate.amt+=amt;aging.nodate.n++;return;}
+    const dd=diffDays(today(),pm.due);
+    if(dd>=0){aging.notdue.amt+=amt;aging.notdue.n++;}
+    else{const od=-dd; if(od<=30){aging.d30.amt+=amt;aging.d30.n++;} else if(od<=60){aging.d60.amt+=amt;aging.d60.n++;} else if(od<=90){aging.d90.amt+=amt;aging.d90.n++;} else {aging.over90.amt+=amt;aging.over90.n++;}}
+  });});
+  const agingTotal=aging.notdue.amt+aging.d30.amt+aging.d60.amt+aging.d90.amt+aging.over90.amt+aging.nodate.amt;
   // Monthly trend (last 6 months)
   const monthlyData=[];const now=new Date();
   for(let m=5;m>=0;m--){
@@ -3786,6 +3797,19 @@ function renderCollection(){
     <div class="kpi-card" style="border-left:3px solid var(--red)"><div class="kpi-label">미수금 건수</div><div class="kpi-value" style="color:var(--red)">${ps.filter(p=>getUnpaid(p)>0).length}<span style="font-size:12px">건</span></div><div style="font-size:10px;color:var(--g500)">${overdueItems.length>0?`<span style="color:var(--red);font-weight:700">⚠️ ${overdueItems.length}건 연체</span>`:'연체 없음'}</div></div>`}
     <div class="kpi-card" style="border-left:3px solid ${collRate>=80?'var(--green)':collRate>=50?'var(--orange)':'var(--red)'}"><div class="kpi-label">수금률</div><div class="kpi-value" style="color:var(--blue)">${collRate}%</div><div style="height:6px;background:var(--g200);border-radius:3px;margin-top:6px"><div style="height:100%;width:${collRate}%;background:${collRate>=80?'var(--green)':collRate>=50?'var(--orange)':'var(--red)'};border-radius:3px"></div></div></div>
   </div>
+  <!-- Aging -->
+  ${agingTotal>0?`<div class="card" style="margin-bottom:14px;padding:14px 16px">
+    <div style="font-size:12px;font-weight:700;margin-bottom:10px">📅 미수금 Aging — 총 ${fmtShort(agingTotal)}원</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px">
+      ${[['미도래',aging.notdue,'var(--g500)'],['1–30일',aging.d30,'var(--orange)'],['31–60일',aging.d60,'#EA580C'],['61–90일',aging.d90,'var(--red)'],['90일+',aging.over90,'#991B1B'],['기한미정',aging.nodate,'var(--g400)']].map(([lbl,o,c])=>`
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:10px;border-top:3px solid ${c}">
+          <div style="font-size:10.5px;color:var(--g500)">${lbl}</div>
+          <div style="font-size:15px;font-weight:800;color:${c};margin-top:2px">${fmtShort(o.amt)}<span style="font-size:10px">원</span></div>
+          <div style="font-size:10px;color:var(--g400)">${o.n}건</div>
+        </div>`).join('')}
+    </div>
+    ${(aging.d90.amt+aging.over90.amt)>0?`<div style="font-size:11px;color:var(--red);margin-top:10px;font-weight:600">⚠️ 60일 초과 미수금 ${fmtShort(aging.d90.amt+aging.over90.amt)}원 — 현금흐름 리스크, 회수 조치 필요</div>`:''}
+  </div>`:''}
   <!-- Overdue Alerts -->
   ${overdueItems.length?`<div style="background:var(--red-l);border:1px solid #fca5a5;border-radius:var(--radius-lg);padding:14px 16px;margin-bottom:14px">
     <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:8px">🚨 연체 미수금 (${overdueItems.length}건, ${fmtShort(overdueItems.reduce((a,x)=>a+x.amt,0))}원)</div>
