@@ -58,7 +58,17 @@
 ### 2순위 ✅ 미수금 aging
 - [x] 수금 화면(renderCollection)에 미수금 aging 카드 — 미도래/1–30/31–60/61–90/90일+/기한미정 구간별 금액·건수
 - [x] 60일 초과 미수금 현금흐름 리스크 강조 경고
-- [ ] 다음: 페이지네이션 잔여(consult/labor/projects), 역할 권한, core.js 분리
+### 3순위 ✅ projects 목록 페이지네이션
+- [x] consult/labor/expenses는 사이클 3에서 이미 적용 확인 → 잔여 projects만 통합
+- [x] 정렬 로직 `sortProjects()`로 분리(전역 정렬→페이지 슬라이스 순서 보장), `paintProjects()`로 필터+정렬+페이지+검색 일원화, `changeProjectsPage` 추가
+### 4순위 ✅ 역할(role)별 권한 정교화 (백엔드 강제)
+- [x] 진단: 프론트는 견고(메뉴 adminOnly 숨김 + 라우터 가드)하나, **백엔드가 역할 미강제** → 직원 세션으로 /api/users 직접 호출 시 관리자 계정 생성·삭제(권한 상승) 가능
+- [x] 인증 미들웨어가 세션 role을 컨텍스트에 부착(c.set('role'))
+- [x] 사용자 **쓰기**(POST/DELETE /api/users) admin 전용 403 가드 — 조회(GET)는 유지해 직원 화면 무영향
+- [ ] 후속(정책 결정 필요): 추가 민감 엔드포인트 잠금 범위, core.js 모듈 분리
+
+### Phase 2 검증 메모
+- 대규모 변경 누적(v8.6.2). 빌드 안전망: deploy의 `npm run build`가 구문오류 시 실패→배포 중단
 
 ## v8.6 사이클 1 — ABCD 동시 진행 (2026-05-29) ✅
 

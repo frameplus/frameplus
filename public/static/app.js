@@ -1881,14 +1881,14 @@ function renderProjects(){
           <th onclick="sortTbl('proj','date')">날짜 <span class="sort-icon">↕</span></th>
           <th>작업</th>
         </tr></thead>
-        <tbody id="projects-body">
-          ${renderProjectRows(ps)}
-        </tbody>
+        <tbody id="projects-body"></tbody>
       </table>
     </div>
-  </div>`;
+  </div>
+  <div id="projects-pager" style="margin-top:10px"></div>`;
+  paintProjects();
 }
-function filterProjects(){
+function paintProjects(){
   const q=(document.getElementById('search')?.value||'').toLowerCase();
   const st=document.getElementById('statusFilter')?.value||'';
   const df=document.getElementById('dateFrom')?.value||'';
@@ -1901,15 +1901,24 @@ function filterProjects(){
     return text&&status&&dateOk;
   });
   const wrap=document.getElementById('projects-list-wrap');
+  const pagerEl=document.getElementById('projects-pager');
   if(mg&&wrap){
     const groups=groupByMonth(ps,'date');
     wrap.innerHTML=monthlyAccordion(groups, p=>renderProjectRowSingle(p),
       `<tr><th>프로젝트명</th><th>고객사</th><th>면적</th><th>도급금액</th>${isAdmin()?'<th>마진율</th>':''}<th>공정%</th><th>수금%</th><th>상태</th><th>날짜</th><th>작업</th></tr>`);
-  } else {
-    const body=document.getElementById('projects-body');
-    if(body)body.innerHTML=renderProjectRows(ps);
+    if(pagerEl)pagerEl.innerHTML='';
+    return;
   }
+  ps=sortProjects(ps);
+  const pag=pageOf('projects');
+  if(pag.p*pag.s>=ps.length) setPage('projects',0);
+  const paged=paginate(ps, pageOf('projects').p, pag.s);
+  const body=document.getElementById('projects-body');
+  if(body)body.innerHTML=renderProjectRows(paged);
+  if(pagerEl)pagerEl.innerHTML = ps.length>pag.s ? renderPaginator(ps.length, pageOf('projects').p, pag.s, 'changeProjectsPage') : '';
 }
+function filterProjects(){ setPage('projects',0); paintProjects(); }
+function changeProjectsPage(p){ setPage('projects',p); paintProjects(); }
 function projTypeBadge(t){
   if(!t)return '';
   const colors={'인테리어':'#9C6E3F','리모델링':'#B45309','신축':'#15803D','부분시공':'#4B4A45','설계':'#1F1E1C','AS':'#DC2626'};
@@ -1952,21 +1961,22 @@ function renderProjectRowSingle(p){
     </div></td>
   </tr>`;
 }
+function sortProjects(ps){
+  const sc=S.sortCol['proj'], sd=S.sortDir['proj'];
+  if(!sc)return ps;
+  return [...ps].sort((a,b)=>{
+    let va,vb;
+    if(sc==='total'){va=getTotal(a);vb=getTotal(b);}
+    else if(sc==='mr'){va=getMR(a);vb=getMR(b);}
+    else if(sc==='area'){va=a.area||0;vb=b.area||0;}
+    else{va=a[sc]||'';vb=b[sc]||'';}
+    if(typeof va==='number')return sd===sc?(va-vb):(vb-va);
+    return sd===sc?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va));
+  });
+}
 function renderProjectRows(ps){
   if(!ps.length)return`<tr><td colspan="${isAdmin()?10:9}" style="text-align:center;padding:40px;color:var(--g400)">프로젝트가 없습니다</td></tr>`;
-  // Apply sort
-  const sc=S.sortCol['proj'], sd=S.sortDir['proj'];
-  if(sc){
-    ps=[...ps].sort((a,b)=>{
-      let va,vb;
-      if(sc==='total'){va=getTotal(a);vb=getTotal(b);}
-      else if(sc==='mr'){va=getMR(a);vb=getMR(b);}
-      else if(sc==='area'){va=a.area||0;vb=b.area||0;}
-      else{va=a[sc]||'';vb=b[sc]||'';}
-      if(typeof va==='number')return sd===sc?(va-vb):(vb-va);
-      return sd===sc?String(va).localeCompare(String(vb)):String(vb).localeCompare(String(va));
-    });
-  }
+  ps=sortProjects(ps);
   return ps.map(p=>{
     const tot=getTotal(p);const prog=getProg(p);const paid=getPaid(p);
     const paidPct=tot>0?Math.round(paid/tot*100):0;const mr=getMR(p);

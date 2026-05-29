@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 
 type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string }
-type App = { Bindings: Bindings }
+type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
 
 const app = new Hono<App>()
 app.use('/api/*', cors())
@@ -26,6 +26,8 @@ app.use('/api/*', async (c, next) => {
   if (!sid) return c.json({ error: 'Unauthorized' }, 401)
   const sess = await c.env.DB.prepare('SELECT * FROM sessions WHERE id = ? AND expires_at > ?').bind(sid, new Date().toISOString()).first()
   if (!sess) return c.json({ error: 'Session expired' }, 401)
+  c.set('role', String((sess as any).role || 'staff'))
+  c.set('userId', String((sess as any).user_id || ''))
   await next()
 })
 
@@ -552,6 +554,7 @@ app.get('/api/users', async (c) => {
 })
 
 app.post('/api/users', async (c) => {
+  if (c.get('role') !== 'admin') return c.json({ error: '관리자 권한이 필요합니다' }, 403)
   const db = c.env.DB
   const body = await c.req.json()
   const id = body.id || crypto.randomUUID()
@@ -565,6 +568,7 @@ app.post('/api/users', async (c) => {
 })
 
 app.delete('/api/users/:id', async (c) => {
+  if (c.get('role') !== 'admin') return c.json({ error: '관리자 권한이 필요합니다' }, 403)
   const db = c.env.DB
   const id = c.req.param('id')
   // Don't allow deleting the last admin
