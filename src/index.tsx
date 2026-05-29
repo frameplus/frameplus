@@ -1423,6 +1423,144 @@ app.post('/api/inquiry', async (c) => {
   }
 })
 
+// ===== SETTLEMENT MIGRATION (stl_* → ERP core tables) — P5 단계 2 =====
+// POST body: { dryRun?: boolean, mode?: 'merge' | 'replace' }
+app.post('/api/migrate-settlement', async (c) => {
+  const body = await c.req.json<any>().catch(() => ({}))
+  const dryRun = !!body.dryRun
+  const mode = body.mode === 'replace' ? 'replace' : 'merge'
+  const stats: Record<string, { found: number; migrated: number; skipped: number }> = {
+    labor: { found: 0, migrated: 0, skipped: 0 },
+    material: { found: 0, migrated: 0, skipped: 0 },
+    subcontract: { found: 0, migrated: 0, skipped: 0 },
+    expense: { found: 0, migrated: 0, skipped: 0 },
+    transport: { found: 0, migrated: 0, skipped: 0 },
+    payment: { found: 0, migrated: 0, skipped: 0 },
+  }
+  try {
+    // 1) stl_labor_costs → labor_costs
+    const labors = await c.env.DB.prepare('SELECT * FROM stl_labor_costs').all<any>().catch(() => ({ results: [] as any[] }))
+    stats.labor.found = labors.results?.length || 0
+    for (const r of (labors.results || [])) {
+      const newId = 'stl-' + r.id
+      if (mode === 'merge') {
+        const ex = await c.env.DB.prepare('SELECT id FROM labor_costs WHERE id=?').bind(newId).first()
+        if (ex) { stats.labor.skipped++; continue }
+      }
+      if (!dryRun) {
+        const total = (Number(r.daily_rate || 0) * Number(r.days || 0) * Number(r.workers || 1)) + Number(r.surcharge || 0)
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO labor_costs (id, pid, date, worker_name, worker_type, daily_rate, days, total, work_type, job, surcharge, memo, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(newId, r.project_id || '', r.date || '', r.job || '-', r.work_type || '', Number(r.daily_rate || 0), Number(r.days || 0), total, r.work_type || '', r.job || '', Number(r.surcharge || 0), '정산관리 노무비 이관', r.created_at || new Date().toISOString()).run()
+      }
+      stats.labor.migrated++
+    }
+    // 2) stl_material_costs → orders_manual (cost_type='material')
+    const mats = await c.env.DB.prepare('SELECT * FROM stl_material_costs').all<any>().catch(() => ({ results: [] as any[] }))
+    stats.material.found = mats.results?.length || 0
+    for (const r of (mats.results || [])) {
+      const newId = 'stl-mat-' + r.id
+      if (mode === 'merge') {
+        const ex = await c.env.DB.prepare('SELECT id FROM orders_manual WHERE id=?').bind(newId).first()
+        if (ex) { stats.material.skipped++; continue }
+      }
+      if (!dryRun) {
+        const amount = Number(r.qty || 1) * Number(r.price || 0)
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO orders_manual (id, pid, vendor, order_date, amount, items, cost_type, memo, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'material', ?, ?)`
+        ).bind(newId, r.project_id || '', r.vendor || '', r.date || '', amount, JSON.stringify([{ name: r.name, qty: r.qty, unit: r.unit, price: r.price, category: r.category }]), '정산관리 자재비 이관', r.created_at || new Date().toISOString()).run()
+      }
+      stats.material.migrated++
+    }
+    // 3) stl_sub_costs → orders_manual (cost_type='subcontract')
+    const subs = await c.env.DB.prepare('SELECT * FROM stl_sub_costs').all<any>().catch(() => ({ results: [] as any[] }))
+    stats.subcontract.found = subs.results?.length || 0
+    for (const r of (subs.results || [])) {
+      const newId = 'stl-sub-' + r.id
+      if (mode === 'merge') {
+        const ex = await c.env.DB.prepare('SELECT id FROM orders_manual WHERE id=?').bind(newId).first()
+        if (ex) { stats.subcontract.skipped++; continue }
+      }
+      if (!dryRun) {
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO orders_manual (id, pid, vendor, order_date, amount, items, cost_type, memo, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'subcontract', ?, ?)`
+        ).bind(newId, r.project_id || '', r.contractor || '', r.date || '', Number(r.amount || 0), JSON.stringify([{ work_type: r.work_type, content: r.content, contract_no: r.contract_no }]), '정산관리 외주비 이관', r.created_at || new Date().toISOString()).run()
+      }
+      stats.subcontract.migrated++
+    }
+    // 4) stl_expense_costs → expenses
+    const exps = await c.env.DB.prepare('SELECT * FROM stl_expense_costs').all<any>().catch(() => ({ results: [] as any[] }))
+    stats.expense.found = exps.results?.length || 0
+    for (const r of (exps.results || [])) {
+      const newId = 'stl-exp-' + r.id
+      if (mode === 'merge') {
+        const ex = await c.env.DB.prepare('SELECT id FROM expenses WHERE id=?').bind(newId).first()
+        if (ex) { stats.expense.skipped++; continue }
+      }
+      if (!dryRun) {
+        const amount = Number(r.qty || 1) * Number(r.price || 0)
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO expenses (id, pid, date, category, title, amount, status, memo, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, '완료', ?, ?)`
+        ).bind(newId, r.project_id || '', r.date || '', r.category || '기타', r.name || '-', amount, '정산관리 경비 이관', r.created_at || new Date().toISOString()).run()
+      }
+      stats.expense.migrated++
+    }
+    // 5) stl_transport_costs → expenses (is_transport=1)
+    const trans = await c.env.DB.prepare('SELECT * FROM stl_transport_costs').all<any>().catch(() => ({ results: [] as any[] }))
+    stats.transport.found = trans.results?.length || 0
+    for (const r of (trans.results || [])) {
+      const newId = 'stl-trs-' + r.id
+      if (mode === 'merge') {
+        const ex = await c.env.DB.prepare('SELECT id FROM expenses WHERE id=?').bind(newId).first()
+        if (ex) { stats.transport.skipped++; continue }
+      }
+      if (!dryRun) {
+        const amount = Number(r.qty || 1) * Number(r.price || 0)
+        const title = `${r.origin || '-'} → ${r.destination || '-'} (${r.item || '운반'})`
+        await c.env.DB.prepare(
+          `INSERT OR REPLACE INTO expenses (id, pid, date, category, title, amount, status, is_transport, origin, destination, vehicle, memo, created_at)
+           VALUES (?, ?, ?, '운반', ?, ?, '완료', 1, ?, ?, ?, ?, ?)`
+        ).bind(newId, r.project_id || '', r.date || '', title, amount, r.origin || '', r.destination || '', r.vehicle || '', '정산관리 운반비 이관', r.created_at || new Date().toISOString()).run()
+      }
+      stats.transport.migrated++
+    }
+    // 6) stl_payments → projects.payments JSON
+    const pays = await c.env.DB.prepare('SELECT * FROM stl_payments').all<any>().catch(() => ({ results: [] as any[] }))
+    stats.payment.found = pays.results?.length || 0
+    if (!dryRun) {
+      const byProject: Record<string, any[]> = {}
+      for (const r of (pays.results || [])) {
+        const pid = r.project_id || ''
+        if (!pid) { stats.payment.skipped++; continue }
+        if (!byProject[pid]) byProject[pid] = []
+        byProject[pid].push({ id: 'stl-pay-' + r.id, date: r.date, description: r.description, amount: Number(r.amount || 0), method: r.method, paid: true })
+      }
+      for (const [pid, list] of Object.entries(byProject)) {
+        const proj = await c.env.DB.prepare('SELECT id, payments FROM projects WHERE id=?').bind(pid).first<any>()
+        if (proj) {
+          let existing: any[] = []
+          try { existing = JSON.parse(proj.payments || '[]') } catch (_) { existing = [] }
+          const existingIds = new Set(existing.map((p: any) => p.id))
+          for (const p of list) {
+            if (mode === 'merge' && existingIds.has(p.id)) { stats.payment.skipped++; continue }
+            existing.push(p); stats.payment.migrated++
+          }
+          await c.env.DB.prepare('UPDATE projects SET payments=? WHERE id=?').bind(JSON.stringify(existing), pid).run()
+        } else { stats.payment.skipped += list.length }
+      }
+    } else {
+      stats.payment.migrated = stats.payment.found
+    }
+    return c.json({ ok: true, dryRun, mode, stats })
+  } catch (e: any) {
+    return c.json({ ok: false, error: e?.message || 'migration failed', stats }, 500)
+  }
+})
+
 // ===== SERVE FRONTEND =====
 app.get('/*', async (c) => {
   // For Cloudflare Pages, static files are served automatically from dist/

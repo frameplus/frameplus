@@ -31,11 +31,36 @@
 - [x] 안전한 진행 순서: vite 동적 import + 기존 함수 전역 노출 유지하면서 점진 분할
 - [ ] 다음 사이클: core.js placeholder 분리부터 시작 (사이드바·init·router·apiHelper)
 
-## 다음 사이클 (사이클 2) 우선순위
-1. A 적용 — renderExpenses에 검색·페이지네이션 통합 (가장 빠른 체감)
-2. C 마이그레이션 — POST /api/migrate-settlement 라우트 + dry-run + 실 이관
-3. A 적용 — renderConsultations / renderLabor에 동일 통합
-4. D 시작 — core.js 분리 첫 단계
+## 사이클 2 — A·B·C·D 동시 진행 (2026-05-29) ✅
+
+### A 적용 — expenses 페이지에 페이지네이션·검색 통합
+- [x] 검색 박스 — 250ms 디바운스, 제목·업체·분류·요청자·결재자 5개 키 OR LIKE
+- [x] 페이지 사이즈 선택 — 25 / 50 / 100건
+- [x] 페이지 컨트롤 — ‹‹ ‹ 1 2 3 4 5 › ›› + "총 N건 · 페이지/총페이지" 표시
+- [x] 행 제목 클릭 → openExpenseDetail (지난 사이클 B와 연결)
+- [x] KPI는 전체 데이터 기준 유지, 테이블만 페이지 슬라이스
+
+### C 마이그레이션 API — POST /api/migrate-settlement
+- [x] `dryRun` 옵션 — 실 INSERT 없이 통계만 반환 (사전 검증)
+- [x] `mode: 'merge' | 'replace'` — merge는 중복 ID skip, replace는 덮어쓰기
+- [x] 6개 stl_ 테이블 → 4개 ERP 테이블 매핑
+  - stl_labor_costs → labor_costs (id prefix `stl-`)
+  - stl_material_costs → orders_manual cost_type='material' (`stl-mat-`)
+  - stl_sub_costs → orders_manual cost_type='subcontract' (`stl-sub-`)
+  - stl_expense_costs → expenses (`stl-exp-`)
+  - stl_transport_costs → expenses is_transport=1 (`stl-trs-`)
+  - stl_payments → projects.payments JSON (id `stl-pay-`)
+- [x] stats 반환 — 각 테이블별 found / migrated / skipped
+- [x] 에러 시 부분 통계 + error 메시지 반환
+
+### B / D — 다음 사이클로
+- [ ] consultations / labor 페이지에 페이지네이션 통합 (사이클 3)
+- [ ] core.js 분리 첫 단계 (사이클 4 또는 별도)
+
+## 사이클 3 우선순위 (다음)
+1. consultations / labor / projects 페이지에 페이지네이션 적용
+2. 마이그레이션 실행 — dry-run으로 stats 확인 → 실제 merge
+3. 정산관리 메뉴를 프로젝트 상세 모드 'ERP > 정산서'로 흡수 시작 (UI 통합)
 
 
 ### Step 2 — UX 핵심 결함 수정 (완료)

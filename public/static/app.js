@@ -6827,13 +6827,19 @@ async function rejectExpenseFromDetail(eid){
 }
 
 // ===== EXPENSES (지출결의서) =====
+function changeExpensesPage(p){ setPage('expenses', p); renderExpenses(); }
+function searchExpenses(q){ setPageSearch('expenses', q); renderExpenses(); }
 function renderExpenses(){
   document.getElementById('tb-title').textContent='지출결의서';
   const ps=getProjects();
-  const exps=getExpenses();
-  const totalAmt=exps.reduce((a,e)=>a+(Number(e.amount)||0),0);
-  const pending=exps.filter(e=>e.status==='대기');
-  const approved=exps.filter(e=>e.status==='승인');
+  const allExps=getExpenses();
+  const totalAmt=allExps.reduce((a,e)=>a+(Number(e.amount)||0),0);
+  const pending=allExps.filter(e=>e.status==='대기');
+  const approved=allExps.filter(e=>e.status==='승인');
+  // v8.6 P3: search + pagination
+  const pag=pageOf('expenses');
+  const filtered=filterByQuery(allExps, pag.q, ['title','vendor','category','requester','approver']);
+  const exps=paginate(filtered, pag.p, pag.s);
   
   document.getElementById('tb-actions').innerHTML=`
     <button class="btn btn-outline btn-sm" onclick="exportXLSX('expenses')">${svgIcon('download',12)} 엑셀</button>
@@ -6876,7 +6882,7 @@ function renderExpenses(){
             <td>${e.date||''}</td>
             <td>${p?.nm||'-'}</td>
             <td><span class="badge badge-gray">${e.category||'기타'}</span></td>
-            <td style="font-weight:600">${e.title||''}</td>
+            <td style="font-weight:600;color:var(--primary);cursor:pointer;text-decoration:underline" onclick="openExpenseDetail('${e.id}')">${e.title||''}</td>
             <td>${e.vendor||'-'}</td>
             <td class="num" style="font-weight:700">₩${fmt(e.amount)}</td>
             <td>${e.payment_method||'-'}</td>
@@ -6895,6 +6901,15 @@ function renderExpenses(){
         }).join('')||'<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--g400)">등록된 지출결의서가 없습니다</td></tr>'}
       </tbody>
     </table>
+  </div>
+  ${renderPaginator(filtered.length, pag.p, pag.s, 'changeExpensesPage')}
+  <div style="display:flex;gap:8px;justify-content:center;margin-top:6px;flex-wrap:wrap;align-items:center">
+    <input type="text" placeholder="제목·업체·분류·요청자·결재자 검색…" value="${escHtml(pag.q||'')}" oninput="clearTimeout(window._expSrchT);window._expSrchT=setTimeout(()=>searchExpenses(this.value),250)" style="padding:7px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;width:260px;max-width:90vw;background:#fff;color:var(--text)">
+    <select onchange="pageOf('expenses').s=parseInt(this.value)||25;changeExpensesPage(0)" style="padding:7px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:#fff;color:var(--text)">
+      <option value="25" ${pag.s==25?'selected':''}>25건</option>
+      <option value="50" ${pag.s==50?'selected':''}>50건</option>
+      <option value="100" ${pag.s==100?'selected':''}>100건</option>
+    </select>
   </div>`;
 }
 
