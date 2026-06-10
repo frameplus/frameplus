@@ -11,3 +11,12 @@ logs/
 *.bak
 *.tar.gz
 *.zip
+
+# Python (frameplus_quote_parser.py)
+__pycache__/
+*.pyc
+quote_items_raw.csv
+quote_master_candidate.csv
+quote_indirect_costs.csv
+quote_parse_log.csv
+견적서_양식.xlsx
