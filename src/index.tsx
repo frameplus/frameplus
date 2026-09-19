@@ -74,6 +74,19 @@ async function ensureTables(db: D1Database) {
     CREATE TABLE IF NOT EXISTS site_photos (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', category TEXT DEFAULT '일반', title TEXT DEFAULT '', description TEXT DEFAULT '', image_data TEXT DEFAULT '', file_name TEXT DEFAULT '', taken_date TEXT DEFAULT '', taken_by TEXT DEFAULT '', location TEXT DEFAULT '', tags TEXT DEFAULT '[]', phase TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS site_daily_logs (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', log_date TEXT DEFAULT '', weather TEXT DEFAULT '맑음', temperature TEXT DEFAULT '', summary TEXT DEFAULT '', work_details TEXT DEFAULT '[]', workers_count INTEGER DEFAULT 0, workers_detail TEXT DEFAULT '[]', equipment TEXT DEFAULT '[]', issues TEXT DEFAULT '', safety_check INTEGER DEFAULT 1, inspector TEXT DEFAULT '', progress_pct REAL DEFAULT 0, notes TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE IF NOT EXISTS site_issues (id TEXT PRIMARY KEY, pid TEXT DEFAULT '', title TEXT NOT NULL, category TEXT DEFAULT '품질', severity TEXT DEFAULT '보통', status TEXT DEFAULT '발생', description TEXT DEFAULT '', location TEXT DEFAULT '', reported_by TEXT DEFAULT '', reported_date TEXT DEFAULT '', assigned_to TEXT DEFAULT '', due_date TEXT DEFAULT '', resolved_date TEXT DEFAULT '', resolution TEXT DEFAULT '', photos TEXT DEFAULT '[]', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS notebooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, icon TEXT DEFAULT '📓', color TEXT DEFAULT '#DC2626', owner_id TEXT DEFAULT '', owner_name TEXT DEFAULT '', scope TEXT DEFAULT 'private', team_perm TEXT DEFAULT 'read', pid TEXT DEFAULT '', sort_order INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, notebook_id TEXT DEFAULT '', title TEXT DEFAULT '', content TEXT DEFAULT '', plain TEXT DEFAULT '', tags TEXT DEFAULT '[]', pid TEXT DEFAULT '', owner_id TEXT DEFAULT '', owner_name TEXT DEFAULT '', scope TEXT DEFAULT 'private', team_perm TEXT DEFAULT 'read', pinned INTEGER DEFAULT 0, color TEXT DEFAULT '', archived INTEGER DEFAULT 0, rev INTEGER DEFAULT 1, updated_by TEXT DEFAULT '', updated_by_name TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS note_shares (id TEXT PRIMARY KEY, note_id TEXT DEFAULT '', notebook_id TEXT DEFAULT '', target_id TEXT DEFAULT '', target_name TEXT DEFAULT '', permission TEXT DEFAULT 'edit', granted_by TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS note_revisions (id TEXT PRIMARY KEY, note_id TEXT DEFAULT '', rev INTEGER DEFAULT 0, title TEXT DEFAULT '', content TEXT DEFAULT '', editor_id TEXT DEFAULT '', editor_name TEXT DEFAULT '', created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS note_presence (id TEXT PRIMARY KEY, note_id TEXT DEFAULT '', user_id TEXT DEFAULT '', user_name TEXT DEFAULT '', editing INTEGER DEFAULT 0, last_seen DATETIME DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_notes_owner ON notes(owner_id);
+    CREATE INDEX IF NOT EXISTS idx_notes_notebook ON notes(notebook_id);
+    CREATE INDEX IF NOT EXISTS idx_notes_pid ON notes(pid);
+    CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_note_shares_note ON note_shares(note_id, target_id);
+    CREATE INDEX IF NOT EXISTS idx_note_shares_nb ON note_shares(notebook_id, target_id);
+    CREATE INDEX IF NOT EXISTS idx_note_revisions_note ON note_revisions(note_id, rev);
+    CREATE INDEX IF NOT EXISTS idx_note_presence_note ON note_presence(note_id, last_seen);
   `)
   // Auto-migrate: add missing columns to existing tables
   const alterStmts = [
@@ -394,6 +407,342 @@ app.delete('/api/stl/bulk-delete/:pid', async (c) => {
   return c.json({ success: true })
 })
 
+// ═══════════════════════════════════════════════════════════
+// 메모장(전자 필기장) — 노트북 / 노트 / 공유 / 이력 / 동시편집
+// ═══════════════════════════════════════════════════════════
+const NOTE_SCOPES = new Set(['private', 'team'])
+const NOTE_PERMS = new Set(['read', 'edit'])
+const NOTE_PRESENCE_WINDOW_SEC = 90
+const NOTE_REVISION_KEEP = 30
+
+// 서버측 2차 방어: 저장되는 HTML에서 스크립트·이벤트 핸들러 제거 (1차는 클라이언트 sanitizer)
+function sanitizeNoteHtml(html: string): string {
+  return String(html || '')
+    .replace(/<\s*(script|iframe|object|embed|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+    .replace(/<\s*(script|iframe|object|embed|link|meta)[^>]*>/gi, '')
+    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+    .replace(/(href|src)\s*=\s*(["'])\s*javascript:[^"']*\2/gi, '$1="#"')
+}
+
+async function noteMe(c: any): Promise<{ id: string; name: string; role: string }> {
+  const id = String(c.get('userId') || '')
+  let name = ''
+  try {
+    const u: any = await c.env.DB.prepare('SELECT name, username FROM users WHERE id = ?').bind(id).first()
+    name = String(u?.name || u?.username || '')
+  } catch (_) { /* users 테이블 조회 실패는 무시 */ }
+  return { id, name, role: String(c.get('role') || 'staff') }
+}
+
+// 가시성 조인 — 내 소유 / 전사공개 / 나에게 공유된 노트(또는 노트북)
+const NOTE_JOINS = `
+  FROM notes n
+  LEFT JOIN notebooks b ON b.id = n.notebook_id
+  LEFT JOIN note_shares s ON s.note_id = n.id AND s.target_id = ?
+  LEFT JOIN note_shares bs ON bs.notebook_id = n.notebook_id AND (bs.note_id IS NULL OR bs.note_id = '') AND bs.target_id = ?`
+const NOTE_PERM_SELECT = `MAX(CASE WHEN n.owner_id = ? THEN 3
+    WHEN s.permission = 'edit' OR bs.permission = 'edit' OR (n.scope = 'team' AND n.team_perm = 'edit') OR (b.scope = 'team' AND b.team_perm = 'edit') THEN 2
+    ELSE 1 END) AS perm_rank`
+const NOTE_VISIBLE = `(n.owner_id = ? OR n.scope = 'team' OR s.id IS NOT NULL OR bs.id IS NOT NULL OR b.scope = 'team')`
+const permLabel = (rank: number) => (rank >= 3 ? 'owner' : rank === 2 ? 'edit' : 'read')
+
+async function noteRowFor(db: D1Database, id: string, meId: string): Promise<any | null> {
+  const row = await db.prepare(
+    `SELECT n.*, b.name AS notebook_name, b.icon AS notebook_icon, ${NOTE_PERM_SELECT} ${NOTE_JOINS}
+     WHERE n.id = ? AND ${NOTE_VISIBLE} GROUP BY n.id`
+  ).bind(meId, meId, meId, id, meId).first<any>()
+  if (!row) return null
+  row.perm = permLabel(Number(row.perm_rank || 1))
+  delete row.perm_rank
+  return row
+}
+
+// ── 노트북 ───────────────────────────────────────────────
+app.get('/api/notebooks', async (c) => {
+  const me = await noteMe(c)
+  const { results } = await c.env.DB.prepare(
+    `SELECT b.*, MAX(CASE WHEN b.owner_id = ? THEN 3 WHEN s.permission = 'edit' OR (b.scope = 'team' AND b.team_perm = 'edit') THEN 2 ELSE 1 END) AS perm_rank,
+            (SELECT COUNT(*) FROM notes x WHERE x.notebook_id = b.id AND x.archived = 0) AS note_count
+     FROM notebooks b
+     LEFT JOIN note_shares s ON s.notebook_id = b.id AND (s.note_id IS NULL OR s.note_id = '') AND s.target_id = ?
+     WHERE (b.owner_id = ? OR b.scope = 'team' OR s.id IS NOT NULL)
+     GROUP BY b.id ORDER BY b.sort_order ASC, b.created_at ASC`
+  ).bind(me.id, me.id, me.id).all<any>()
+  return c.json((results || []).map((r: any) => {
+    r.perm = permLabel(Number(r.perm_rank || 1)); delete r.perm_rank; return r
+  }))
+})
+
+app.post('/api/notebooks', async (c) => {
+  const me = await noteMe(c)
+  const b = await c.req.json<any>().catch(() => ({}))
+  const id = b.id || crypto.randomUUID()
+  const scope = NOTE_SCOPES.has(b.scope) ? b.scope : 'private'
+  const teamPerm = NOTE_PERMS.has(b.team_perm) ? b.team_perm : 'read'
+  await c.env.DB.prepare(
+    `INSERT INTO notebooks (id, name, icon, color, owner_id, owner_name, scope, team_perm, pid, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, String(b.name || '새 노트북').slice(0, 80), b.icon || '📓', b.color || '#DC2626',
+    me.id, me.name, scope, teamPerm, b.pid || '', Number(b.sort_order || 0)).run()
+  return c.json({ success: true, id })
+})
+
+app.put('/api/notebooks/:id', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const own = await c.env.DB.prepare('SELECT owner_id FROM notebooks WHERE id = ?').bind(id).first<any>()
+  if (!own) return c.json({ error: '노트북을 찾을 수 없습니다' }, 404)
+  if (own.owner_id !== me.id) return c.json({ error: '노트북 소유자만 수정할 수 있습니다' }, 403)
+  const b = await c.req.json<any>().catch(() => ({}))
+  const scope = NOTE_SCOPES.has(b.scope) ? b.scope : undefined
+  const teamPerm = NOTE_PERMS.has(b.team_perm) ? b.team_perm : undefined
+  await c.env.DB.prepare(
+    `UPDATE notebooks SET name = COALESCE(?, name), icon = COALESCE(?, icon), color = COALESCE(?, color),
+     scope = COALESCE(?, scope), team_perm = COALESCE(?, team_perm), pid = COALESCE(?, pid),
+     sort_order = COALESCE(?, sort_order), updated_at = ? WHERE id = ?`
+  ).bind(b.name ?? null, b.icon ?? null, b.color ?? null, scope ?? null, teamPerm ?? null,
+    b.pid ?? null, b.sort_order ?? null, new Date().toISOString(), id).run()
+  return c.json({ success: true })
+})
+
+app.delete('/api/notebooks/:id', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const own = await c.env.DB.prepare('SELECT owner_id FROM notebooks WHERE id = ?').bind(id).first<any>()
+  if (!own) return c.json({ error: '노트북을 찾을 수 없습니다' }, 404)
+  if (own.owner_id !== me.id) return c.json({ error: '노트북 소유자만 삭제할 수 있습니다' }, 403)
+  // 노트는 보존하고 소속만 해제
+  await c.env.DB.prepare(`UPDATE notes SET notebook_id = '' WHERE notebook_id = ?`).bind(id).run()
+  await c.env.DB.prepare('DELETE FROM note_shares WHERE notebook_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM notebooks WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// ── 노트 목록 ────────────────────────────────────────────
+app.get('/api/notes', async (c) => {
+  const me = await noteMe(c)
+  const url = new URL(c.req.url)
+  const view = url.searchParams.get('view') || 'all'        // all | mine | shared | team | pinned
+  const notebookId = url.searchParams.get('notebook_id') || ''
+  const pid = url.searchParams.get('pid') || ''
+  const q = (url.searchParams.get('q') || '').trim()
+  const archived = url.searchParams.get('archived') === '1' ? 1 : 0
+  const limit = Math.min(Number(url.searchParams.get('limit') || 200), 500)
+  const withContent = url.searchParams.get('full') === '1'
+
+  const binds: any[] = [me.id, me.id, me.id, me.id]
+  let where = `${NOTE_VISIBLE} AND n.archived = ?`
+  binds.push(archived)
+  if (view === 'mine') { where += ' AND n.owner_id = ?'; binds.push(me.id) }
+  else if (view === 'shared') { where += ' AND n.owner_id <> ? AND (s.id IS NOT NULL OR bs.id IS NOT NULL)'; binds.push(me.id) }
+  else if (view === 'team') { where += ` AND (n.scope = 'team' OR b.scope = 'team')` }
+  else if (view === 'pinned') { where += ' AND n.pinned = 1' }
+  if (notebookId) { where += ' AND n.notebook_id = ?'; binds.push(notebookId) }
+  if (pid) { where += ' AND n.pid = ?'; binds.push(pid) }
+  if (q) { where += ' AND (n.title LIKE ? OR n.plain LIKE ? OR n.tags LIKE ?)'; binds.push(`%${q}%`, `%${q}%`, `%${q}%`) }
+
+  const cols = withContent ? 'n.*' : `n.id, n.notebook_id, n.title, substr(n.plain, 1, 180) AS excerpt, n.tags, n.pid,
+    n.owner_id, n.owner_name, n.scope, n.team_perm, n.pinned, n.color, n.archived, n.rev,
+    n.updated_by, n.updated_by_name, n.created_at, n.updated_at`
+  const { results } = await c.env.DB.prepare(
+    `SELECT ${cols}, b.name AS notebook_name, b.icon AS notebook_icon, ${NOTE_PERM_SELECT} ${NOTE_JOINS}
+     WHERE ${where} GROUP BY n.id ORDER BY n.pinned DESC, n.updated_at DESC LIMIT ${limit}`
+  ).bind(...binds).all<any>()
+  return c.json((results || []).map((r: any) => {
+    r.perm = permLabel(Number(r.perm_rank || 1)); delete r.perm_rank; return r
+  }))
+})
+
+// 단건 조회
+app.get('/api/notes/:id', async (c) => {
+  const me = await noteMe(c)
+  const row = await noteRowFor(c.env.DB, c.req.param('id'), me.id)
+  if (!row) return c.json({ error: '노트를 찾을 수 없거나 접근 권한이 없습니다' }, 404)
+  const shares = await c.env.DB.prepare('SELECT * FROM note_shares WHERE note_id = ?').bind(row.id).all<any>()
+  return c.json({ ...row, shares: shares.results || [] })
+})
+
+// 생성
+app.post('/api/notes', async (c) => {
+  const me = await noteMe(c)
+  const b = await c.req.json<any>().catch(() => ({}))
+  const id = b.id || crypto.randomUUID()
+  const scope = NOTE_SCOPES.has(b.scope) ? b.scope : 'private'
+  const teamPerm = NOTE_PERMS.has(b.team_perm) ? b.team_perm : 'read'
+  const content = sanitizeNoteHtml(b.content || '')
+  const now = new Date().toISOString()
+  await c.env.DB.prepare(
+    `INSERT INTO notes (id, notebook_id, title, content, plain, tags, pid, owner_id, owner_name, scope, team_perm,
+      pinned, color, archived, rev, updated_by, updated_by_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?)`
+  ).bind(id, b.notebook_id || '', String(b.title || '제목 없는 메모').slice(0, 200), content,
+    String(b.plain || '').slice(0, 20000), typeof b.tags === 'string' ? b.tags : JSON.stringify(b.tags || []),
+    b.pid || '', me.id, me.name, scope, teamPerm, b.pinned ? 1 : 0, b.color || '',
+    me.id, me.name, now, now).run()
+  const row = await noteRowFor(c.env.DB, id, me.id)
+  return c.json({ success: true, id, note: row })
+})
+
+// 수정 (rev 기반 충돌 감지)
+app.put('/api/notes/:id', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const cur = await noteRowFor(c.env.DB, id, me.id)
+  if (!cur) return c.json({ error: '노트를 찾을 수 없거나 접근 권한이 없습니다' }, 404)
+  if (cur.perm === 'read') return c.json({ error: '읽기 권한만 있습니다' }, 403)
+  const b = await c.req.json<any>().catch(() => ({}))
+
+  // 다른 사람이 먼저 저장했으면 409 + 서버본 반환
+  if (b.rev !== undefined && b.rev !== null && Number(b.rev) !== Number(cur.rev) && b.force !== true) {
+    return c.json({ conflict: true, error: '다른 사용자가 먼저 저장했습니다', note: cur }, 409)
+  }
+
+  const contentChanged = b.content !== undefined && sanitizeNoteHtml(b.content) !== cur.content
+  const titleChanged = b.title !== undefined && String(b.title) !== cur.title
+  if (contentChanged || titleChanged) {
+    // 직전 버전을 이력에 보관
+    await c.env.DB.prepare(
+      `INSERT INTO note_revisions (id, note_id, rev, title, content, editor_id, editor_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), id, Number(cur.rev || 1), cur.title || '', cur.content || '',
+      cur.updated_by || '', cur.updated_by_name || '').run()
+    await c.env.DB.prepare(
+      `DELETE FROM note_revisions WHERE note_id = ? AND id NOT IN
+       (SELECT id FROM note_revisions WHERE note_id = ? ORDER BY rev DESC LIMIT ${NOTE_REVISION_KEEP})`
+    ).bind(id, id).run()
+  }
+
+  const scope = NOTE_SCOPES.has(b.scope) ? b.scope : null
+  const teamPerm = NOTE_PERMS.has(b.team_perm) ? b.team_perm : null
+  const isOwner = cur.perm === 'owner'
+  const nextRev = (contentChanged || titleChanged) ? Number(cur.rev || 1) + 1 : Number(cur.rev || 1)
+  await c.env.DB.prepare(
+    `UPDATE notes SET title = COALESCE(?, title), content = COALESCE(?, content), plain = COALESCE(?, plain),
+      tags = COALESCE(?, tags), pid = COALESCE(?, pid), notebook_id = COALESCE(?, notebook_id),
+      scope = COALESCE(?, scope), team_perm = COALESCE(?, team_perm), pinned = COALESCE(?, pinned),
+      color = COALESCE(?, color), archived = COALESCE(?, archived),
+      rev = ?, updated_by = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`
+  ).bind(
+    b.title !== undefined ? String(b.title).slice(0, 200) : null,
+    b.content !== undefined ? sanitizeNoteHtml(b.content) : null,
+    b.plain !== undefined ? String(b.plain).slice(0, 20000) : null,
+    b.tags !== undefined ? (typeof b.tags === 'string' ? b.tags : JSON.stringify(b.tags)) : null,
+    b.pid !== undefined ? b.pid : null,
+    b.notebook_id !== undefined ? b.notebook_id : null,
+    isOwner ? scope : null, isOwner ? teamPerm : null,
+    b.pinned !== undefined ? (b.pinned ? 1 : 0) : null,
+    b.color !== undefined ? b.color : null,
+    b.archived !== undefined ? (b.archived ? 1 : 0) : null,
+    nextRev, me.id, me.name, new Date().toISOString(), id
+  ).run()
+  const row = await noteRowFor(c.env.DB, id, me.id)
+  return c.json({ success: true, note: row })
+})
+
+// 삭제 (소유자만)
+app.delete('/api/notes/:id', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const own = await c.env.DB.prepare('SELECT owner_id FROM notes WHERE id = ?').bind(id).first<any>()
+  if (!own) return c.json({ error: '노트를 찾을 수 없습니다' }, 404)
+  if (own.owner_id !== me.id) return c.json({ error: '작성자만 삭제할 수 있습니다' }, 403)
+  await c.env.DB.prepare('DELETE FROM note_shares WHERE note_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM note_revisions WHERE note_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM note_presence WHERE note_id = ?').bind(id).run()
+  await c.env.DB.prepare('DELETE FROM notes WHERE id = ?').bind(id).run()
+  return c.json({ success: true })
+})
+
+// 공유 대상 교체 (소유자만)
+app.post('/api/notes/:id/shares', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const own = await c.env.DB.prepare('SELECT owner_id, notebook_id FROM notes WHERE id = ?').bind(id).first<any>()
+  if (!own) return c.json({ error: '노트를 찾을 수 없습니다' }, 404)
+  if (own.owner_id !== me.id) return c.json({ error: '작성자만 공유 설정을 변경할 수 있습니다' }, 403)
+  const b = await c.req.json<any>().catch(() => ({}))
+  const targets: any[] = Array.isArray(b.targets) ? b.targets : []
+  await c.env.DB.prepare('DELETE FROM note_shares WHERE note_id = ?').bind(id).run()
+  const seen = new Set<string>()
+  for (const t of targets) {
+    const tid = String(t.target_id || t.id || '')
+    if (!tid || tid === me.id || seen.has(tid)) continue
+    seen.add(tid)
+    await c.env.DB.prepare(
+      `INSERT INTO note_shares (id, note_id, notebook_id, target_id, target_name, permission, granted_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(crypto.randomUUID(), id, own.notebook_id || '', tid, String(t.target_name || t.name || ''),
+      NOTE_PERMS.has(t.permission) ? t.permission : 'edit', me.id).run()
+  }
+  const shares = await c.env.DB.prepare('SELECT * FROM note_shares WHERE note_id = ?').bind(id).all<any>()
+  return c.json({ success: true, shares: shares.results || [] })
+})
+
+// 버전 이력
+app.get('/api/notes/:id/revisions', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const row = await noteRowFor(c.env.DB, id, me.id)
+  if (!row) return c.json({ error: '접근 권한이 없습니다' }, 404)
+  const { results } = await c.env.DB.prepare(
+    'SELECT id, note_id, rev, title, editor_id, editor_name, created_at, length(content) AS size FROM note_revisions WHERE note_id = ? ORDER BY rev DESC'
+  ).bind(id).all<any>()
+  return c.json(results || [])
+})
+
+app.get('/api/notes/:id/revisions/:rev', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const row = await noteRowFor(c.env.DB, id, me.id)
+  if (!row) return c.json({ error: '접근 권한이 없습니다' }, 404)
+  const rev = await c.env.DB.prepare('SELECT * FROM note_revisions WHERE note_id = ? AND rev = ?')
+    .bind(id, Number(c.req.param('rev'))).first<any>()
+  if (!rev) return c.json({ error: '해당 버전을 찾을 수 없습니다' }, 404)
+  return c.json(rev)
+})
+
+// 특정 버전으로 되돌리기
+app.post('/api/notes/:id/revisions/:rev/restore', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const cur = await noteRowFor(c.env.DB, id, me.id)
+  if (!cur) return c.json({ error: '접근 권한이 없습니다' }, 404)
+  if (cur.perm === 'read') return c.json({ error: '읽기 권한만 있습니다' }, 403)
+  const rev = await c.env.DB.prepare('SELECT * FROM note_revisions WHERE note_id = ? AND rev = ?')
+    .bind(id, Number(c.req.param('rev'))).first<any>()
+  if (!rev) return c.json({ error: '해당 버전을 찾을 수 없습니다' }, 404)
+  await c.env.DB.prepare(
+    `INSERT INTO note_revisions (id, note_id, rev, title, content, editor_id, editor_name) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(crypto.randomUUID(), id, Number(cur.rev || 1), cur.title || '', cur.content || '',
+    cur.updated_by || '', cur.updated_by_name || '').run()
+  const plain = String(rev.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()
+  await c.env.DB.prepare(
+    `UPDATE notes SET title = ?, content = ?, plain = ?, rev = ?, updated_by = ?, updated_by_name = ?, updated_at = ? WHERE id = ?`
+  ).bind(rev.title || '', rev.content || '', plain.slice(0, 20000), Number(cur.rev || 1) + 1,
+    me.id, me.name, new Date().toISOString(), id).run()
+  return c.json({ success: true, note: await noteRowFor(c.env.DB, id, me.id) })
+})
+
+// 동시 편집 표시 (하트비트 + 현재 보고 있는 사람)
+app.post('/api/notes/:id/presence', async (c) => {
+  const me = await noteMe(c)
+  const id = c.req.param('id')
+  const b = await c.req.json<any>().catch(() => ({}))
+  const now = new Date().toISOString()
+  await c.env.DB.prepare(
+    `INSERT OR REPLACE INTO note_presence (id, note_id, user_id, user_name, editing, last_seen) VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(`${id}:${me.id}`, id, me.id, me.name, b.editing ? 1 : 0, now).run()
+  const cutoff = new Date(Date.now() - NOTE_PRESENCE_WINDOW_SEC * 1000).toISOString()
+  await c.env.DB.prepare('DELETE FROM note_presence WHERE last_seen < ?').bind(cutoff).run()
+  const { results } = await c.env.DB.prepare(
+    'SELECT user_id, user_name, editing, last_seen FROM note_presence WHERE note_id = ? AND user_id <> ? AND last_seen >= ?'
+  ).bind(id, me.id, cutoff).all<any>()
+  const note = await c.env.DB.prepare('SELECT rev, updated_at, updated_by_name FROM notes WHERE id = ?').bind(id).first<any>()
+  return c.json({ viewers: results || [], rev: note?.rev || 1, updated_at: note?.updated_at || '', updated_by_name: note?.updated_by_name || '' })
+})
+
 // Company (singleton)
 app.get('/api/company', async (c) => {
   const db = c.env.DB
@@ -485,7 +834,7 @@ app.post('/api/init', async (c) => {
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.6.2' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.7.0' }))
 
 // ===== PASSWORD HASHING (PBKDF2-SHA256) =====
 async function hashPassword(password: string, salt?: string): Promise<string> {
@@ -1606,7 +1955,7 @@ function getIndexHTML() {
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏗️</text></svg>">
-<link rel="stylesheet" href="/static/style.css?v=__CSSVER__">
+<link rel="stylesheet" href="/static/style.css?v=8.7.0">
 <style>
 /* ===== FRAME PLUS ERP v8.6 - Claude-Inspired Editorial Design ===== */
 :root{
@@ -2093,6 +2442,124 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .fw-700{font-weight:700!important}
 .fs-badge{position:fixed;bottom:70px;right:16px;background:var(--primary);color:#fff;font-size:10px;padding:4px 12px;border-radius:20px;z-index:50;opacity:.7;font-weight:500;letter-spacing:.02em}
 @media(min-width:769px){.fs-badge{bottom:16px}}
+
+/* ═══════════════════════════════════════════════════════
+   메모장 (전자 필기장) — v8.7
+   ═══════════════════════════════════════════════════════ */
+.nt-layout{display:grid;grid-template-columns:210px 300px minmax(0,1fr);gap:14px;height:calc(100vh - var(--topbar-h) - 48px);min-height:520px}
+.nt-side,.nt-list,.nt-editor{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;display:flex;flex-direction:column}
+.nt-side{padding:12px 10px;overflow-y:auto}
+.nt-side-hd{font-size:10.5px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);padding:6px 8px}
+.nt-side-note{font-size:11px;color:var(--text-muted);padding:6px 8px;line-height:1.5}
+.nt-side-item{display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:var(--radius-sm);font-size:12.5px;color:var(--text-secondary);cursor:pointer;transition:var(--transition)}
+.nt-side-item:hover{background:var(--gray-50)}
+.nt-side-item.on{background:var(--primary-light);color:var(--primary);font-weight:700}
+.nt-side-ic{font-size:13px;flex-shrink:0}
+.nt-side-nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nt-side-cnt{font-size:10.5px;color:var(--text-muted);font-weight:600}
+.nt-mini{width:20px;height:20px;border:none;background:none;border-radius:4px;color:var(--text-muted);cursor:pointer;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center}
+.nt-mini:hover{background:var(--gray-100);color:var(--text)}
+
+.nt-list-top{display:flex;gap:6px;align-items:center;padding:10px;border-bottom:1px solid var(--border);flex-shrink:0}
+.nt-search{position:relative;flex:1;display:flex;align-items:center}
+.nt-search svg{position:absolute;left:9px;color:var(--text-muted);pointer-events:none}
+.nt-search .inp{padding-left:28px;font-size:12px}
+.nt-list-body{flex:1;overflow-y:auto;padding:8px}
+.nt-card{padding:10px 11px;border-radius:var(--radius);border:1px solid transparent;cursor:pointer;transition:var(--transition);margin-bottom:4px}
+.nt-card:hover{background:var(--gray-50)}
+.nt-card.on{background:var(--primary-light);border-color:rgba(220,38,38,.25)}
+.nt-card-hd{display:flex;align-items:center;gap:5px;margin-bottom:3px}
+.nt-card-title{font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nt-pin{font-size:11px}
+.nt-card-ex{font-size:11.5px;color:var(--text-muted);line-height:1.45;max-height:33px;overflow:hidden;margin-bottom:5px}
+.nt-card-meta{display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:10.5px;color:var(--text-muted)}
+.nt-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 6px;border-radius:20px;background:var(--gray-100);color:var(--text-muted);font-size:10px;font-weight:600;white-space:nowrap}
+.nt-chip-team{background:var(--purple-light);color:var(--purple)}
+.nt-chip-prj{background:var(--info-light);color:var(--info)}
+.nt-chip-share{background:var(--success-light);color:var(--success)}
+
+.nt-ed-top{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0}
+.nt-back{display:none;border:none;background:none;color:var(--text-muted);cursor:pointer;padding:4px}
+.nt-title{flex:1;min-width:0;border:none;background:none;font-size:18px;font-weight:800;color:var(--text);font-family:inherit;outline:none;letter-spacing:-.01em}
+.nt-title::placeholder{color:var(--gray-400)}
+.nt-ed-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.nt-status{font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;white-space:nowrap}
+.nt-status.nt-ok{background:var(--success-light);color:var(--success)}
+.nt-status.nt-saving{background:var(--info-light);color:var(--info)}
+.nt-status.nt-idle{background:var(--gray-100);color:var(--text-muted)}
+.nt-status.nt-err{background:var(--danger-light);color:var(--danger)}
+.nt-viewers{display:flex;gap:-4px;align-items:center}
+.nt-avatar{width:24px;height:24px;border-radius:50%;background:var(--gray-200);color:var(--text-secondary);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;margin-left:-4px;border:2px solid var(--card)}
+.nt-avatar.editing{background:var(--success);color:#fff}
+
+.nt-meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border-light);flex-shrink:0}
+.nt-sel{width:auto!important;min-width:130px;max-width:210px;font-size:11.5px;padding:5px 8px}
+.nt-tags{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.nt-tag{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;background:var(--gray-100);font-size:10.5px;font-weight:600;color:var(--text-secondary)}
+.nt-tag b{cursor:pointer;color:var(--text-muted)}
+.nt-tag b:hover{color:var(--danger)}
+.nt-tag-inp{border:1px dashed var(--border);background:none;border-radius:20px;padding:2px 8px;font-size:10.5px;width:74px;outline:none;color:var(--text);font-family:inherit}
+
+.nt-toolbar{display:flex;flex-wrap:wrap;gap:2px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--border);background:var(--gray-50);flex-shrink:0}
+.nt-toolbar button{border:none;background:none;border-radius:6px;padding:5px 8px;font-size:12px;color:var(--text-secondary);cursor:pointer;font-family:inherit;line-height:1.3;transition:var(--transition)}
+.nt-toolbar button:hover{background:var(--gray-200);color:var(--text)}
+.nt-tb-sep{width:1px;height:16px;background:var(--border);margin:0 4px}
+.nt-tb-save{margin-left:auto;background:var(--primary)!important;color:#fff!important;font-weight:700}
+.nt-readonly{padding:8px 14px;font-size:11.5px;color:var(--warning);background:var(--warning-light);flex-shrink:0}
+
+.nt-body-wrap{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.nt-body{flex:1;padding:22px 26px;font-size:14px;line-height:1.75;color:var(--text);outline:none;min-height:240px;word-break:break-word}
+.nt-body:empty::before{content:'여기에 내용을 작성하세요…';color:var(--gray-400)}
+.nt-body h1{font-size:22px;font-weight:800;margin:18px 0 8px}
+.nt-body h2{font-size:18px;font-weight:800;margin:16px 0 8px}
+.nt-body h3{font-size:15px;font-weight:700;margin:14px 0 6px}
+.nt-body p{margin:6px 0}
+.nt-body ul,.nt-body ol{margin:6px 0 6px 22px}
+.nt-body li{margin:3px 0}
+.nt-body blockquote{border-left:3px solid var(--primary);padding:4px 14px;margin:10px 0;color:var(--text-secondary);background:var(--gray-50);border-radius:0 6px 6px 0}
+.nt-body pre{background:var(--gray-100);padding:12px 14px;border-radius:var(--radius-sm);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;overflow-x:auto;margin:10px 0}
+.nt-body hr{border:none;border-top:1px solid var(--border);margin:16px 0}
+.nt-body img{max-width:100%;border-radius:8px;margin:8px 0}
+.nt-body a{color:var(--primary);text-decoration:underline}
+.nt-body table,.nt-table{border-collapse:collapse;width:100%;margin:10px 0;font-size:13px}
+.nt-body td,.nt-body th{border:1px solid var(--border);padding:7px 10px;min-width:60px}
+.nt-body th{background:var(--gray-100);font-weight:700;text-align:left}
+.nt-chk{display:flex;align-items:flex-start;gap:8px;margin:4px 0}
+.nt-chk input[type=checkbox]{margin-top:5px;width:15px;height:15px;accent-color:var(--primary);flex-shrink:0;cursor:pointer}
+.nt-chk.done span{text-decoration:line-through;color:var(--text-muted)}
+.nt-foot{padding:10px 26px 18px;font-size:11px;color:var(--text-muted);flex-shrink:0}
+
+.nt-banner{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:9px 14px;font-size:12px;flex-shrink:0}
+.nt-banner-err{background:var(--danger-light);color:var(--danger)}
+.nt-banner-warn{background:var(--warning-light);color:var(--warning)}
+.nt-empty{padding:28px 16px;text-align:center;font-size:12.5px;color:var(--text-muted);line-height:1.6}
+.nt-share-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border-light)}
+.dash-note{padding:8px 0;border-bottom:1px solid var(--border-light);cursor:pointer}
+.dash-note:hover{background:var(--gray-50)}
+
+html.dark .nt-toolbar{background:var(--gray-50)}
+html.dark .nt-toolbar button:hover{background:var(--gray-200)}
+html.dark .nt-body pre,html.dark .nt-body th{background:var(--gray-100)}
+html.dark .nt-card.on{background:var(--primary-light);border-color:rgba(239,68,68,.3)}
+
+@media(max-width:1100px){
+  .nt-layout{grid-template-columns:180px 260px minmax(0,1fr)}
+  .nt-sel{min-width:110px}
+}
+@media(max-width:900px){
+  .nt-layout{grid-template-columns:1fr;height:auto;min-height:0}
+  .nt-side{max-height:none}
+  .nt-editor{display:none}
+  .nt-layout.nt-editing .nt-side,.nt-layout.nt-editing .nt-list{display:none}
+  .nt-layout.nt-editing .nt-editor{display:flex;min-height:70vh}
+  .nt-back{display:block}
+  .nt-list-body{max-height:56vh}
+  .nt-ed-top{flex-wrap:wrap;gap:6px}
+  .nt-title{order:2;flex:1 1 100%;font-size:16px}
+  .nt-ed-actions{order:1;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+  .nt-body{padding:16px 16px}
+  .nt-foot{padding:10px 16px 16px}
+}
 </style>
 </head>
 <body>
@@ -2105,7 +2572,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       </div>
       <span class="sb-logo-text">Frame Plus</span>
-      <span class="sb-logo-ver">v8.6.2</span>
+      <span class="sb-logo-ver">v8.7.0</span>
     </div>
     <button class="sb-toggle" onclick="toggleSidebar()" title="메뉴 접기">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -2158,8 +2625,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
     </button>
   </div>
 </div>
-<div class="fs-badge">v8.6.2 Full-Stack ERP</div>
-<script src="/static/app.js?v=__APPVER__"></script>
+<div class="fs-badge">v8.7.0 Full-Stack ERP</div>
+<script src="/static/app.js?v=8.7.0"></script>
 </body>
 </html>`
 }

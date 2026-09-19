@@ -397,6 +397,7 @@ const PROJECT_NAV = [
     {id:'estimate',label:'견적서',icon:'file'},
     {id:'erp_settlement',label:'정산서',icon:'dollar'},
     {id:'erp_report',label:'Report',icon:'chart'},
+    {id:'erp_notes',label:'프로젝트 메모',icon:'edit'},
   ]},
   { section:'시공', icon:'🏗️', items:[
     {id:'gantt',label:'공정표',icon:'activity'},
@@ -617,6 +618,7 @@ const NAV=[
   {section:'메인'},
   {id:'me',label:'내 페이지',icon:'user'},
   {id:'dash',label:'대시보드',icon:'home'},
+  {id:'notes',label:'메모장',icon:'book'},
   {section:'경영',adminOnly:true},
   {id:'exec_dash',label:'경영 현황',icon:'chart',adminOnly:true},
   {id:'cashflow',label:'현금 흐름',icon:'dollar',adminOnly:true},
@@ -797,8 +799,11 @@ function nav(page,sub=null,pid=null,pushHistory=true){
     </button>`:''}
   `;
   const content=document.getElementById('content');
+  if(typeof noteCleanup==='function')noteCleanup();
   switch(page){
     case 'dash':renderDash();break;
+    case 'notes':renderNotes();break;
+    case 'erp_notes':renderProjectNotes();break;
     case 'exec_dash':renderExecDash();break;
     case 'cashflow':renderCashFlow();break;
     case 'profit_rank':renderProfitRank();break;
@@ -1316,6 +1321,20 @@ function renderDash(){
         <div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px">✅ 모든 프로젝트가 정상입니다</div>
       </div>`}
       
+      <!-- 내 메모 (전자 필기장) -->
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title" style="margin-bottom:0">📝 내 메모</div>
+          <button class="btn btn-ghost btn-sm" onclick="nav('notes')">전체보기</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:10px">
+          <input class="inp" id="dash-note-inp" placeholder="빠른 메모 (Enter 저장)" style="flex:1;font-size:12px"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();dashQuickNote();}">
+          <button class="btn btn-primary btn-sm" onclick="dashQuickNote()">저장</button>
+        </div>
+        <div id="dash-notes"><div style="text-align:center;padding:12px;color:var(--text-muted);font-size:12px">불러오는 중…</div></div>
+      </div>
+
       <!-- Notices -->
       <div class="card">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -1399,6 +1418,8 @@ function renderDash(){
   
   // Load weather
   loadWeather();
+  // Load personal notes widget
+  loadDashNotes();
   
   // Chart
   setTimeout(()=>{
@@ -5903,7 +5924,7 @@ function _adminSystem(){
       <div class="card">
         <div class="card-title">ℹ️ 시스템 정보</div>
         <div style="font-size:12px;line-height:2;color:var(--g600)">
-          <div><strong>버전:</strong> v8.6 Full-Stack (Auth+RBAC+Polish)</div>
+          <div><strong>버전:</strong> v8.7 Full-Stack (Auth+RBAC+메모장)</div>
           <div><strong>플랫폼:</strong> Cloudflare Pages + D1</div>
           <div><strong>프레임워크:</strong> Hono + Vanilla JS</div>
           <div><strong>데이터:</strong> D1 SQLite (Cloud Sync)</div>
@@ -10765,7 +10786,7 @@ function printPO(){
 // Update footer badge
 (function(){
   const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.6 Full-Stack · D1 Database · RBAC';
+  if(badge) badge.textContent = 'v8.7 Full-Stack · D1 Database · RBAC';
 })();
 
 // ================================================================
@@ -11734,4 +11755,851 @@ function stlToast(msg,type='') {
   setTimeout(()=>{t.style.cssText+='opacity:0;transform:translateX(100%);transition:all .3s';setTimeout(()=>t.remove(),300);},3000);
 }
 
+/* ══════════════════════════════════════════════════════════════
+   메모장 (전자 필기장) — v8.7
+   · 노트북/노트 2단 구조, 서식 있는 편집기, 체크리스트, 이미지 첨부
+   · 팀원 공유(읽기/편집), 전사 공개, 프로젝트 연결
+   · 자동저장 + 리비전 충돌 감지 + 버전 이력 + 동시 열람 표시
+   ══════════════════════════════════════════════════════════════ */
 
+let NB = {
+  notebooks: [], notes: [], cur: null, shares: [], users: [],
+  filter: { view: 'all', notebookId: '', pid: '', q: '' },
+  dirty: false, saving: false, saveTimer: null, syncTimer: null,
+  conflict: null, remoteNewer: null, viewers: [],
+  projectMode: false, loaded: false, mobileEdit: false
+};
+
+const NOTE_VIEWS = [
+  { id: 'all', label: '전체 메모', icon: '🗂' },
+  { id: 'mine', label: '내 메모', icon: '🔒' },
+  { id: 'shared', label: '공유받은 메모', icon: '🤝' },
+  { id: 'team', label: '전사 공개', icon: '🏢' },
+  { id: 'pinned', label: '고정됨', icon: '📌' }
+];
+
+const NOTE_TEMPLATES = {
+  meeting: { title: '미팅 회의록', html: `<h2>미팅 회의록</h2><p><b>일시</b> · ${new Date().toISOString().slice(0,10)}<br><b>참석</b> · <br><b>고객사</b> · </p><h3>논의 내용</h3><ul><li></li></ul><h3>결정 사항</h3><ul><li></li></ul><h3>액션 아이템</h3><div class="nt-chk"><input type="checkbox" contenteditable="false"><span>담당자 / 기한 / 내용</span></div>` },
+  site: { title: '현장 점검 메모', html: `<h2>현장 점검</h2><p><b>현장</b> · <br><b>점검일</b> · ${new Date().toISOString().slice(0,10)}<br><b>점검자</b> · </p><h3>체크리스트</h3><div class="nt-chk"><input type="checkbox" contenteditable="false"><span>안전시설 확인</span></div><div class="nt-chk"><input type="checkbox" contenteditable="false"><span>공정 진행률 확인</span></div><div class="nt-chk"><input type="checkbox" contenteditable="false"><span>자재 반입 상태</span></div><div class="nt-chk"><input type="checkbox" contenteditable="false"><span>하자·이슈 발생 여부</span></div><h3>특이사항</h3><p></p>` },
+  estimate: { title: '견적 검토 메모', html: `<h2>견적 검토</h2><p><b>프로젝트</b> · <br><b>평형</b> · 평<br><b>목표 GP율</b> · %</p><h3>단가 가정</h3><ul><li>자재비 · </li><li>노무비 · </li><li>외주비 · </li></ul><h3>리스크</h3><ul><li></li></ul>` },
+  call: { title: '고객 통화 메모', html: `<h2>고객 통화</h2><p><b>일시</b> · ${new Date().toISOString().slice(0,10)}<br><b>고객</b> · <br><b>연락처</b> · </p><h3>내용</h3><p></p><h3>후속 조치</h3><div class="nt-chk"><input type="checkbox" contenteditable="false"><span></span></div>` },
+  todo: { title: '할 일 목록', html: `<h2>할 일</h2><div class="nt-chk"><input type="checkbox" contenteditable="false"><span></span></div><div class="nt-chk"><input type="checkbox" contenteditable="false"><span></span></div><div class="nt-chk"><input type="checkbox" contenteditable="false"><span></span></div>` }
+};
+
+/* ── 유틸 ─────────────────────────────────────────────── */
+const NOTE_TAGS_OK = new Set(['P','DIV','SPAN','BR','B','STRONG','I','EM','U','S','STRIKE','DEL','H1','H2','H3','H4','UL','OL','LI','BLOCKQUOTE','PRE','CODE','HR','A','IMG','TABLE','THEAD','TBODY','TR','TD','TH','FONT','MARK','SUB','SUP','INPUT','LABEL']);
+const NOTE_ATTRS_OK = new Set(['href','src','alt','title','style','class','type','checked','colspan','rowspan','color','align','contenteditable','target','rel']);
+const NOTE_TAGS_KILL = new Set(['SCRIPT','STYLE','IFRAME','OBJECT','EMBED','LINK','META','FORM','BUTTON','SVG']);
+
+// 공유 메모를 innerHTML 로 렌더하므로 저장·표시 전 항상 정화한다
+function noteSanitize(html){
+  const doc = new DOMParser().parseFromString('<div id="nt-root">'+(html||'')+'</div>','text/html');
+  const root = doc.getElementById('nt-root');
+  const walk = el => {
+    Array.from(el.children).forEach(ch => {
+      if(NOTE_TAGS_KILL.has(ch.tagName)){ ch.remove(); return; }
+      if(!NOTE_TAGS_OK.has(ch.tagName)){
+        const parent = ch.parentNode;
+        while(ch.firstChild) parent.insertBefore(ch.firstChild, ch);
+        ch.remove(); return;
+      }
+      Array.from(ch.attributes).forEach(a => {
+        const n = a.name.toLowerCase();
+        if(n.startsWith('on') || !NOTE_ATTRS_OK.has(n)) ch.removeAttribute(a.name);
+        else if((n==='href'||n==='src') && /^\s*(javascript|vbscript|data:text\/html)/i.test(a.value)) ch.removeAttribute(a.name);
+      });
+      if(ch.tagName==='INPUT' && (ch.getAttribute('type')||'').toLowerCase()!=='checkbox'){ ch.remove(); return; }
+      walk(ch);
+    });
+  };
+  walk(root);
+  return root.innerHTML;
+}
+function noteStripHtml(html){
+  const d = document.createElement('div');
+  d.innerHTML = html || '';
+  return (d.textContent || '').replace(/\s+/g,' ').trim();
+}
+function noteRelTime(iso){
+  if(!iso) return '';
+  const t = new Date(String(iso).replace(' ','T')+(String(iso).includes('Z')||String(iso).includes('+')?'':'Z'));
+  const diff = (Date.now()-t.getTime())/1000;
+  if(isNaN(diff)) return '';
+  if(diff < 60) return '방금';
+  if(diff < 3600) return Math.floor(diff/60)+'분 전';
+  if(diff < 86400) return Math.floor(diff/3600)+'시간 전';
+  if(diff < 86400*7) return Math.floor(diff/86400)+'일 전';
+  return t.toISOString().slice(0,10);
+}
+function noteTagList(n){ try { const t = JSON.parse(n.tags||'[]'); return Array.isArray(t)?t:[]; } catch(_) { return []; } }
+function noteIsMine(n){ return n && n.owner_id === (_authUser?.id||''); }
+function noteCanEdit(n){ return n && (n.perm==='owner' || n.perm==='edit'); }
+
+/* ── 진입 / 정리 ──────────────────────────────────────── */
+function noteCleanup(){
+  if(NB.saveTimer){ clearTimeout(NB.saveTimer); NB.saveTimer=null; }
+  if(NB.syncTimer){ clearInterval(NB.syncTimer); NB.syncTimer=null; }
+}
+
+async function renderNotes(){
+  NB.projectMode = false;
+  NB.filter.pid = '';
+  await noteBootstrap();
+}
+
+async function renderProjectNotes(){
+  NB.projectMode = true;
+  NB.filter.pid = S.selPid || '';
+  NB.filter.view = 'all';
+  NB.filter.notebookId = '';
+  await noteBootstrap();
+}
+
+async function noteBootstrap(){
+  noteCleanup();
+  const prj = NB.projectMode ? getProject(NB.filter.pid) : null;
+  document.getElementById('tb-actions').innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="noteOpenTemplates()">${svgIcon('copy',12)} 템플릿</button>
+    <button class="btn btn-primary btn-sm" onclick="noteNew()">+ 새 메모</button>`;
+  document.getElementById('content').innerHTML = `
+    <div class="nt-layout" id="nt-layout">
+      <aside class="nt-side" id="nt-side"><div class="nt-empty">불러오는 중…</div></aside>
+      <section class="nt-list" id="nt-list"><div class="nt-empty">불러오는 중…</div></section>
+      <section class="nt-editor" id="nt-editor"><div class="nt-empty">메모를 선택하세요</div></section>
+    </div>`;
+  if(prj){
+    // 프로젝트 모드: 해당 프로젝트 메모만
+    document.getElementById('nt-side').classList.add('nt-side-project');
+  }
+  await noteLoad();
+  NB.syncTimer = setInterval(noteSyncTick, 20000);
+}
+
+async function noteLoad(keepSelection){
+  const qs = new URLSearchParams();
+  qs.set('view', NB.filter.view);
+  if(NB.filter.notebookId) qs.set('notebook_id', NB.filter.notebookId);
+  if(NB.filter.pid) qs.set('pid', NB.filter.pid);
+  if(NB.filter.q) qs.set('q', NB.filter.q);
+  const [nbs, notes] = await Promise.all([ api('notebooks'), api('notes?'+qs.toString()) ]);
+  NB.notebooks = Array.isArray(nbs) ? nbs : [];
+  NB.notes = Array.isArray(notes) ? notes : [];
+  NB.loaded = true;
+  notePaintSide();
+  notePaintList();
+  const stillThere = NB.cur && NB.notes.some(n => n.id === NB.cur.id);
+  if(keepSelection && stillThere) return;
+  if(NB.cur && stillThere) { notePaintEditor(); return; }
+  if(!NB.cur && NB.notes.length) { await noteSelect(NB.notes[0].id); return; }
+  if(!NB.notes.length){ NB.cur=null; notePaintEditor(); }
+}
+
+/* ── 좌측: 노트북 / 필터 ──────────────────────────────── */
+function notePaintSide(){
+  const el = document.getElementById('nt-side'); if(!el) return;
+  const prj = NB.projectMode ? getProject(NB.filter.pid) : null;
+  const myId = _authUser?.id || '';
+  let h = '';
+  if(prj){
+    h += `<div class="nt-side-hd">📁 ${escHtml(prj.nm)}</div>
+      <div class="nt-side-note">이 프로젝트에 연결된 메모만 표시됩니다.</div>`;
+  } else {
+    h += `<div class="nt-side-hd">보기</div>`;
+    NOTE_VIEWS.forEach(v => {
+      h += `<div class="nt-side-item ${NB.filter.view===v.id&&!NB.filter.notebookId?'on':''}" onclick="noteSetView('${v.id}')">
+        <span class="nt-side-ic">${v.icon}</span><span>${v.label}</span></div>`;
+    });
+  }
+  h += `<div class="nt-side-hd" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between">
+      <span>노트북</span>
+      <button class="nt-mini" onclick="noteNewNotebook()" title="새 노트북">+</button>
+    </div>`;
+  if(!NB.notebooks.length){
+    h += `<div class="nt-side-note">노트북을 만들면 메모를 주제별로 묶을 수 있습니다.</div>`;
+  }
+  NB.notebooks.forEach(b => {
+    const mine = b.owner_id === myId;
+    h += `<div class="nt-side-item ${NB.filter.notebookId===b.id?'on':''}" onclick="noteSetNotebookFilter('${b.id}')">
+      <span class="nt-side-ic">${escHtml(b.icon||'📓')}</span>
+      <span class="nt-side-nm">${escHtml(b.name)}</span>
+      <span class="nt-side-cnt">${b.note_count||0}</span>
+      ${b.scope==='team'?'<span class="nt-chip nt-chip-team">전사</span>':''}
+      ${mine?`<button class="nt-mini" onclick="event.stopPropagation();noteEditNotebook('${b.id}')" title="노트북 설정">⋯</button>`:''}
+    </div>`;
+  });
+  el.innerHTML = h;
+}
+
+function noteSetView(v){ NB.filter.view=v; NB.filter.notebookId=''; noteLoad(); }
+function noteSetNotebookFilter(id){
+  NB.filter.notebookId = (NB.filter.notebookId===id ? '' : id);
+  if(NB.filter.notebookId) NB.filter.view='all';
+  noteLoad();
+}
+
+/* ── 중앙: 메모 목록 ──────────────────────────────────── */
+function notePaintList(){
+  const el = document.getElementById('nt-list'); if(!el) return;
+  const rows = NB.notes.map(n => {
+    const tags = noteTagList(n);
+    const prj = n.pid ? getProject(n.pid) : null;
+    const shared = n.scope==='team' || (!noteIsMine(n));
+    return `<div class="nt-card ${NB.cur&&NB.cur.id===n.id?'on':''}" onclick="noteSelect('${n.id}')">
+      <div class="nt-card-hd">
+        ${n.pinned?'<span class="nt-pin">📌</span>':''}
+        <span class="nt-card-title">${escHtml(n.title||'제목 없는 메모')}</span>
+      </div>
+      <div class="nt-card-ex">${escHtml(n.excerpt||'')||'<span style="color:var(--text-muted)">내용 없음</span>'}</div>
+      <div class="nt-card-meta">
+        <span>${noteRelTime(n.updated_at)}</span>
+        ${n.notebook_name?`<span class="nt-chip">${escHtml(n.notebook_icon||'📓')} ${escHtml(n.notebook_name)}</span>`:''}
+        ${prj?`<span class="nt-chip nt-chip-prj">🏗 ${escHtml(prj.nm)}</span>`:''}
+        ${n.scope==='team'?'<span class="nt-chip nt-chip-team">전사</span>':''}
+        ${!noteIsMine(n)?`<span class="nt-chip nt-chip-share">${escHtml(n.owner_name||'')} 공유</span>`:''}
+        ${n.perm==='read'?'<span class="nt-chip">읽기전용</span>':''}
+        ${tags.slice(0,2).map(t=>`<span class="nt-chip">#${escHtml(t)}</span>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="nt-list-top">
+      <div class="nt-search">${svgIcon('search',13)}
+        <input class="inp" id="nt-q" placeholder="제목·본문·태그 검색" value="${escHtml(NB.filter.q)}" oninput="noteSearchDebounced(this.value)">
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="noteNew()">+ 메모</button>
+    </div>
+    <div class="nt-list-body">${rows || `<div class="nt-empty">메모가 없습니다.<br><button class="btn btn-outline btn-sm" style="margin-top:10px" onclick="noteNew()">첫 메모 작성</button></div>`}</div>`;
+}
+
+let _ntSearchTimer = null;
+function noteSearchDebounced(v){
+  NB.filter.q = v;
+  clearTimeout(_ntSearchTimer);
+  _ntSearchTimer = setTimeout(()=>noteLoad(true).then(()=>{
+    const i=document.getElementById('nt-q'); if(i&&document.activeElement!==i){ i.focus(); }
+  }), 300);
+}
+
+/* ── 우측: 편집기 ─────────────────────────────────────── */
+async function noteSelect(id){
+  if(NB.dirty) await noteSaveNow({ silent:true });
+  const res = await api('notes/'+id);
+  if(res?.__error){ toast('메모를 불러오지 못했습니다','error'); return; }
+  NB.cur = res; NB.shares = res.shares||[]; NB.dirty=false; NB.conflict=null; NB.remoteNewer=null; NB.viewers=[];
+  NB.mobileEdit = true;
+  notePaintList();
+  notePaintEditor();
+  noteSyncTick();
+}
+
+function notePaintEditor(){
+  const el = document.getElementById('nt-editor'); if(!el) return;
+  const layout = document.getElementById('nt-layout');
+  if(layout) layout.classList.toggle('nt-editing', !!(NB.cur && NB.mobileEdit));
+  const n = NB.cur;
+  if(!n){
+    el.innerHTML = `<div class="nt-empty">왼쪽에서 메모를 선택하거나 <b>+ 메모</b>로 새로 작성하세요.</div>`;
+    return;
+  }
+  const canEdit = noteCanEdit(n);
+  const tags = noteTagList(n);
+  const projects = getProjects();
+  el.innerHTML = `
+    <div class="nt-ed-top">
+      <button class="nt-back" onclick="noteBackToList()" title="목록">${svgIcon('chevron_left',16)}</button>
+      <input class="nt-title" id="nt-title" value="${escHtml(n.title||'')}" placeholder="제목을 입력하세요"
+        ${canEdit?'':'disabled'} oninput="noteMarkDirty()">
+      <div class="nt-ed-actions">
+        <span class="nt-status" id="nt-status">저장됨</span>
+        <div class="nt-viewers" id="nt-viewers"></div>
+        <button class="btn btn-ghost btn-icon" onclick="noteTogglePin()" title="고정">${n.pinned?'📌':'📍'}</button>
+        <button class="btn btn-ghost btn-icon" onclick="noteOpenHistory()" title="버전 이력">🕘</button>
+        <button class="btn btn-ghost btn-icon" onclick="notePrint()" title="인쇄·PDF">${svgIcon('print',14)}</button>
+        ${noteIsMine(n)?`<button class="btn btn-outline btn-sm" onclick="noteOpenShare()">${svgIcon('users',12)} 공유</button>`:''}
+        ${noteIsMine(n)?`<button class="btn btn-ghost btn-icon" onclick="noteDelete('${n.id}')" title="삭제" style="color:var(--danger)">${svgIcon('trash',14)}</button>`:''}
+      </div>
+    </div>
+
+    <div class="nt-meta">
+      <select class="sel nt-sel" onchange="noteSetField('notebook_id',this.value)" ${canEdit?'':'disabled'}>
+        <option value="">📓 노트북 없음</option>
+        ${NB.notebooks.map(b=>`<option value="${b.id}" ${n.notebook_id===b.id?'selected':''}>${escHtml((b.icon||'📓')+' '+b.name)}</option>`).join('')}
+      </select>
+      <select class="sel nt-sel" onchange="noteSetField('pid',this.value)" ${canEdit?'':'disabled'}>
+        <option value="">🏗 프로젝트 연결 없음</option>
+        ${projects.map(p=>`<option value="${p.id}" ${n.pid===p.id?'selected':''}>${escHtml(p.nm)}</option>`).join('')}
+      </select>
+      ${noteIsMine(n)?`<select class="sel nt-sel" onchange="noteSetScope(this.value)">
+        <option value="private" ${n.scope!=='team'?'selected':''}>🔒 나만 보기</option>
+        <option value="team:read" ${n.scope==='team'&&n.team_perm!=='edit'?'selected':''}>🏢 전사 공개(읽기)</option>
+        <option value="team:edit" ${n.scope==='team'&&n.team_perm==='edit'?'selected':''}>🏢 전사 공개(편집)</option>
+      </select>`:`<span class="nt-chip">${escHtml(n.owner_name||'')}님의 메모 · ${n.perm==='edit'?'편집 가능':'읽기 전용'}</span>`}
+      <div class="nt-tags" id="nt-tags">
+        ${tags.map(t=>`<span class="nt-tag">#${escHtml(t)}${canEdit?`<b onclick="noteRemoveTag('${escHtml(t)}')">×</b>`:''}</span>`).join('')}
+        ${canEdit?`<input class="nt-tag-inp" placeholder="+ 태그" onkeydown="if(event.key==='Enter'){noteAddTag(this.value);this.value='';}">`:''}
+      </div>
+      ${NB.shares.length?`<span class="nt-chip nt-chip-share">🤝 ${NB.shares.map(s=>escHtml(s.target_name||'')).join(', ')}</span>`:''}
+    </div>
+
+    <div id="nt-banner"></div>
+
+    ${canEdit?`<div class="nt-toolbar">
+      <button onclick="noteExec('bold')" title="굵게"><b>B</b></button>
+      <button onclick="noteExec('italic')" title="기울임"><i>I</i></button>
+      <button onclick="noteExec('underline')" title="밑줄"><u>U</u></button>
+      <button onclick="noteExec('strikeThrough')" title="취소선"><s>S</s></button>
+      <span class="nt-tb-sep"></span>
+      <button onclick="noteBlock('h2')" title="제목">H1</button>
+      <button onclick="noteBlock('h3')" title="소제목">H2</button>
+      <button onclick="noteBlock('p')" title="본문">본문</button>
+      <button onclick="noteBlock('blockquote')" title="인용">❝</button>
+      <button onclick="noteBlock('pre')" title="코드">&lt;/&gt;</button>
+      <span class="nt-tb-sep"></span>
+      <button onclick="noteExec('insertUnorderedList')" title="글머리 기호">• 목록</button>
+      <button onclick="noteExec('insertOrderedList')" title="번호 목록">1. 목록</button>
+      <button onclick="noteInsertChecklist()" title="체크리스트">☑ 체크</button>
+      <button onclick="noteInsertTable()" title="표 삽입">▦ 표</button>
+      <span class="nt-tb-sep"></span>
+      <button onclick="noteHilite('#FEF08A')" title="형광펜" style="background:#FEF08A;color:#1F1E1C">형광</button>
+      <button onclick="noteColor('#DC2626')" title="빨강 글자" style="color:#DC2626;font-weight:800">A</button>
+      <button onclick="noteColor('#2563EB')" title="파랑 글자" style="color:#2563EB;font-weight:800">A</button>
+      <span class="nt-tb-sep"></span>
+      <button onclick="noteImagePick()" title="이미지">🖼</button>
+      <button onclick="noteInsertLink()" title="링크">🔗</button>
+      <button onclick="noteExec('insertHorizontalRule')" title="구분선">―</button>
+      <button onclick="noteExec('removeFormat')" title="서식 지우기">✕서식</button>
+      <span class="nt-tb-sep"></span>
+      <button onclick="noteOpenTemplates()" title="템플릿 삽입">템플릿</button>
+      <button class="nt-tb-save" onclick="noteSaveNow()">저장</button>
+    </div>`:'<div class="nt-readonly">읽기 전용 메모입니다. 편집하려면 작성자에게 편집 권한을 요청하세요.</div>'}
+
+    <div class="nt-body-wrap">
+      <div class="nt-body" id="nt-body" ${canEdit?'contenteditable="true"':''} spellcheck="false">${noteSanitize(n.content||'')}</div>
+      <div class="nt-foot">
+        <span id="nt-foot-meta">마지막 수정 ${noteRelTime(n.updated_at)} · ${escHtml(n.updated_by_name||n.owner_name||'')} · v${n.rev||1}</span>
+        <input type="file" id="nt-file" accept="image/*" style="display:none" onchange="noteInsertImageFile(this.files[0]);this.value=''">
+      </div>
+    </div>`;
+
+  const body = document.getElementById('nt-body');
+  if(body && canEdit){
+    body.addEventListener('input', noteMarkDirty);
+    body.addEventListener('paste', noteHandlePaste);
+    body.addEventListener('keydown', noteEditorKeydown);
+    body.addEventListener('change', e => {
+      if(e.target && e.target.type === 'checkbox'){
+        if(e.target.checked) e.target.setAttribute('checked','checked');
+        else e.target.removeAttribute('checked');
+        e.target.closest('.nt-chk')?.classList.toggle('done', e.target.checked);
+        noteMarkDirty();
+      }
+    });
+  }
+  if(body){
+    body.querySelectorAll('.nt-chk input[type=checkbox]').forEach(cb=>{
+      if(cb.hasAttribute('checked')){ cb.checked = true; cb.closest('.nt-chk')?.classList.add('done'); }
+      if(!canEdit) cb.disabled = true;
+    });
+  }
+  noteSetStatus(NB.dirty?'dirty':'saved');
+  notePaintBanner();
+}
+
+function noteBackToList(){
+  NB.mobileEdit = false;
+  const layout = document.getElementById('nt-layout');
+  if(layout) layout.classList.remove('nt-editing');
+}
+
+/* ── 편집 명령 ────────────────────────────────────────── */
+function noteFocusBody(){ const b=document.getElementById('nt-body'); if(b) b.focus(); return b; }
+function noteExec(cmd,val){ noteFocusBody(); document.execCommand(cmd,false,val||null); noteMarkDirty(); }
+function noteBlock(tag){ noteFocusBody(); document.execCommand('formatBlock',false,'<'+tag.toUpperCase()+'>'); noteMarkDirty(); }
+function noteHilite(c){ noteFocusBody(); if(!document.execCommand('hiliteColor',false,c)) document.execCommand('backColor',false,c); noteMarkDirty(); }
+function noteColor(c){ noteFocusBody(); document.execCommand('foreColor',false,c); noteMarkDirty(); }
+function noteInsertHtml(html){ noteFocusBody(); document.execCommand('insertHTML',false,html); noteMarkDirty(); }
+function noteInsertChecklist(){ noteInsertHtml('<div class="nt-chk"><input type="checkbox" contenteditable="false"><span>&nbsp;</span></div>'); }
+function noteInsertTable(){
+  const rows = Math.max(1, Math.min(20, Number(prompt('행 개수', '3')||0)));
+  const cols = Math.max(1, Math.min(10, Number(prompt('열 개수', '3')||0)));
+  if(!rows||!cols) return;
+  let h = '<table class="nt-table"><tbody>';
+  for(let r=0;r<rows;r++){ h+='<tr>'; for(let c=0;c<cols;c++) h += (r===0?'<th>&nbsp;</th>':'<td>&nbsp;</td>'); h+='</tr>'; }
+  h += '</tbody></table><p><br></p>';
+  noteInsertHtml(h);
+}
+function noteInsertLink(){
+  const url = prompt('링크 주소 (https://…)');
+  if(!url) return;
+  if(!/^https?:\/\//i.test(url)){ toast('http(s) 주소만 넣을 수 있습니다','warning'); return; }
+  noteExec('createLink', url);
+}
+function noteImagePick(){ document.getElementById('nt-file')?.click(); }
+
+function noteEditorKeydown(e){
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); noteSaveNow(); return; }
+  if(e.key==='Enter' && !e.shiftKey){
+    const sel = window.getSelection();
+    const node = sel && sel.anchorNode ? (sel.anchorNode.nodeType===1?sel.anchorNode:sel.anchorNode.parentElement) : null;
+    const line = node ? node.closest('.nt-chk') : null;
+    if(line){
+      e.preventDefault();
+      const div = document.createElement('div');
+      div.className = 'nt-chk';
+      div.innerHTML = '<input type="checkbox" contenteditable="false"><span>&nbsp;</span>';
+      line.after(div);
+      const range = document.createRange();
+      range.setStart(div.querySelector('span'), 0);
+      range.collapse(true);
+      sel.removeAllRanges(); sel.addRange(range);
+      noteMarkDirty();
+    }
+  }
+}
+
+async function noteHandlePaste(e){
+  const items = e.clipboardData?.items || [];
+  for(const it of items){
+    if(it.type && it.type.startsWith('image/')){
+      e.preventDefault();
+      const f = it.getAsFile();
+      if(f) await noteInsertImageFile(f);
+      return;
+    }
+  }
+}
+
+// 이미지: 캔버스로 축소(최대 1400px, JPEG 0.82)하여 D1 저장 용량을 억제
+async function noteInsertImageFile(file){
+  if(!file) return;
+  if(!file.type.startsWith('image/')){ toast('이미지 파일만 첨부할 수 있습니다','warning'); return; }
+  if(file.size > 12*1024*1024){ toast('12MB 이하 이미지만 첨부할 수 있습니다','warning'); return; }
+  const dataUrl = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+  const img = new Image();
+  await new Promise(res=>{ img.onload=res; img.onerror=res; img.src=dataUrl; });
+  let out = dataUrl;
+  if(img.width > 1400 || dataUrl.length > 600000){
+    const scale = Math.min(1, 1400/(img.width||1400));
+    const cv = document.createElement('canvas');
+    cv.width = Math.round((img.width||1400)*scale);
+    cv.height = Math.round((img.height||1000)*scale);
+    cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);
+    out = cv.toDataURL('image/jpeg', 0.82);
+  }
+  noteInsertHtml(`<img src="${out}" style="max-width:100%;border-radius:8px">`);
+}
+
+/* ── 저장 / 동기화 ────────────────────────────────────── */
+function noteSetStatus(kind){
+  const el = document.getElementById('nt-status'); if(!el) return;
+  const map = { saved:['저장됨','ok'], saving:['저장 중…','saving'], dirty:['미저장','idle'], error:['저장 실패','err'], conflict:['충돌','err'] };
+  const [txt, cls] = map[kind] || map.saved;
+  el.textContent = txt;
+  el.className = 'nt-status nt-'+cls;
+}
+
+function noteMarkDirty(){
+  if(!NB.cur || !noteCanEdit(NB.cur)) return;
+  NB.dirty = true;
+  noteSetStatus('dirty');
+  clearTimeout(NB.saveTimer);
+  NB.saveTimer = setTimeout(()=>noteSaveNow({silent:true}), 1500);
+}
+
+async function noteSaveNow(opts){
+  opts = opts || {};
+  const n = NB.cur;
+  if(!n || !noteCanEdit(n) || NB.saving) return;
+  const body = document.getElementById('nt-body');
+  const titleEl = document.getElementById('nt-title');
+  if(!body) return;
+  clearTimeout(NB.saveTimer);
+  const content = noteSanitize(body.innerHTML);
+  const title = (titleEl?.value||'').trim() || '제목 없는 메모';
+  const plain = noteStripHtml(content).slice(0,20000);
+  if(content.length > 3*1024*1024){ toast('메모가 너무 큽니다. 이미지를 줄여주세요','error'); noteSetStatus('error'); return; }
+  NB.saving = true; noteSetStatus('saving');
+  const res = await api('notes/'+n.id, 'PUT', { title, content, plain, rev:n.rev, force: opts.force===true });
+  NB.saving = false;
+  if(res?.__error){
+    if(res.status===409 && res.note){ NB.conflict = res.note; noteSetStatus('conflict'); notePaintBanner(); return; }
+    noteSetStatus('error');
+    if(!opts.silent) toast(res.error||'메모 저장 실패','error');
+    return;
+  }
+  NB.dirty = false; NB.conflict = null; NB.remoteNewer = null;
+  if(res.note){
+    NB.cur = { ...res.note, shares: NB.cur.shares };
+    const idx = NB.notes.findIndex(x=>x.id===res.note.id);
+    if(idx>=0){
+      NB.notes[idx] = { ...NB.notes[idx], title:res.note.title, excerpt:plain.slice(0,180),
+        updated_at:res.note.updated_at, rev:res.note.rev, pinned:res.note.pinned, pid:res.note.pid,
+        notebook_id:res.note.notebook_id, scope:res.note.scope, tags:res.note.tags };
+      notePaintList();
+    } else { await noteLoad(true); }
+  }
+  const foot = document.getElementById('nt-foot-meta');
+  if(foot && NB.cur) foot.textContent = `마지막 수정 ${noteRelTime(NB.cur.updated_at)} · ${NB.cur.updated_by_name||NB.cur.owner_name||''} · v${NB.cur.rev||1}`;
+  noteSetStatus('saved');
+  notePaintBanner();
+  if(!opts.silent) toast('메모를 저장했습니다','success');
+}
+
+function notePaintBanner(){
+  const el = document.getElementById('nt-banner'); if(!el) return;
+  if(NB.conflict){
+    el.innerHTML = `<div class="nt-banner nt-banner-err">
+      ⚠️ <b>${escHtml(NB.conflict.updated_by_name||'다른 사용자')}</b>님이 먼저 저장했습니다 (v${NB.conflict.rev}).
+      <button class="btn btn-sm btn-outline" onclick="noteLoadServerVersion()">상대 버전 불러오기</button>
+      <button class="btn btn-sm btn-primary" onclick="noteSaveNow({force:true})">내 내용으로 덮어쓰기</button>
+    </div>`;
+  } else if(NB.remoteNewer){
+    el.innerHTML = `<div class="nt-banner nt-banner-warn">
+      🔄 <b>${escHtml(NB.remoteNewer.updated_by_name||'다른 사용자')}</b>님이 이 메모를 수정했습니다.
+      <button class="btn btn-sm btn-outline" onclick="noteLoadServerVersion()">최신 내용 불러오기</button>
+    </div>`;
+  } else el.innerHTML = '';
+}
+
+async function noteLoadServerVersion(){
+  if(!NB.cur) return;
+  if(NB.dirty && !confirm('저장하지 않은 내 수정 내용이 사라집니다. 계속할까요?')) return;
+  const res = await api('notes/'+NB.cur.id);
+  if(res?.__error){ toast('불러오기 실패','error'); return; }
+  NB.cur = res; NB.shares = res.shares||[]; NB.dirty=false; NB.conflict=null; NB.remoteNewer=null;
+  notePaintEditor();
+  toast('최신 버전을 불러왔습니다');
+}
+
+// 20초마다: 내가 보고 있음을 알리고, 다른 사람의 수정 여부를 확인
+async function noteSyncTick(){
+  if(!NB.cur) return;
+  const res = await api('notes/'+NB.cur.id+'/presence','POST',{ editing: NB.dirty });
+  if(res?.__error) return;
+  NB.viewers = res.viewers || [];
+  const vEl = document.getElementById('nt-viewers');
+  if(vEl){
+    vEl.innerHTML = NB.viewers.map(v=>`<span class="nt-avatar ${v.editing?'editing':''}" title="${escHtml(v.user_name||'')}${v.editing?' (편집 중)':' (열람 중)'}">${escHtml((v.user_name||'?').slice(0,1))}</span>`).join('');
+  }
+  if(Number(res.rev||0) > Number(NB.cur.rev||0)){
+    if(!NB.dirty && !NB.saving){
+      const fresh = await api('notes/'+NB.cur.id);
+      if(!fresh?.__error){
+        NB.cur = fresh; NB.shares = fresh.shares||[];
+        notePaintEditor();
+        toast(`${fresh.updated_by_name||'다른 사용자'}님의 수정 내용을 반영했습니다`);
+      }
+    } else {
+      NB.remoteNewer = { rev:res.rev, updated_by_name:res.updated_by_name };
+      notePaintBanner();
+    }
+  }
+}
+
+/* ── 메모 CRUD ────────────────────────────────────────── */
+async function noteNew(preset){
+  preset = preset || {};
+  const payload = {
+    title: preset.title || '제목 없는 메모',
+    content: preset.html || '<p><br></p>',
+    plain: noteStripHtml(preset.html||''),
+    notebook_id: preset.notebook_id !== undefined ? preset.notebook_id : (NB.filter.notebookId||''),
+    pid: preset.pid !== undefined ? preset.pid : (NB.filter.pid||''),
+    scope: 'private'
+  };
+  const res = await api('notes','POST',payload);
+  if(res?.__error){ toast('메모 생성 실패','error'); return; }
+  NB.cur = res.note; NB.shares = []; NB.dirty=false; NB.mobileEdit=true;
+  await noteLoad(true);
+  notePaintEditor();
+  setTimeout(()=>document.getElementById('nt-title')?.focus(),50);
+}
+
+async function noteDelete(id){
+  if(!confirm('이 메모를 삭제할까요? 되돌릴 수 없습니다.')) return;
+  const res = await api('notes/'+id,'DELETE');
+  if(res?.__error){ toast(res.error||'삭제 실패','error'); return; }
+  if(NB.cur && NB.cur.id===id) NB.cur = null;
+  toast('메모를 삭제했습니다');
+  await noteLoad();
+  notePaintEditor();
+}
+
+async function noteSetField(field,value){
+  if(!NB.cur || !noteCanEdit(NB.cur)) return;
+  const body = {}; body[field] = value; body.rev = NB.cur.rev;
+  const res = await api('notes/'+NB.cur.id,'PUT',body);
+  if(res?.__error){ toast('변경 실패','error'); return; }
+  NB.cur = { ...NB.cur, ...res.note };
+  await noteLoad(true);
+  notePaintList();
+}
+
+async function noteTogglePin(){
+  if(!NB.cur || !noteCanEdit(NB.cur)) return;
+  await noteSetField('pinned', NB.cur.pinned ? 0 : 1);
+  notePaintEditor();
+}
+
+async function noteSetScope(v){
+  if(!NB.cur) return;
+  const [scope, perm] = v.split(':');
+  const res = await api('notes/'+NB.cur.id,'PUT',{ scope, team_perm: perm||'read', rev:NB.cur.rev });
+  if(res?.__error){ toast('공개 설정 변경 실패','error'); return; }
+  NB.cur = { ...NB.cur, ...res.note };
+  toast(scope==='team' ? '전사 공개로 변경했습니다' : '나만 보기로 변경했습니다');
+  await noteLoad(true);
+}
+
+async function noteAddTag(t){
+  t = String(t||'').trim().replace(/^#/,'');
+  if(!t || !NB.cur) return;
+  const tags = noteTagList(NB.cur);
+  if(tags.includes(t)) return;
+  tags.push(t);
+  const res = await api('notes/'+NB.cur.id,'PUT',{ tags: JSON.stringify(tags), rev:NB.cur.rev });
+  if(res?.__error){ toast('태그 저장 실패','error'); return; }
+  NB.cur = { ...NB.cur, ...res.note };
+  notePaintEditor();
+}
+async function noteRemoveTag(t){
+  if(!NB.cur) return;
+  const tags = noteTagList(NB.cur).filter(x=>x!==t);
+  const res = await api('notes/'+NB.cur.id,'PUT',{ tags: JSON.stringify(tags), rev:NB.cur.rev });
+  if(res?.__error) return;
+  NB.cur = { ...NB.cur, ...res.note };
+  notePaintEditor();
+}
+
+/* ── 노트북 ───────────────────────────────────────────── */
+function noteNewNotebook(){
+  openModal(`<div class="modal-bg"><div class="modal" style="width:min(440px,92vw)">
+    <div class="modal-hdr"><div class="modal-title">새 노트북</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="lbl">이름</label><input class="inp" id="nb-name" placeholder="예: 영업 메모, 현장 기록">
+      <label class="lbl" style="margin-top:10px">아이콘</label>
+      <input class="inp" id="nb-icon" value="📓" maxlength="2" style="width:80px">
+      <label class="lbl" style="margin-top:10px">공개 범위</label>
+      <select class="sel" id="nb-scope">
+        <option value="private">🔒 나만 보기</option>
+        <option value="team:read">🏢 전사 공개 (읽기)</option>
+        <option value="team:edit">🏢 전사 공개 (편집)</option>
+      </select>
+    </div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="noteSaveNotebook()">만들기</button></div>
+  </div></div>`);
+}
+async function noteSaveNotebook(){
+  const name = v('nb-name').trim();
+  if(!name){ toast('이름을 입력하세요','warning'); return; }
+  const [scope,perm] = v('nb-scope').split(':');
+  const res = await api('notebooks','POST',{ name, icon: v('nb-icon')||'📓', scope, team_perm: perm||'read', pid: NB.filter.pid||'' });
+  if(res?.__error){ toast('노트북 생성 실패','error'); return; }
+  closeModal(); toast('노트북을 만들었습니다');
+  await noteLoad(true);
+}
+function noteEditNotebook(id){
+  const b = NB.notebooks.find(x=>x.id===id); if(!b) return;
+  openModal(`<div class="modal-bg"><div class="modal" style="width:min(440px,92vw)">
+    <div class="modal-hdr"><div class="modal-title">노트북 설정</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <label class="lbl">이름</label><input class="inp" id="nb-name" value="${escHtml(b.name)}">
+      <label class="lbl" style="margin-top:10px">아이콘</label><input class="inp" id="nb-icon" value="${escHtml(b.icon||'📓')}" maxlength="2" style="width:80px">
+      <label class="lbl" style="margin-top:10px">공개 범위</label>
+      <select class="sel" id="nb-scope">
+        <option value="private" ${b.scope!=='team'?'selected':''}>🔒 나만 보기</option>
+        <option value="team:read" ${b.scope==='team'&&b.team_perm!=='edit'?'selected':''}>🏢 전사 공개 (읽기)</option>
+        <option value="team:edit" ${b.scope==='team'&&b.team_perm==='edit'?'selected':''}>🏢 전사 공개 (편집)</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" style="color:var(--danger)" onclick="noteDeleteNotebook('${b.id}')">삭제</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="noteUpdateNotebook('${b.id}')">저장</button>
+    </div>
+  </div></div>`);
+}
+async function noteUpdateNotebook(id){
+  const [scope,perm] = v('nb-scope').split(':');
+  const res = await api('notebooks/'+id,'PUT',{ name: v('nb-name'), icon: v('nb-icon')||'📓', scope, team_perm: perm||'read' });
+  if(res?.__error){ toast(res.error||'저장 실패','error'); return; }
+  closeModal(); await noteLoad(true);
+}
+async function noteDeleteNotebook(id){
+  if(!confirm('노트북을 삭제할까요? 안에 있는 메모는 유지되고 노트북 분류만 해제됩니다.')) return;
+  const res = await api('notebooks/'+id,'DELETE');
+  if(res?.__error){ toast(res.error||'삭제 실패','error'); return; }
+  closeModal();
+  if(NB.filter.notebookId===id) NB.filter.notebookId='';
+  await noteLoad(true);
+}
+
+/* ── 공유 ─────────────────────────────────────────────── */
+async function noteOpenShare(){
+  if(!NB.cur) return;
+  if(!NB.users.length){
+    const us = await api('users');
+    NB.users = Array.isArray(us) ? us.filter(u=>u.active!==0 && u.id!==(_authUser?.id||'')) : [];
+  }
+  const shareMap = {};
+  NB.shares.forEach(s=>{ shareMap[s.target_id] = s.permission; });
+  openModal(`<div class="modal-bg"><div class="modal" style="width:min(540px,92vw)">
+    <div class="modal-hdr"><div class="modal-title">메모 공유 · ${escHtml(NB.cur.title||'')}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px">팀원별로 읽기 또는 편집 권한을 줄 수 있습니다. 편집 권한을 받은 사람과는 같은 메모를 함께 작성할 수 있습니다.</div>
+      ${NB.users.length?NB.users.map(u=>`
+        <div class="nt-share-row">
+          <div class="nt-avatar">${escHtml((u.name||u.username||'?').slice(0,1))}</div>
+          <div style="flex:1">
+            <div style="font-weight:600;font-size:13px">${escHtml(u.name||u.username)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${escHtml(u.dept||'')} ${escHtml(u.position||u.role||'')}</div>
+          </div>
+          <select class="sel" style="width:120px" id="sh-${u.id}">
+            <option value="" ${!shareMap[u.id]?'selected':''}>공유 안 함</option>
+            <option value="read" ${shareMap[u.id]==='read'?'selected':''}>읽기</option>
+            <option value="edit" ${shareMap[u.id]==='edit'?'selected':''}>편집</option>
+          </select>
+        </div>`).join(''):'<div class="nt-empty">공유할 팀원이 없습니다. 관리자 설정에서 사용자 계정을 추가하세요.</div>'}
+    </div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">취소</button>
+      <button class="btn btn-primary" onclick="noteSaveShares()">공유 저장</button></div>
+  </div></div>`);
+}
+
+async function noteSaveShares(){
+  const targets = [];
+  NB.users.forEach(u=>{
+    const p = v('sh-'+u.id);
+    if(p) targets.push({ target_id:u.id, target_name:u.name||u.username, permission:p });
+  });
+  const res = await api('notes/'+NB.cur.id+'/shares','POST',{ targets });
+  if(res?.__error){ toast(res.error||'공유 저장 실패','error'); return; }
+  NB.shares = res.shares || [];
+  closeModal();
+  toast(targets.length?`${targets.length}명과 공유했습니다`:'공유를 해제했습니다','success');
+  // 공유 대상에게 알림
+  for(const t of targets){
+    createNotification({ type:'info', title:'메모 공유', message:`${_authUser?.name||''}님이 "${NB.cur.title}" 메모를 공유했습니다`,
+      to_user:t.target_id, related_type:'note', related_id:NB.cur.id, action_url:'/notes' });
+  }
+  notePaintEditor();
+}
+
+/* ── 버전 이력 ────────────────────────────────────────── */
+async function noteOpenHistory(){
+  if(!NB.cur) return;
+  const revs = await api('notes/'+NB.cur.id+'/revisions');
+  const list = Array.isArray(revs) ? revs : [];
+  openModal(`<div class="modal-bg"><div class="modal" style="width:min(580px,92vw)">
+    <div class="modal-hdr"><div class="modal-title">버전 이력 · ${escHtml(NB.cur.title||'')}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="nt-share-row"><div style="flex:1"><b>현재 버전 v${NB.cur.rev}</b> · ${escHtml(NB.cur.updated_by_name||'')} · ${noteRelTime(NB.cur.updated_at)}</div></div>
+      ${list.length?list.map(r=>`<div class="nt-share-row">
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13px">v${r.rev} · ${escHtml(r.title||'제목 없음')}</div>
+          <div style="font-size:11px;color:var(--text-muted)">${escHtml(r.editor_name||'')} · ${noteRelTime(r.created_at)}</div>
+        </div>
+        <button class="btn btn-outline btn-sm" onclick="notePreviewRev(${r.rev})">보기</button>
+        ${noteCanEdit(NB.cur)?`<button class="btn btn-outline btn-sm" onclick="noteRestoreRev(${r.rev})">복원</button>`:''}
+      </div>`).join(''):'<div class="nt-empty">아직 저장된 이전 버전이 없습니다.</div>'}
+    </div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">닫기</button></div>
+  </div></div>`);
+}
+async function notePreviewRev(rev){
+  const r = await api('notes/'+NB.cur.id+'/revisions/'+rev);
+  if(r?.__error){ toast('버전을 불러오지 못했습니다','error'); return; }
+  openModal(`<div class="modal-bg"><div class="modal" style="width:min(780px,94vw)">
+    <div class="modal-hdr"><div class="modal-title">v${rev} · ${escHtml(r.title||'')}</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body"><div class="nt-body" style="min-height:200px">${noteSanitize(r.content||'')}</div></div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="noteOpenHistory()">이력으로</button>
+      ${noteCanEdit(NB.cur)?`<button class="btn btn-primary" onclick="noteRestoreRev(${rev})">이 버전으로 복원</button>`:''}</div>
+  </div></div>`);
+}
+async function noteRestoreRev(rev){
+  if(!confirm(`v${rev} 내용으로 되돌릴까요? 현재 내용은 이력에 보관됩니다.`)) return;
+  const res = await api('notes/'+NB.cur.id+'/revisions/'+rev+'/restore','POST',{});
+  if(res?.__error){ toast(res.error||'복원 실패','error'); return; }
+  closeModal();
+  NB.cur = res.note; NB.dirty=false;
+  await noteLoad(true);
+  notePaintEditor();
+  toast(`v${rev} 내용으로 복원했습니다`,'success');
+}
+
+/* ── 템플릿 / 인쇄 ────────────────────────────────────── */
+function noteOpenTemplates(){
+  const keys = Object.keys(NOTE_TEMPLATES);
+  openModal(`<div class="modal-bg"><div class="modal" style="width:min(500px,92vw)">
+    <div class="modal-hdr"><div class="modal-title">템플릿으로 시작</div><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${keys.map(k=>`<div class="nt-share-row">
+        <div style="flex:1;font-weight:600;font-size:13px">${escHtml(NOTE_TEMPLATES[k].title)}</div>
+        <button class="btn btn-outline btn-sm" onclick="noteApplyTemplate('${k}',false)">현재 메모에 삽입</button>
+        <button class="btn btn-primary btn-sm" onclick="noteApplyTemplate('${k}',true)">새 메모로</button>
+      </div>`).join('')}
+    </div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">닫기</button></div>
+  </div></div>`);
+}
+async function noteApplyTemplate(key, asNew){
+  const t = NOTE_TEMPLATES[key]; if(!t) return;
+  closeModal();
+  if(asNew || !NB.cur){ await noteNew({ title:t.title, html:t.html }); return; }
+  if(!noteCanEdit(NB.cur)){ toast('편집 권한이 없습니다','warning'); return; }
+  noteInsertHtml(t.html);
+  noteSaveNow({silent:true});
+}
+
+function notePrint(){
+  if(!NB.cur) return;
+  const w = window.open('', '_blank');
+  if(!w){ toast('팝업이 차단되었습니다','warning'); return; }
+  w.document.write(`<html><head><meta charset="utf-8"><title>${escHtml(NB.cur.title||'메모')}</title>
+    <style>body{font-family:'Noto Sans KR',sans-serif;padding:32px;line-height:1.7;color:#1F1E1C}
+    h1{font-size:22px}h2{font-size:18px;margin:16px 0 8px}h3{font-size:15px;margin:14px 0 6px}
+    img{max-width:100%}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px 8px}
+    .nt-chk{display:flex;gap:8px;align-items:flex-start;margin:4px 0}
+    .meta{color:#6B6A65;font-size:12px;border-bottom:1px solid #E5E3DC;padding-bottom:10px;margin-bottom:16px}</style></head>
+    <body><h1>${escHtml(NB.cur.title||'메모')}</h1>
+    <div class="meta">${escHtml(NB.cur.owner_name||'')} · ${String(NB.cur.updated_at||'').slice(0,16).replace('T',' ')}</div>
+    ${noteSanitize(NB.cur.content||'')}</body></html>`);
+  w.document.close();
+  setTimeout(()=>w.print(), 300);
+}
+
+/* ── 대시보드 위젯 ────────────────────────────────────── */
+async function loadDashNotes(){
+  const el = document.getElementById('dash-notes'); if(!el) return;
+  const notes = await api('notes?limit=6');
+  if(!Array.isArray(notes)){ el.innerHTML = '<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px">메모를 불러오지 못했습니다</div>'; return; }
+  if(!notes.length){
+    el.innerHTML = `<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:12px">아직 메모가 없습니다</div>`;
+    return;
+  }
+  el.innerHTML = notes.slice(0,5).map(n=>`
+    <div class="dash-note" onclick="nav('notes');setTimeout(()=>noteSelect('${n.id}'),400)">
+      <div style="display:flex;align-items:center;gap:6px">
+        ${n.pinned?'<span>📌</span>':''}
+        <span style="font-weight:600;font-size:12.5px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(n.title||'제목 없는 메모')}</span>
+        <span style="font-size:10px;color:var(--text-muted)">${noteRelTime(n.updated_at)}</span>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(n.excerpt||'')}</div>
+    </div>`).join('');
+}
+
+async function dashQuickNote(){
+  const inp = document.getElementById('dash-note-inp');
+  const txt = (inp?.value||'').trim();
+  if(!txt){ nav('notes'); return; }
+  const lines = txt.split('\n');
+  const title = lines[0].slice(0,60);
+  const html = lines.map(l=>`<p>${escHtml(l)||'<br>'}</p>`).join('');
+  const res = await api('notes','POST',{ title, content:html, plain:txt, scope:'private' });
+  if(res?.__error){ toast('메모 저장 실패','error'); return; }
+  if(inp) inp.value='';
+  toast('메모를 저장했습니다','success');
+  loadDashNotes();
+}
