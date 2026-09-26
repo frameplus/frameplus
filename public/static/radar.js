@@ -19,41 +19,7 @@ const ddayHtml = d => { const n = ddayOf(d); if (n === null) return '<span style
 const wonShort = n => { n = Number(n) || 0; if (!n) return '-'; if (n >= 1e8) return (n / 1e8).toFixed(n >= 1e9 ? 0 : 1) + '억'; if (n >= 1e4) return Math.round(n / 1e4).toLocaleString() + '만'; return n.toLocaleString(); };
 
 // ---------------------------------------------------------------
-// 대시보드 위젯 2종: 「오늘의 인사이트」 · 「공고」
-// ---------------------------------------------------------------
-async function renderRadarWidgets() {
-  const host = document.querySelector('#content > div');
-  if (!host || document.getElementById('radar-widgets')) return;
-  const box = document.createElement('div');
-  box.id = 'radar-widgets';
-  box.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin-bottom:16px';
-  box.innerHTML = `<div class="card" id="rw-insight"><div class="card-title">💡 오늘의 인사이트</div><div style="color:var(--text-muted);font-size:12px">불러오는 중…</div></div>
-    <div class="card" id="rw-bids"><div class="card-title">📢 공고</div><div style="color:var(--text-muted);font-size:12px">불러오는 중…</div></div>`;
-  host.insertBefore(box, host.children[1] || null);
-  const [ins, bids] = await Promise.all([api('news/widget'), api('bids/widget')]);
-  const wi = document.getElementById('rw-insight');
-  if (wi && !ins?.__error) {
-    wi.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="card-title" style="margin:0">💡 오늘의 인사이트</div><button class="btn btn-ghost btn-sm" onclick="nav('insights')">전체 보기 →</button></div>
-      ${(ins.items || []).length ? ins.items.map(i => `<div style="padding:8px 0;border-top:1px solid var(--border);cursor:pointer" onclick="window.open('${rEsc(i.url)}','_blank');api('news/${i.id}/read','POST')">
-        <div style="display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:3px">${topicBadge(i.topic)}<span style="margin-left:auto;font-weight:700">${i.score}</span></div>
-        <div style="font-size:13px;font-weight:600;line-height:1.35">${rEsc(i.title)}</div>
-        <div style="font-size:12px;color:var(--text-muted)">${rEsc(i.why_relevant)}</div></div>`).join('') : '<div style="font-size:12px;color:var(--text-muted)">최근 2일 수집 항목이 없습니다.</div>'}
-      ${ins.disabled_sources ? `<div style="margin-top:8px;font-size:11px;color:var(--text-muted)">⚠️ 소스 ${ins.disabled_sources}개 꺼짐 — 인사이트 > 소스 관리 확인</div>` : ''}`;
-  }
-  const wb = document.getElementById('rw-bids');
-  if (wb && !bids?.__error) {
-    const u = bids.urgent;
-    const stat = (label, n) => `<div style="flex:1;text-align:center"><div style="font-size:22px;font-weight:800">${n}</div><div style="font-size:11px;color:var(--text-muted)">${label}</div></div>`;
-    wb.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div class="card-title" style="margin:0">📢 공고</div><button class="btn btn-ghost btn-sm" onclick="nav('bids')">전체 보기 →</button></div>
-      <div style="display:flex;gap:4px;margin-bottom:10px">${stat('충족', bids.ok)}${stat('부분', bids.partial)}${stat('이번 주 마감', bids.week)}${stat('새 발주처', bids.candidates)}</div>
-      ${u ? `<div style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;cursor:pointer" onclick="nav('bids');setTimeout(()=>openBidDetail(${u.id}),300)">
-        <div style="font-size:11px;color:var(--text-muted)">가장 급한 1건 · ${ddayHtml(u.deadline)} · ${verdictBadge(u.fit_verdict)}</div>
-        <div style="font-size:13px;font-weight:600">${rEsc(u.org)} · ${rEsc(u.title)}</div></div>` : '<div style="font-size:12px;color:var(--text-muted)">진행 중 공고 없음</div>'}`;
-  }
-}
-
-// ---------------------------------------------------------------
-// 인사이트 페이지 /insights
+// 뉴스 페이지 /insights
 // ---------------------------------------------------------------
 const INS = { topic: 'all', days: 7, min: 60, q: '', page: 1, bookmarked: false };
 function renderInsights() {
@@ -212,7 +178,7 @@ async function saveNewsSource() {
 }
 
 // ---------------------------------------------------------------
-// 공고 레이더 /bids
+// 공고 페이지 /bids
 // ---------------------------------------------------------------
 const BIDS = { tab: 'vendor_reg', chips: {}, q: '', rows: [] };
 const BID_TABS = [['vendor_reg', '🤝 협력사 등록'], ['interior_bid', '🏢 인테리어 입찰'], ['public', '🏛️ 관급'], ['', '🗂️ 전체'], ['calendar', '📅 등록 캘린더']];

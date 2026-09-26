@@ -817,12 +817,6 @@ export function newsRouter() {
       .bind(c.req.query('date') || kstDate(), c.req.query('date') || kstDate()).all()
     return c.json(results || [])
   })
-  r.get('/widget', async (c) => {
-    const db = c.env.DB
-    const items = (await db.prepare(`SELECT id, topic, title, url, why_relevant, score FROM news_items WHERE created_at >= datetime('now','-2 days') ORDER BY score DESC, created_at DESC LIMIT 5`).all()).results || []
-    const off = await db.prepare(`SELECT COUNT(*) AS n FROM news_sources WHERE enabled=0 AND type NOT IN ('email','threads') AND last_error IS NOT NULL`).first<any>()
-    return c.json({ items, disabled_sources: off?.n || 0 })
-  })
 
   // --- 목록 ---
   r.get('/', async (c) => {
@@ -1034,17 +1028,6 @@ export function bidsRouter() {
     return c.json({ error: 'unknown job' }, 400)
   })
 
-  r.get('/widget', async (c) => {
-    const db = c.env.DB
-    const cnt = await db.prepare(`SELECT
-      SUM(CASE WHEN fit_verdict='충족' THEN 1 ELSE 0 END) AS ok,
-      SUM(CASE WHEN fit_verdict='부분' THEN 1 ELSE 0 END) AS partial,
-      SUM(CASE WHEN deadline BETWEEN ? AND ? THEN 1 ELSE 0 END) AS week
-      FROM bid_notices WHERE status IN ('검토','참여') AND (deadline IS NULL OR deadline >= ?)`).bind(kstDate(), kstDate(7), kstDate()).first<any>()
-    const cand = await db.prepare(`SELECT COUNT(*) AS n FROM bid_sources WHERE status='candidate'`).first<any>()
-    const urgent = await db.prepare(`SELECT id, org, title, url, deadline, fit_verdict FROM bid_notices WHERE status IN ('검토','참여') AND deadline >= ? ORDER BY deadline ASC LIMIT 1`).bind(kstDate()).first()
-    return c.json({ ok: cnt?.ok || 0, partial: cnt?.partial || 0, week: cnt?.week || 0, candidates: cand?.n || 0, urgent })
-  })
   r.get('/calendar', async (c) => {
     const { results } = await c.env.DB.prepare(`SELECT id, org, tier, group_name, expected_month, url FROM bid_sources WHERE expected_month IS NOT NULL AND status='approved' ORDER BY expected_month, org`).all()
     return c.json(results || [])
