@@ -617,6 +617,7 @@ const NAV=[
   {section:'메인'},
   {id:'me',label:'내 페이지',icon:'user'},
   {id:'dash',label:'대시보드',icon:'home'},
+  {id:'insights',label:'인사이트',icon:'book'},
   {section:'경영',adminOnly:true},
   {id:'exec_dash',label:'경영 현황',icon:'chart',adminOnly:true},
   {id:'cashflow',label:'현금 흐름',icon:'dollar',adminOnly:true},
@@ -636,6 +637,7 @@ const NAV=[
   {section:'영업 관리'},
   {id:'consult',label:'상담 관리',icon:'phone'},
   {id:'rfp',label:'RFP·제안',icon:'clipboard'},
+  {id:'bids',label:'공고 레이더',icon:'search'},
   {id:'meetings',label:'미팅 캘린더',icon:'calendar'},
   {id:'crm',label:'고객 CRM',icon:'users'},
   {section:'데이터'},
@@ -798,7 +800,9 @@ function nav(page,sub=null,pid=null,pushHistory=true){
   `;
   const content=document.getElementById('content');
   switch(page){
-    case 'dash':renderDash();break;
+    case 'dash':renderDash();if(typeof renderRadarWidgets==='function')renderRadarWidgets();break;
+    case 'insights':renderInsights();break;
+    case 'bids':renderBids();break;
     case 'exec_dash':renderExecDash();break;
     case 'cashflow':renderCashFlow();break;
     case 'profit_rank':renderProfitRank();break;

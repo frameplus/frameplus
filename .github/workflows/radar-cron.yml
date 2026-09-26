@@ -1,0 +1,47 @@
+name: Radar Cron (인사이트·공고 레이더)
+
+# Cloudflare Pages는 Cron Trigger를 지원하지 않아 GitHub Actions 스케줄로 /api/cron/radar/* 를 호출한다.
+# 필요한 Secrets: CRON_TOKEN (Cloudflare Pages 환경변수 CRON_TOKEN과 동일 값), 선택: RADAR_BASE_URL
+# 시각은 UTC. GitHub 스케줄은 수 분~수십 분 지연될 수 있다.
+on:
+  schedule:
+    - cron: '5 * * * *'      # 매시 — 인사이트 수집
+    - cron: '0 23,5 * * *'   # KST 08:00·14:00 — 나라장터 API
+    - cron: '30 23 * * *'    # KST 08:30 — 민간 게시판 크롤
+    - cron: '0 22 * * *'     # KST 07:00 — 발견 엔진
+    - cron: '0 0 * * *'      # KST 09:00 — 통합 리포트(미팅 + 인사이트 3건 + 공고 묶음 + D-3)
+    - cron: '0 0 1 * *'      # 매월 1일 KST 09:00 — 등록 캘린더 사전 알림
+    - cron: '0 22 * * 6'     # 일요일 KST 07:00 — 주간 리서치
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'news | g2b | crawl | discovery | digest | monthly | weekly | verify'
+        required: true
+        default: news
+
+jobs:
+  call:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve job
+        id: job
+        run: |
+          case "${{ github.event.schedule }}" in
+            '5 * * * *')    JOB=news ;;
+            '0 23,5 * * *') JOB=g2b ;;
+            '30 23 * * *')  JOB=crawl ;;
+            '0 22 * * *')   JOB=discovery ;;
+            '0 0 * * *')    JOB=digest ;;
+            '0 0 1 * *')    JOB=monthly ;;
+            '0 22 * * 6')   JOB=weekly ;;
+            *)              JOB="${{ github.event.inputs.job }}" ;;
+          esac
+          echo "name=$JOB" >> "$GITHUB_OUTPUT"
+      - name: Call endpoint
+        env:
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+          BASE: ${{ secrets.RADAR_BASE_URL || 'https://frameplus-erp.pages.dev' }}
+        run: |
+          if [ -z "$CRON_TOKEN" ]; then echo "CRON_TOKEN secret 미설정 — 건너뜀"; exit 0; fi
+          curl -sS -f -X POST -H "X-Cron-Token: $CRON_TOKEN" --max-time 120 "$BASE/api/cron/radar/${{ steps.job.outputs.name }}"

@@ -1,7 +1,8 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { ensureRadarTables, newsRouter, bidsRouter, memosRouter, runRadarJob, buildRadarDigest } from './radar'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; ANTHROPIC_API_KEY?: string; GITHUB_TOKEN?: string; G2B_API_KEY?: string; NAVER_CLIENT_ID?: string; NAVER_CLIENT_SECRET?: string; GOOGLE_CSE_KEY?: string; GOOGLE_CSE_CX?: string; CRON_TOKEN?: string; BIDS_IMPORT_TOKEN?: string }
 type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
 
 const app = new Hono<App>()
@@ -22,6 +23,10 @@ const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/logout', '/api/health', '/ap
 app.use('/api/*', async (c, next) => {
   const path = new URL(c.req.url).pathname
   if (PUBLIC_PATHS.some(p => path === p)) return next()
+  // 머신 호출: 스케줄러(GitHub Actions)와 Chrome 쇼트컷 직접 POST는 토큰으로 인증
+  const tokenOk = (expected?: string, got?: string) => !!expected && !!got && expected === got
+  if (path.startsWith('/api/cron/radar/') && tokenOk(c.env.CRON_TOKEN, c.req.header('X-Cron-Token'))) return next()
+  if (path === '/api/bids/import' && tokenOk(c.env.BIDS_IMPORT_TOKEN, c.req.header('X-Import-Token'))) return next()
   const sid = c.req.header('X-Session-Id') || ''
   if (!sid) return c.json({ error: 'Unauthorized' }, 401)
   const sess = await c.env.DB.prepare('SELECT * FROM sessions WHERE id = ? AND expires_at > ?').bind(sid, new Date().toISOString()).first()
@@ -248,6 +253,10 @@ app.delete('/api/projects/:id', async (c) => {
   await db.prepare('DELETE FROM projects WHERE id = ?').bind(id).run()
   return c.json({ success: true, deletedFinancial: force ? counts : undefined })
 })
+// 인사이트 피드 · 공고 레이더 · 메모장 (src/radar.ts)
+app.route('/api/news', newsRouter())
+app.route('/api/bids', bidsRouter())
+app.route('/api/memos', memosRouter())
 app.route('/api/projects', crud('projects'))
 app.route('/api/vendors', crud('vendors'))
 app.route('/api/meetings', crud('meetings'))
@@ -485,7 +494,7 @@ app.post('/api/init', async (c) => {
 })
 
 // Health check
-app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.6.2' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: 'v8.7.0' }))
 
 // ===== PASSWORD HASHING (PBKDF2-SHA256) =====
 async function hashPassword(password: string, salt?: string): Promise<string> {
@@ -2105,7 +2114,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
       </div>
       <span class="sb-logo-text">Frame Plus</span>
-      <span class="sb-logo-ver">v8.6.2</span>
+      <span class="sb-logo-ver">v8.7.0</span>
     </div>
     <button class="sb-toggle" onclick="toggleSidebar()" title="메뉴 접기">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
@@ -2158,8 +2167,9 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
     </button>
   </div>
 </div>
-<div class="fs-badge">v8.6.2 Full-Stack ERP</div>
+<div class="fs-badge">v8.7.0 Full-Stack ERP</div>
 <script src="/static/app.js?v=__APPVER__"></script>
+<script src="/static/radar.js?v=__RADARVER__"></script>
 </body>
 </html>`
 }
@@ -2234,7 +2244,10 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
   const list = meetings.results || []
   const todayList = list.filter((m: any) => m.date === today)
   const tomorrowList = list.filter((m: any) => m.date === tomorrow)
-  if (list.length === 0) return { todayCount: 0, tomorrowCount: 0, sent: false }
+  // 인사이트 3건 · 신규 공고 묶음 · 마감 D-3 미결정 섹션 (src/radar.ts)
+  let radar = { html: '', text: '' }
+  try { await ensureRadarTables(env.DB); radar = await buildRadarDigest(env) } catch (_) { /* radar tables unavailable */ }
+  if (list.length === 0 && !radar.html) return { todayCount: 0, tomorrowCount: 0, sent: false }
   let adminEmails: string[] = []
   try {
     const admins = await env.DB.prepare(
@@ -2270,6 +2283,7 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
         <thead><tr style="background:#FEF3C7"><th style="padding:8px;text-align:left">시간</th><th style="padding:8px;text-align:left">제목</th><th style="padding:8px;text-align:left">고객</th><th style="padding:8px;text-align:left">장소</th><th style="padding:8px;text-align:left">담당</th></tr></thead>
         <tbody>${rows(tomorrowList)}</tbody>
       </table>` : ''}
+      ${radar.html}
       <p style="margin-top:28px"><a href="https://frameplus-erp.pages.dev/" style="background:#DC2626;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600">ERP에서 미팅 캘린더 보기 →</a></p>
       <p style="color:#9CA3AF;font-size:11px;margin-top:24px">이 메일은 Frame Plus ERP가 매일 KST 09:00에 자동 발송합니다.</p>
     </div>
@@ -2281,7 +2295,7 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
       body: JSON.stringify({
         from: 'Frame Plus ERP <onboarding@resend.dev>',
         to: adminEmails,
-        subject: `[미팅 알림] 오늘 ${todayList.length}건 / 내일 ${tomorrowList.length}건`,
+        subject: `[09:00 리포트] 미팅 오늘 ${todayList.length}건 / 내일 ${tomorrowList.length}건${radar.text ? ' · 인사이트·공고' : ''}`,
         html
       })
     })
@@ -2293,7 +2307,7 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
         ).all<any>()
         const phones = (phoneRows.results || []).map((r: any) => r.phone).filter(Boolean)
         const firstToday = todayList[0]
-        const smsText = `[프레임플러스] 오늘 미팅 ${todayList.length}건 / 내일 ${tomorrowList.length}건${firstToday ? `\n첫 일정: ${firstToday.time || ''} ${firstToday.title || ''}` : ''}\nERP: https://frameplus-erp.pages.dev/`
+        const smsText = `[프레임플러스] 오늘 미팅 ${todayList.length}건 / 내일 ${tomorrowList.length}건${firstToday ? `\n첫 일정: ${firstToday.time || ''} ${firstToday.title || ''}` : ''}${radar.text ? `\n${radar.text}` : ''}\nERP: https://frameplus-erp.pages.dev/`
         for (const phone of phones) {
           try { await sendSolapi(env, { to: phone, text: smsText, type: 'SMS' }) } catch (_) {}
         }
@@ -2311,9 +2325,24 @@ app.post('/api/cron/meeting-notify', async (c) => {
   return c.json({ ok: true, ...result })
 })
 
+// 인사이트·공고 레이더 크론 — Pages에는 Cron Trigger가 없어 .github/workflows/radar-cron.yml이 X-Cron-Token으로 호출
+// jobs: news(매시) · g2b(08:00·14:00) · crawl(08:30) · discovery(07:00) · digest(09:00) · monthly(매월 1일) · weekly(일 07:00)
+app.post('/api/cron/radar/:job', async (c) => {
+  const job = c.req.param('job')
+  try {
+    if (job === 'digest') return c.json({ ok: true, ...(await runMeetingNotify(c.env)) })
+    return c.json({ ok: true, job, result: await runRadarJob(c.env, job) })
+  } catch (e: any) {
+    return c.json({ ok: false, job, error: e?.message || String(e) }, 500)
+  }
+})
+
 export default {
   fetch: app.fetch,
-  scheduled: async (_event: any, env: Bindings, ctx: any) => {
-    ctx.waitUntil(runMeetingNotify(env))
+  scheduled: async (event: any, env: Bindings, ctx: any) => {
+    // Workers로 이전해 Cron Trigger를 쓰게 되면 cron 문자열로 분기(UTC 기준)
+    const map: Record<string, string> = { '5 * * * *': 'news', '0 23,5 * * *': 'g2b', '30 23 * * *': 'crawl', '0 22 * * *': 'discovery', '0 0 1 * *': 'monthly', '0 22 * * 6': 'weekly' }
+    const job = map[event?.cron || '']
+    ctx.waitUntil(job ? runRadarJob(env, job) : runMeetingNotify(env))
   }
 }

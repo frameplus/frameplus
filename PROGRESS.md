@@ -1,5 +1,19 @@
 # Frame Plus ERP — 개발 진행 현황 (PROGRESS.md)
 
+## v8.7.0 — 인사이트 피드 · 공고 레이더 1단계 (2026-09-26)
+
+설계서 v1.2(Express/Railway 전제)를 현 스택(Hono + Cloudflare Pages + D1)에 맞춰 구현. 백엔드 `src/radar.ts`, 화면 `public/static/radar.js`, 스키마 `migrations/0005_news_bids.sql`(운영은 ensureRadarTables 자동 적용).
+
+- [x] 인사이트: RSS·Reddit·HN·GitHub(atom/search)·page_diff·YouTube 수집 → Claude Haiku 10건 배치 분류(점수 60 미만 폐기) → `/insights` 화면·북마크→메모장·소스 관리/시드 검증
+- [x] 공고: 나라장터 API · 공개 게시판 크롤(selector_json) · Chrome 쇼트컷 가져오기 · 발견 엔진(네이버·구글 CSE·Google Alerts RSS) → Haiku 추출 → 자격 판정 **배지만**(목록·알림 제외 없음)
+- [x] 금융 2단 수집: `bid_sources.group_name` + `branch_level(hq/branch)` 묶음 표시
+- [x] 참여 → 상담 관리(파이프라인) 리드 자동 생성 · 마감 7일 이내 즉시 알림 · 09:00 리포트 섹션 · D-3 미결정 재알림 · 매월 1일 등록 캘린더 알림
+- [x] 스케줄: `.github/workflows/radar-cron.yml` → `/api/cron/radar/:job` (X-Cron-Token)
+- [ ] 운영 설정: Pages 환경변수(ANTHROPIC_API_KEY, CRON_TOKEN, G2B_API_KEY, NAVER_*, GOOGLE_CSE_*, GITHUB_TOKEN) + GitHub Secret CRON_TOKEN
+- [ ] 시드 검증 실행 → SOURCES_REPORT.md (`node scripts/verify-sources.mjs`)
+- [ ] 명부 5종 org_dictionary 적재, 은행·금융공기업·중앙회·단위조합·대기업 포털 소스 등록(일괄 등록 JSON)
+- [ ] 2단계: Gmail 뉴스레터·Threads 수집기, 카카오 알림톡 템플릿
+
 ## v8.6.1 사이클 5 — 캐시버스팅 + 정산 마이그레이션 UX (2026-05-29) ✅
 
 ### 진단 정정 (이전 세션 오진 수정)
