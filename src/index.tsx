@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { createJobsApi, loadInvoiceByToken } from './jobs/api'
-import { jobsShellHtml, renderPublicInvoice, JOBS_VERSION, JOBS_SW } from './jobs/page'
+import { createJobsApi, loadInvoiceByToken, loadQuoteByToken } from './jobs/api'
+import { jobsShellHtml, renderPublicInvoice, renderPublicQuote, renderLegalPage, JOBS_VERSION, JOBS_SW } from './jobs/page'
 
 type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string }
 type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
@@ -252,11 +252,30 @@ app.delete('/api/projects/:id', async (c) => {
   return c.json({ success: true, deletedFinancial: force ? counts : undefined })
 })
 // ===== JOBS 앱 — 현장 반장 «기록 → 청구 → 입금» 모바일 앱 (ERP 와 분리된 모듈, 자체 인증) =====
-app.route('/api/jobs', createJobsApi({ sendSms: (env, o) => sendSolapi(env, o), version: JOBS_VERSION }))
+async function jobsSendEmail(env: Bindings, o: { to: string; subject: string; html: string }): Promise<{ ok: boolean; error?: string }> {
+  if (!env.RESEND_API_KEY) return { ok: false, error: 'email not configured' }
+  try {
+    // [확인 필요] 도메인 인증 후 발신 주소를 jobs@frameplus.kr 등으로 교체
+    const res = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: 'JOBS <onboarding@resend.dev>', to: [o.to], subject: o.subject, html: o.html }) })
+    if (!res.ok) return { ok: false, error: await res.text() }
+    return { ok: true }
+  } catch (e: any) { return { ok: false, error: e?.message || 'send failed' } }
+}
+app.route('/api/jobs', createJobsApi({ sendSms: (env, o) => sendSolapi(env, o), sendEmail: (env, o) => jobsSendEmail(env, o), version: JOBS_VERSION }))
 app.get('/jobs/v/:token', async (c) => {
   const data = await loadInvoiceByToken(c.env.DB, c.req.param('token'))
   if (!data) return c.html('<!DOCTYPE html><meta charset="utf-8"><p style="font:16px sans-serif;padding:40px;text-align:center">청구서를 찾을 수 없습니다.</p>', 404)
   return c.html(renderPublicInvoice(data))
+})
+app.get('/jobs/q/:token', async (c) => {
+  const data = await loadQuoteByToken(c.env.DB, c.req.param('token'))
+  if (!data) return c.html('<!DOCTYPE html><meta charset="utf-8"><p style="font:16px sans-serif;padding:40px;text-align:center">견적서를 찾을 수 없습니다.</p>', 404)
+  return c.html(renderPublicQuote(data))
+})
+app.get('/jobs/legal/:kind', (c) => {
+  const kind = c.req.param('kind')
+  if (kind !== 'terms' && kind !== 'privacy' && kind !== 'location') return c.notFound()
+  return c.html(renderLegalPage(kind))
 })
 app.get('/jobs/sw.js', (c) => c.body(JOBS_SW, 200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }))
 app.get('/jobs', (c) => c.redirect('/jobs/' + (new URL(c.req.url).search || ''), 301)) // 서비스 워커 범위(/jobs/)에 맞춰 슬래시 고정

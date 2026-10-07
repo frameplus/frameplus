@@ -141,6 +141,13 @@
           if (c === 'pay') return await renderPay(b)
           if (c === 'dunning') return await renderDunning(b)
           return await renderInvoice(b)
+        case 'checkin': return await renderCheckin(r.query)
+        case 'year': return await renderYear(r.query)
+        case 'quotes': return await renderQuotes()
+        case 'quote':
+          if (b === 'new') return await renderQuote('new', r.query)
+          if (c === 'convert') return await renderConvert(b)
+          return await renderQuote(b, r.query)
         case 'payments': return await renderPayments()
         case 'sendlogs': return await renderSendlogs()
         case 'settings': return await renderSettings()
@@ -159,7 +166,8 @@
       ${d.step === 'phone' ? `
         <div class="field big"><input type="tel" inputmode="numeric" data-bind="phone" placeholder="010-0000-0000" value="${esc(d.phone)}" autocomplete="tel" autofocus></div>
         <button class="btn primary" data-act="login.request">인증번호 받기</button>
-        <p class="label" style="text-align:center;margin-top:18px">휴대폰 번호로 로그인합니다. 비밀번호가 없습니다.</p>`
+        <p class="label" style="text-align:center;margin-top:18px">휴대폰 번호로 로그인합니다. 비밀번호가 없습니다.</p>
+        <p class="label" style="text-align:center;font-size:13px;line-height:1.6">인증번호를 받으면 <a href="/jobs/legal/terms" target="_blank" rel="noopener" style="text-decoration:underline">이용약관</a> · <a href="/jobs/legal/privacy" target="_blank" rel="noopener" style="text-decoration:underline">개인정보처리방침</a> · <a href="/jobs/legal/location" target="_blank" rel="noopener" style="text-decoration:underline">위치정보 이용약관</a>에 동의한 것으로 봅니다.</p>`
       : `
         <p class="label" style="text-align:center;margin:-10px 0 12px">${esc(ph(d.phone))} 로 보낸 인증번호 6자리</p>
         <div class="field big code"><input type="tel" inputmode="numeric" maxlength="6" data-bind="code" placeholder="000000" value="${esc(d.code)}" autocomplete="one-time-code" autofocus></div>
@@ -210,8 +218,8 @@
       ${noSites ? `<div class="card"><div class="empty"><b>현장을 먼저 만들어 주세요</b>현장을 한 번 만들어 두면 이후 기록 · 청구 · 입금이 전부 자동입니다.</div><button class="btn primary" data-act="nav" data-to="#/site/new">현장 추가</button></div>` : `
       <div class="card" style="display:flex;align-items:center;gap:12px;padding:14px 16px">
         <span class="choice-ck" style="width:40px;height:40px;border-radius:12px;background:${hasToday ? 'var(--blue)' : '#E9E9EE'};color:#fff;display:flex;align-items:center;justify-content:center;flex:none">${ck}</span>
-        <div class="main" style="flex:1"><div class="t" style="font-weight:800;font-size:16px">오늘 출근 기록</div><div class="s label">${kdate(today)} · ${hasToday ? esc(d.todayLogs.map(l => l.siteName).join(', ')) + ' 기록됨' : '아직 기록 없음'}</div></div>
-        ${hasToday ? `<a class="btn sm" href="#/log/${d.todayLogs[0].id}">보기</a>` : '<button class="btn sm primary" data-act="sheet.record">출근</button>'}
+        <div class="main" style="flex:1"><div class="t" style="font-weight:800;font-size:16px">오늘 출근 기록</div><div class="s label">${kdate(today)} · ${hasToday ? esc(d.todayLogs.map(l => l.siteName).join(', ')) + (d.todayLogs[0].checkInAt ? ` · 출근 ${esc(d.todayLogs[0].checkInAt)}${d.todayLogs[0].checkOutAt ? ` ~ 퇴근 ${esc(d.todayLogs[0].checkOutAt)} (${worked(d.todayLogs[0].checkInAt, d.todayLogs[0].checkOutAt)})` : ''}` : ' 기록됨') : '아직 기록 없음'}</div></div>
+        ${hasToday ? (d.todayLogs[0].checkInAt && !d.todayLogs[0].checkOutAt ? `<button class="btn sm dark" data-act="log.checkout" data-id="${d.todayLogs[0].id}" style="min-height:44px">퇴근</button>` : `<a class="btn sm" href="#/log/${d.todayLogs[0].id}">보기</a>`) : '<button class="btn sm primary" data-act="sheet.record">출근</button>'}
       </div>`}
       ${sec('근무 기록 집계', '자세히 보기', '#/cal')}
       ${seg([['7', '7일'], ['14', '14일'], ['30', '30일']], S.rangeTab, 'home.range')}
@@ -223,17 +231,21 @@
       ${d.unsettled.length ? `<div class="card tight">${d.unsettled.slice(0, 5).map(i => invRow(i)).join('')}</div>` : `<div class="card"><div class="empty" style="padding:14px">못 받은 돈이 없습니다</div></div>`}
       ${sec('최근 출근', '전체 보기', '#/cal')}
       ${d.logs.length ? `<div class="card tight">${d.logs.slice(0, 4).map(logRow).join('')}</div>` : `<div class="card"><div class="empty" style="padding:14px">${kmonth(month)} 출근 기록이 없습니다</div></div>`}
+      <button class="fab" data-act="sheet.bot" aria-label="물어보기"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"/><path d="M15 2.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" fill="currentColor" stroke="none"/></svg>${d.unsettled.length ? `<i>${d.unsettled.length}</i>` : ''}</button>
     `, 'home')
   }
 
   // ------------------------------------------------------------ S-02 기록 방법 시트 ----
   function recordSheet(date) {
     date = date || todayKst()
-    sheet(`<h3>${date === todayKst() ? '오늘' : kshort(date)} 출근 기록</h3><div class="s">${kdate(date)} · 어떻게 넣을까요</div>
-      <button class="opt primary" data-act="nav" data-to="#/log/new?date=${date}"><span class="ic">✎</span><div><div class="t">직접 입력하기</div><div class="d">현장 → 근무 → 확인, 3번이면 끝</div></div><span class="chev">›</span></button>
+    const isToday = date === todayKst()
+    sheet(`<h3>${isToday ? '오늘' : kshort(date)} 출근 기록</h3><div class="s">${kdate(date)} · 어떻게 넣을까요</div>
+      ${isToday ? `<button class="opt primary" data-act="nav" data-to="#/checkin"><span class="ic">◎</span><div><div class="t">지금 출근 (GPS)</div><div class="d">현장 안인지 확인하고 시각까지 한 번에</div></div><span class="chev">›</span></button>` : ''}
+      <button class="opt ${isToday ? '' : 'primary'}" data-act="nav" data-to="#/log/new?date=${date}"><span class="ic">✎</span><div><div class="t">직접 입력하기</div><div class="d">현장 → 근무 → 확인, 3번이면 끝</div></div><span class="chev">›</span></button>
       <button class="opt" data-act="log.copy" data-date="${date}"><span class="ic">⟳</span><div><div class="t">어제 기록 그대로 복사</div><div class="d">직전 기록을 복제하고 날짜만 바꿉니다</div></div><span class="chev">›</span></button>
       <button class="opt" data-act="soon" data-msg="음성 입력은 다음 버전에 들어갑니다"><span class="ic">🎤</span><div><div class="t">음성으로 말하기</div><div class="d">“문정동 하루 일했어” 한 마디면 끝 · 준비 중</div></div><span class="chev">›</span></button>`)
   }
+  const worked = (a, b) => { if (!/^\d{2}:\d{2}$/.test(a || '') || !/^\d{2}:\d{2}$/.test(b || '')) return ''; let m = (+b.slice(0, 2) * 60 + +b.slice(3)) - (+a.slice(0, 2) * 60 + +a.slice(3)); if (m < 0) m += 1440; return `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` }
 
   // ------------------------------------------------------------ S-07 캘린더 ----
   async function renderCal(q) {
@@ -266,7 +278,7 @@
   async function renderSettle() {
     app.innerHTML = screen(`<div class="hdr"><div class="ttl">정산</div><div class="skeleton" style="background:rgba(255,255,255,.2)"></div></div>`, 'settle')
     const month = todayKst().slice(0, 7)
-    const [invs, pays] = await Promise.all([api('/invoices'), api('/payments?month=' + month)])
+    const [invs, pays, quotes] = await Promise.all([api('/invoices'), api('/payments?month=' + month), api('/quotes')])
     if (route().path !== 'settle') return
     await loadSites()
     const open = invs.filter(i => ['sent', 'partial', 'overdue'].includes(i.status)).sort((a, b) => (b.daysOverdue - a.daysOverdue) || a.dueDate.localeCompare(b.dueDate))
@@ -279,12 +291,15 @@
         <div class="line"><span>${+month.slice(5)}월 입금</span><span class="num">${won(paidMonth)}</span></div>
         <div class="line"><span>미입금 청구서</span><span class="num">${open.length}건${open.filter(i => i.status === 'overdue').length ? ` · <span class="red">예정일 지남 ${open.filter(i => i.status === 'overdue').length}건</span>` : ''}</span></div>
       </div>
-      <button class="btn primary" data-act="nav" data-to="#/invoice/new">새 청구서 만들기</button>
+      <div style="display:flex;gap:10px"><button class="btn" data-act="nav" data-to="#/quote/new" style="flex:0 0 38%">새 견적서</button><button class="btn primary" data-act="nav" data-to="#/invoice/new" style="flex:1">새 청구서 만들기</button></div>
       <div class="note" style="margin-top:10px">계좌를 연결하면 입금이 자동으로 기록됩니다 — 오픈뱅킹 이용기관 등록 후 제공 예정. 지금은 청구서에서 «입금 확인»으로 직접 기록합니다.</div>
+      ${quotes.length ? sec('견적서', '전체 보기', '#/quotes') + `<div class="card tight">${quotes.slice(0, 3).map(quoteRow).join('')}</div>` : ''}
       ${sec('미입금', '입금 내역', '#/payments')}
       ${open.length ? `<div class="card tight">${open.map(i => invRow(i)).join('')}</div>` : '<div class="card"><div class="empty" style="padding:14px">미입금 청구서가 없습니다</div></div>'}
       ${drafts.length ? sec('보내기 전 (미발송)') + `<div class="card tight">${drafts.map(i => invRow(i, { net: true })).join('')}</div>` : ''}
       ${paid.length ? sec('입금 완료') + `<div class="card tight">${paid.slice(0, 10).map(i => invRow(i, { net: true })).join('')}</div>` : ''}
+      ${sec('서류')}
+      <div class="card tight"><a class="row link" href="#/year"><div class="main"><div class="t">연간 세액 정산서</div><div class="s">현장 · 월 · 세액공제 방식별 합계 — 5월 종합소득세용</div></div><span class="chev">›</span></a></div>
     `, 'settle')
   }
 
@@ -312,7 +327,8 @@
       <div class="card tight">
         <a class="row link" href="#/sendlogs"><span style="font-size:22px;width:36px;text-align:center">✉</span><div class="main"><div class="t">보낸 기록</div><div class="s">청구 · 독촉을 언제 누구에게 보냈는지 — 분쟁 근거</div></div><span class="chev">›</span></a>
         <a class="row link" href="#/payments"><span style="font-size:22px;width:36px;text-align:center">₩</span><div class="main"><div class="t">입금 내역</div><div class="s">직접 기록한 입금 목록</div></div><span class="chev">›</span></a>
-        <button class="row link" data-act="soon" data-msg="연간 세액 정산서(PDF)는 다음 버전에 들어갑니다" style="width:100%;background:none;border:0;text-align:left"><span style="font-size:22px;width:36px;text-align:center">▤</span><div class="main"><div class="t">연간 세액 정산서</div><div class="s">올해 ${me.stats.yearDays}일 · 실수령 ${won(me.stats.yearNet)}</div></div><span class="badge">준비 중</span></button>
+        <a class="row link" href="#/year"><span style="font-size:22px;width:36px;text-align:center">▤</span><div class="main"><div class="t">연간 세액 정산서</div><div class="s">올해 ${me.stats.yearDays}일 · 실수령 ${won(me.stats.yearNet)}</div></div><span class="chev">›</span></a>
+        <a class="row link" href="#/quotes"><span style="font-size:22px;width:36px;text-align:center">≡</span><div class="main"><div class="t">견적서</div><div class="s">일 시작 전에 금액을 문서로 박아 두기 · 청구서로 전환</div></div><span class="chev">›</span></a>
       </div>
       <div class="version">JOBS ${esc(window.JOBS_VERSION || '')} · 기록은 삭제해도 보낸 기록은 남습니다</div>
     `, 'all')
@@ -423,9 +439,16 @@
     `, 'home')
   }
   function refreshLive() {
-    const d = S.draft; if (!d || !d.expenses) return
-    const c = calcDraft(d), set = (k, v) => app.querySelectorAll(`[data-live="${k}"]`).forEach(el => { el.textContent = v })
-    set('labor', won(c.labor + c.overtime)); set('charged', won(c.charged)); set('gross', won(c.gross)); set('tax', won(c.tax)); set('tax2', '− ' + won(c.tax)); set('net', won(c.net)); set('own', won(c.own))
+    const d = S.draft; if (!d) return
+    const set = (k, v) => app.querySelectorAll(`[data-live="${k}"]`).forEach(el => { el.textContent = v })
+    if (d.expenses) {
+      const c = calcDraft(d)
+      set('labor', won(c.labor + c.overtime)); set('charged', won(c.charged)); set('gross', won(c.gross)); set('tax', won(c.tax)); set('tax2', '− ' + won(c.tax)); set('net', won(c.net)); set('own', won(c.own))
+    } else if (d.items && d.vatMode) {
+      const c = calcQuoteDraft(d)
+      set('qlabor', won(c.labor)); set('qmaterial', won(c.material)); set('qvat', won(c.vat)); set('qtotal', won(c.total))
+      d.items.forEach((it, i) => set('qamt' + i, won(Math.round(num(it.qty) * num(it.unitPrice)))))
+    }
   }
 
   // ------------------------------------------------------------ S-11 청구서 (새로 만들기 · 미리보기) ----
@@ -508,14 +531,16 @@
     `, 'settle')
     S.draft = { inv: i }
   }
-  function sendSheet(i) {
-    const to = S.draft?.to ?? (i.site?.contactPhone || '')
-    sheet(`<h3>청구서 보내기</h3><div class="s">${esc(i.siteCompany || i.siteName)} · 실수령 ${won(i.net)} · 세액공제 ${TAX[i.taxMode]?.short}</div>
-      <div class="field" style="box-shadow:inset 0 0 0 1px var(--line2)"><label>받는 번호</label><input type="tel" data-bind="to" value="${esc(to)}" placeholder="010-0000-0000"></div>
-      <button class="opt primary" data-act="inv.send" data-ch="sms"><span class="ic">✉</span><div><div class="t">문자</div><div class="d">금액 요약 + 청구서 링크 (로그인 없이 열림)</div></div><span class="chev">›</span></button>
-      <button class="opt" data-act="inv.send" data-ch="kakao"><span class="ic">💬</span><div><div class="t">카카오톡</div><div class="d">알림톡 템플릿 심사 전까지 문자로 보냅니다</div></div><span class="chev">›</span></button>
-      <button class="opt" data-act="inv.send" data-ch="link"><span class="ic">🔗</span><div><div class="t">링크 공유 · 복사</div><div class="d">카톡 · 메일 등 원하는 앱으로 직접 보내기</div></div><span class="chev">›</span></button>
-      <button class="opt" data-act="inv.send" data-ch="pdf"><span class="ic">▤</span><div><div class="t">PDF로 내보내기</div><div class="d">인쇄 · 저장 · 다른 앱</div></div><span class="chev">›</span></button>
+  function sendSheet(o) {
+    // o: { title, sub, to, email, act }  — 청구서 · 견적서가 같은 시트를 쓴다 (S-10)
+    sheet(`<h3>${esc(o.title)}</h3><div class="s">${esc(o.sub)}</div>
+      <div class="field" style="box-shadow:inset 0 0 0 1px var(--line2)"><label>받는 번호</label><input type="tel" data-bind="to" value="${esc(o.to || '')}" placeholder="010-0000-0000"></div>
+      <div class="field" style="box-shadow:inset 0 0 0 1px var(--line2)"><label>받는 메일</label><input type="email" data-bind="email" value="${esc(o.email || '')}" placeholder="name@company.co.kr"></div>
+      <button class="opt primary" data-act="${o.act}" data-ch="sms"><span class="ic">✉</span><div><div class="t">문자</div><div class="d">금액 요약 + 문서 링크 (로그인 없이 열림)</div></div><span class="chev">›</span></button>
+      <button class="opt" data-act="${o.act}" data-ch="kakao"><span class="ic">💬</span><div><div class="t">카카오톡</div><div class="d">알림톡 템플릿 심사 전까지 문자로 보냅니다</div></div><span class="chev">›</span></button>
+      <button class="opt" data-act="${o.act}" data-ch="email"><span class="ic">@</span><div><div class="t">메일</div><div class="d">요약 + 문서 링크 (PDF 저장 가능)</div></div><span class="chev">›</span></button>
+      <button class="opt" data-act="${o.act}" data-ch="link"><span class="ic">🔗</span><div><div class="t">링크 공유 · 복사</div><div class="d">카톡 · 메일 등 원하는 앱으로 직접 보내기</div></div><span class="chev">›</span></button>
+      <button class="opt" data-act="${o.act}" data-ch="pdf"><span class="ic">▤</span><div><div class="t">PDF로 내보내기</div><div class="d">인쇄 · 저장 · 다른 앱</div></div><span class="chev">›</span></button>
       <div class="label" style="text-align:center;font-size:13px">보낸 기록을 남깁니다 (S-17)</div>`)
   }
 
@@ -558,8 +583,208 @@
       ${seg([['polite', '정중 (3일 이상)'], ['firm', '단호 (10일 이상)']], d.level, 'dun.level')}
       <textarea class="ta" data-bind="text" style="margin-top:10px">${esc(d.text)}</textarea>
       <div class="field" style="margin-top:10px"><label>받는 번호</label><input type="tel" data-bind="to" value="${esc(d.to)}" placeholder="010-0000-0000"></div>
+      <div class="field"><label>받는 메일 (선택)</label><input type="email" data-bind="email" value="${esc(d.email || '')}" placeholder="name@company.co.kr"><button type="button" class="act" data-act="dun.email">메일로</button></div>
       <div class="note">상대가 읽었는지(문자 수신)까지만 기록합니다. 보낸 기록은 S-17 «보낸 기록»에 남고 삭제되지 않습니다.</div>
       ${fixed('<button class="btn secondary" data-act="dun.copy">복사</button><button class="btn primary" data-act="dun.send">문자로 보내기</button>')}
+    `, 'settle')
+  }
+
+  // ------------------------------------------------------------ S-04 현장 도착 · GPS 출근 (전경 버전) ----
+  const km = m => (m >= 1000 ? (m / 1000).toFixed(1) + 'km' : m + 'm')
+  async function renderCheckin(q) {
+    await loadSites()
+    if (activeSites().length === 0) { app.innerHTML = screen(topbar('취소', '출근') + '<div class="card"><div class="empty"><b>현장이 없습니다</b>현장을 먼저 만들어 주세요</div><button class="btn primary" data-act="nav" data-to="#/site/new?return=log">현장 추가</button></div>', 'home'); return }
+    if (!S.draft) {
+      const recent = [...activeSites()].sort((a, b) => ((b.stats?.lastDate || '') > (a.stats?.lastDate || '') ? 1 : -1))
+      S.draft = { siteId: (siteById(q.site) || recent[0]).id, date: todayKst(), geo: null, geoErr: '', photos: [], loading: true }
+    }
+    const d = S.draft
+    if (d.loading) {
+      d.loading = false
+      app.innerHTML = screen(topbar('취소', '현장 도착 · 출근', '', { leftAct: 'nav', leftTo: '#/home' }) + '<div class="card"><div class="empty">위치 확인 중…</div></div>', 'home')
+      try { d.geo = await getGeo(); d.geoErr = '' } catch (e) { d.geo = null; d.geoErr = e.message }
+      if (route().path !== 'checkin') return
+    }
+    const site = siteById(d.siteId), dist = d.geo && site?.lat ? distM(d.geo, site) : null, inside = dist !== null && dist <= (site.geoRadius || 150)
+    const bar = d.geo
+      ? (site?.lat ? (inside ? `<div class="card sky" style="display:flex;align-items:center;gap:10px"><span style="color:var(--blue);font-weight:800">✓</span><b style="color:var(--blue)">등록된 현장 안에 있습니다 · ${dist}m</b></div>`
+        : `<div class="card danger"><b class="red">현장 밖입니다 · ${km(dist)}</b><div class="s">그래도 기록할 수 있습니다. 저장 시 «현장 밖»으로 남습니다.</div></div>`)
+        : `<div class="card"><b>위치는 기록됩니다</b><div class="s">이 현장에 핀이 없어 거리를 잴 수 없습니다 · <a href="#/site/${site.id}" style="text-decoration:underline">현장에 핀 찍기</a></div></div>`)
+      : `<div class="card danger"><b class="red">${esc(d.geoErr || '위치를 가져오지 못했습니다')}</b><div class="s">위치 없이도 출근 시각은 기록됩니다.</div><button class="btn sm" data-act="ci.geo" style="margin-top:8px">다시 확인</button></div>`
+    app.innerHTML = screen(`
+      ${topbar('취소', '현장 도착 · 출근', '', { leftAct: 'nav', leftTo: '#/home' })}
+      ${bar}
+      <div class="card" style="text-align:center;padding:22px 16px"><div class="label">출근 시각</div><div class="num" style="font-size:52px;font-weight:800;line-height:1.1">${nowHm()}</div><div class="label" style="margin-top:4px">${kdate(d.date)} · ${esc(site.name)}</div></div>
+      ${activeSites().length > 1 ? sec('현장') + `<div class="chips">${activeSites().map(s => `<button type="button" class="chip ${d.siteId === s.id ? 'on' : ''}" data-act="ci.site" data-id="${s.id}">${esc(s.name)}</button>`).join('')}</div>` : ''}
+      ${sec('확인')}
+      <div class="field"><label>현장 사진 찍기</label><span class="label">${d.photos.length ? `${d.photos.length}장` : '선택'}</span><button type="button" class="act" data-act="log.photo.add">찍기</button></div>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" multiple hidden>
+      ${d.photos.length ? `<div class="photos" style="margin-bottom:10px">${d.photos.map((p, i) => `<div class="ph"><img src="${p.uri}" alt=""><button type="button" class="x" data-act="log.photo.del" data-i="${i}">×</button></div>`).join('')}</div>` : ''}
+      <div class="field"><label>퇴근 알람</label><span class="label">${esc(site.clockOutTime || S.user.clockOutTime || '18:00')} · 홈에서 «퇴근»을 누르면 기록</span></div>
+      <div class="note">1일 ${won(site.dayRate)} · ${RULES[site.settlementRule]?.label || ''} · ${TAX[site.taxMode]?.short || ''} 로 기록됩니다. 연장 · 경비는 나중에 «수정»으로 넣을 수 있습니다.</div>
+      ${fixed('<button class="btn primary" data-act="ci.save">출근 기록</button>')}
+    `, 'home')
+  }
+
+  // ------------------------------------------------------------ S-12 봇 시트 ----
+  const BOT_CARDS = [['month', '이번 달 얼마 벌었어?'], ['unpaid', '못 받은 돈 있어?'], ['rate', '이 현장 단가 얼마지?'], ['tax', '세금 얼마 떼?'], ['compare', '지난달이랑 비교해 줘'], ['invoice', '청구서 만들어 줘']]
+  function botSheet() {
+    S.botDash = null
+    sheet(`<h3>물어보세요</h3><div class="s">숫자 먼저, 설명은 한 줄</div><div id="botAns"></div>
+      <div class="chips" style="margin-bottom:12px">${BOT_CARDS.map(([k, l]) => `<button type="button" class="chip" data-act="bot.ask" data-q="${k}">${l}</button>`).join('')}</div>
+      <div class="field" style="box-shadow:inset 0 0 0 1px var(--line2)"><input id="botq" placeholder="직접 묻기 (예: 이번 달 세금)" style="text-align:left"><button type="button" class="act" data-act="bot.free">보내기</button></div>
+      <button class="btn ghost" data-act="soon" data-msg="음성 질문은 다음 버전에 들어갑니다">🎤 음성으로 묻기 · 준비 중</button>`)
+  }
+  function botIntent(text) {
+    const t = (text || '').replace(/\s/g, '')
+    if (/청구서|청구/.test(t)) return 'invoice'
+    if (/지난달|비교|저번달/.test(t)) return 'compare'
+    if (/세금|공제|세액/.test(t)) return 'tax'
+    if (/단가|일당|시급/.test(t)) return 'rate'
+    if (/못받|미정산|미입금|안들어/.test(t)) return 'unpaid'
+    if (/얼마|벌|수익|실수령/.test(t)) return 'month'
+    return ''
+  }
+  async function botAnswer(kind) {
+    const box = document.getElementById('botAns'); if (!box) return
+    box.innerHTML = '<div class="ans label">생각 중…</div>'
+    const month = todayKst().slice(0, 7)
+    const d = S.botDash || (S.botDash = await api('/dashboard?month=' + month))
+    await loadSites()
+    let html = ''
+    switch (kind) {
+      case 'month': html = `<b class="big">${won(d.monthNet)}</b><div>${+month.slice(5)}월 실수령 · 출근 ${d.monthDays}일 · 청구 ${won(d.monthGross)} − 세액 ${won(d.monthTax)}</div>`; break
+      case 'unpaid': { const over = d.unsettled.filter(i => i.daysOverdue > 0).length
+        html = d.unsettled.length ? `<b class="big red">${won(d.kpi.unsettledAll)}</b><div>못 받은 청구서 ${d.unsettled.length}건${over ? ` · 예정일 지난 것 ${over}건` : ''}</div>${d.unsettled.slice(0, 3).map(i => `<div class="s">· ${esc(i.siteName)} ${won(i.remaining)}${i.daysOverdue ? ` <span class="red">(${i.daysOverdue}일 지남)</span>` : ''}</div>`).join('')}<a class="btn sm" href="#/settle" style="margin-top:8px">정산 탭으로</a>` : '<b class="big">0원</b><div>못 받은 돈이 없습니다</div>'; break }
+      case 'rate': html = activeSites().length ? activeSites().map(s => `<div class="s" style="padding:3px 0"><b>${esc(s.name)}</b> 1일 ${won(s.dayRate)} · 연장 ${won(s.overtimeRate || s.hourRate)} · ${TAX[s.taxMode]?.short || ''}</div>`).join('') : '<div>현장이 없습니다. 현장을 먼저 만들어 주세요.</div>'; break
+      case 'tax': html = `<b class="big red">− ${won(d.monthTax)}</b><div>${+month.slice(5)}월 세액공제 합계 · 기본 방식 ${TAX[S.user.defaultTaxMode]?.label || ''}</div>`; break
+      case 'compare': { const pm = shiftMonth(month, -1), p = await api('/dashboard?month=' + pm), diff = d.monthNet - p.monthNet
+        html = `<b class="big">${diff >= 0 ? '+' : '−'} ${won(Math.abs(diff))}</b><div>${+month.slice(5)}월 ${won(d.monthNet)} vs ${+pm.slice(5)}월 ${won(p.monthNet)} · 출근 ${d.monthDays}일 vs ${p.monthDays}일</div>`; break }
+      case 'invoice': html = `<b class="big">청구서 만들기</b><div>이번 달 출근 ${d.monthDays}일 · 실수령 ${won(d.monthNet)} · 현장별로 한 장씩 만듭니다</div><a class="btn sm primary" href="#/invoice/new" style="margin-top:8px">청구서 만들러 가기</a>`; break
+      default: html = '<div>아직 이 질문은 못 알아들어요. 위 카드 중에서 골라 주세요.</div>'
+    }
+    box.innerHTML = `<div class="ans">${html}</div>`
+  }
+
+  // ------------------------------------------------------------ S-15 연간 세액 정산서 ----
+  async function renderYear(q) {
+    const year = /^\d{4}$/.test(q.y || '') ? q.y : todayKst().slice(0, 4)
+    app.innerHTML = screen(topbar('뒤로', '연간 세액 정산서', '', { leftAct: 'nav', leftTo: '#/all' }) + '<div class="skeleton"></div>', 'all')
+    const y = await api('/year-summary?year=' + year)
+    if (route().path !== 'year') return
+    const max = Math.max(1, ...y.byMonth.map(m => m.net))
+    const years = y.years.includes(year) ? y.years : [year, ...y.years]
+    app.innerHTML = screen(`
+      ${topbar('뒤로', '연간 세액 정산서', 'PDF', { leftAct: 'nav', leftTo: '#/all', rightAct: 'year.pdf' })}
+      <div class="chips print-hide" style="margin-bottom:12px">${years.map(v => `<a class="chip ${v === year ? 'on' : ''}" href="#/year?y=${v}">${v}년</a>`).join('')}</div>
+      <div class="card doc"><div class="head"><div><div class="kind">세 액 정 산 서</div><div class="site">${year}년 · ${esc(y.user.name || '이름 미입력')}</div><div class="label">${y.user.bizNo ? '사업자 ' + esc(y.user.bizNo) + ' · ' : ''}${esc(ph(y.user.phone))} · 작성 ${kshort(y.generatedAt)}</div></div></div>
+        <div class="sum" style="padding:0"><div class="line"><span class="l">출근</span><span>${y.total.days}일</span></div><div class="line"><span class="l">청구 합계</span><span>${won(y.total.gross)}</span></div><div class="line"><span class="l">세액공제 합계</span><span class="red">− ${won(y.total.tax)}</span></div><div class="line net"><span class="l">실수령 합계</span><span>${won(y.total.net)}</span></div></div></div>
+      ${sec('세액공제 방식별 소계')}
+      <div class="card tight">${y.byTaxMode.length ? y.byTaxMode.map(m => `<div class="row"><div class="main"><div class="t">${esc(m.label)}</div><div class="s">출근 ${m.days}일 · 청구 ${won(m.gross)} · 세액 ${won(m.tax)}</div></div><div class="amt">${won(m.net)}</div></div>`).join('') : '<div class="empty" style="padding:14px">기록이 없습니다</div>'}</div>
+      ${sec('현장별')}
+      <div class="card tight">${y.bySite.length ? y.bySite.map(s => `<div class="row"><div class="main"><div class="t">${esc(s.siteName)}</div><div class="s">출근 ${s.days}일 · 청구 ${won(s.gross)} · 세액 ${won(s.tax)}</div></div><div class="amt">${won(s.net)}</div></div>`).join('') : '<div class="empty" style="padding:14px">기록이 없습니다</div>'}</div>
+      ${sec('월별 실수령')}
+      <div class="card"><div class="bars">${y.byMonth.map(m => `<div class="bar"><div class="v">${m.net ? man(m.net) : ''}</div><div class="b" style="height:${Math.max(2, Math.round(m.net / max * 100))}%${m.net ? '' : ';opacity:.25'}"></div><div class="m">${+m.month.slice(5)}</div></div>`).join('')}</div></div>
+      <div class="note">출근 기록 기준 자동 집계 · 편집 불가. 5월 종합소득세 신고의 참고 자료입니다. 세액은 앱의 계산값이므로 실제 원천징수영수증과 대조하세요.</div>
+    `, 'all')
+    document.title = `JOBS_세액정산_${year}_${y.user.name || ''}`
+  }
+
+  // ------------------------------------------------------------ S-09 견적서 ----
+  const QSTATUS = { draft: '초안', sent: '발송', converted: '청구서 전환' }
+  const quoteRow = q => `<a class="row link" href="#/quote/${q.id}"><span class="marker ${q.status === 'converted' ? '' : q.status === 'sent' ? 'blue' : 'dark'}"></span><div class="main"><div class="t">${esc(q.siteName || q.clientName || '견적서')} ${q.siteName && q.clientName ? `<span class="label" style="font-weight:500">${esc(q.clientName)}</span>` : ''}</div><div class="s">${q.periodStart ? period(q.periodStart, q.periodEnd || q.periodStart) : '기간 미정'} · ${QSTATUS[q.status] || q.status} · ${q.vatLabel}</div></div><div class="amt">${won(q.total)}</div></a>`
+  async function renderQuotes() {
+    app.innerHTML = screen(topbar('뒤로', '견적서', '', { leftAct: 'nav', leftTo: '#/settle' }) + '<div class="skeleton"></div>', 'settle')
+    const qs = await api('/quotes')
+    if (route().path !== 'quotes') return
+    app.innerHTML = screen(`
+      ${topbar('뒤로', '견적서', '', { leftAct: 'nav', leftTo: '#/settle' })}
+      <button class="btn primary" data-act="nav" data-to="#/quote/new">새 견적서</button>
+      <div class="note" style="margin-top:10px">일 시작 전에 금액을 문서로 박아 둡니다. 나중에 “그 금액 아니었다”를 막고, 일이 끝나면 청구서로 바로 바꿉니다.</div>
+      ${qs.length ? `<div class="card tight">${qs.map(quoteRow).join('')}</div>` : '<div class="card"><div class="empty">아직 견적서가 없습니다</div></div>'}
+    `, 'settle')
+  }
+  function calcQuoteDraft(d) {
+    let labor = 0, material = 0
+    for (const it of d.items) { const a = Math.round(num(it.qty) * num(it.unitPrice)); if (it.kind === 'material') material += a; else labor += a }
+    const subtotal = labor + material, vat = Math.round(subtotal * 0.1)
+    return { labor, material, subtotal, vat, total: d.vatMode === 'inclusive' ? subtotal + vat : subtotal, vatLabel: d.vatMode === 'inclusive' ? '부가세 포함' : '부가세 별도' }
+  }
+  async function renderQuote(id, q) {
+    await loadSites()
+    const isNew = id === 'new'
+    if (!S.draft) {
+      if (isNew) {
+        const site = siteById(q.site) || null
+        S.draft = { id: null, siteId: site?.id || '', clientName: site?.company || '', contactPhone: site?.contactPhone || '', periodStart: '', periodEnd: '', vatMode: 'exclusive', items: [{ kind: 'labor', name: '', qty: 1, unit: '공', unitPrice: site?.dayRate || '' }], status: 'draft', q: null }
+      } else {
+        const x = await api('/quotes/' + id)
+        S.draft = { id: x.id, siteId: x.siteId, clientName: x.clientName, contactPhone: x.contactPhone, periodStart: x.periodStart, periodEnd: x.periodEnd, vatMode: x.vatMode, items: x.items.map(it => ({ kind: it.kind, name: it.name, qty: it.qty, unit: it.unit, unitPrice: it.unitPrice })), status: x.status, q: x }
+      }
+    }
+    const d = S.draft, c = calcQuoteDraft(d), locked = d.status === 'converted'
+    app.innerHTML = screen(`
+      ${topbar('취소', isNew ? '견적서' : locked ? '견적서 (전환됨)' : '견적서 수정', '', { leftAct: 'nav', leftTo: '#/quotes' })}
+      ${locked ? `<div class="card sky"><b>청구서로 전환된 견적서입니다.</b><div class="s">수정할 수 없습니다. ${d.q?.invoice ? `<a href="#/invoice/${d.q.invoice.id}" style="text-decoration:underline">청구서 보기</a>` : ''}</div></div>` : ''}
+      ${sec('받는 곳')}
+      <div class="chips" style="margin-bottom:10px"><button type="button" class="chip ${!d.siteId ? 'on' : ''}" data-act="q.site" data-id="">현장 없음</button>${activeSites().map(s => `<button type="button" class="chip ${d.siteId === s.id ? 'on' : ''}" data-act="q.site" data-id="${s.id}">${esc(s.name)}</button>`).join('')}</div>
+      <div class="field"><label>업체</label><input data-bind="clientName" value="${esc(d.clientName)}" placeholder="대성건설" maxlength="60" ${locked ? 'disabled' : ''}></div>
+      <div class="field"><label>연락처</label><input type="tel" data-bind="contactPhone" value="${esc(d.contactPhone)}" placeholder="010-0000-0000" ${locked ? 'disabled' : ''}></div>
+      ${sec('공사 기간')}
+      <div class="two"><div class="field"><label>부터</label><input type="date" data-bind="periodStart" value="${esc(d.periodStart)}" ${locked ? 'disabled' : ''}></div><div class="field"><label>까지</label><input type="date" data-bind="periodEnd" value="${esc(d.periodEnd)}" ${locked ? 'disabled' : ''}></div></div>
+      ${sec('품목')}
+      ${d.items.map((it, i) => `<div class="card" style="padding:12px 16px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><div style="flex:1">${seg([['labor', '인력'], ['material', '자재 · 경비']], it.kind, 'q.kind', 'dark')}</div><button type="button" class="act red" data-act="q.item.del" data-i="${i}" style="flex:none" ${locked ? 'disabled' : ''}>삭제</button></div>
+        <input data-bind="items.${i}.name" value="${esc(it.name)}" placeholder="${it.kind === 'material' ? '합판, 피스, 주차비 …' : '목공 2인 × 3일'}" style="width:100%;border:0;background:var(--bg);border-radius:8px;padding:10px 12px;font-weight:700;margin-bottom:8px" maxlength="60" ${locked ? 'disabled' : ''}>
+        <div style="display:flex;gap:8px;align-items:center"><input type="tel" inputmode="decimal" data-bind="items.${i}.qty" value="${esc(it.qty)}" placeholder="수량" style="width:70px;border:0;background:var(--bg);border-radius:8px;padding:10px;text-align:right;font-weight:700" ${locked ? 'disabled' : ''}><input data-bind="items.${i}.unit" value="${esc(it.unit)}" placeholder="단위" style="width:56px;border:0;background:var(--bg);border-radius:8px;padding:10px;text-align:center" maxlength="10" ${locked ? 'disabled' : ''}><span class="label">×</span><input type="tel" inputmode="numeric" data-bind="items.${i}.unitPrice" data-money="1" value="${it.unitPrice ? fmt(it.unitPrice) : ''}" placeholder="단가" style="flex:1;min-width:0;border:0;background:var(--bg);border-radius:8px;padding:10px;text-align:right;font-weight:700" ${locked ? 'disabled' : ''}></div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px"><span class="label">금액</span><b class="num" data-live="qamt${i}">${won(Math.round(num(it.qty) * num(it.unitPrice)))}</b></div></div>`).join('')}
+      ${locked ? '' : `<div style="display:flex;gap:10px;margin-bottom:14px"><button type="button" class="btn" data-act="q.item.add" style="flex:1">＋ 직접 쓰기</button><button type="button" class="btn" data-act="soon" data-msg="음성으로 품목 넣기는 다음 버전에 들어갑니다" style="flex:1">🎤 음성으로 말하기</button></div>`}
+      ${sec('금액')}
+      <div class="sum">
+        <div class="line"><span class="l">인력</span><span data-live="qlabor">${won(c.labor)}</span></div>
+        <div class="line"><span class="l">자재 · 경비</span><span data-live="qmaterial">${won(c.material)}</span></div>
+        <div class="line" style="display:block">${seg([['exclusive', '부가세 별도'], ['inclusive', '부가세 포함']], d.vatMode, 'q.vat')}</div>
+        <div class="line"><span class="l">부가세 10%</span><span data-live="qvat">${won(c.vat)}</span></div>
+        <div class="line net"><span class="l">견적 합계</span><span data-live="qtotal">${won(c.total)}</span></div>
+      </div>
+      <div class="note">세액공제는 견적 단계에서 적용하지 않습니다 — 청구서에서만. 저장된 견적은 청구서로 전환할 때 실제 출근 기록과 나란히 비교됩니다.</div>
+      ${!isNew && !locked ? `<button class="btn ghost danger" data-act="q.del" data-id="${esc(id)}">견적서 삭제</button>` : ''}
+      ${!isNew && !locked && d.siteId ? `<a class="btn" href="#/quote/${id}/convert" style="margin-bottom:10px">청구서로 전환 (견적 vs 실제 비교)</a>` : ''}
+      ${locked ? '' : fixed(isNew ? '<button class="btn primary" data-act="q.save">저장</button>' : `<button class="btn secondary" data-act="q.save">저장</button><button class="btn primary" data-act="q.sendsheet">견적서 보내기</button>`)}
+    `, 'settle')
+  }
+
+  // ------------------------------------------------------------ S-16 견적 → 청구 전환 ----
+  async function renderConvert(id) {
+    if (!S.draft) S.draft = { id, useQuoteLabor: false, useQuoteMaterial: false, periodStart: '', periodEnd: '', taxMode: '', loading: true, p: null, error: '' }
+    const d = S.draft
+    if (d.loading) {
+      d.loading = false
+      app.innerHTML = screen(topbar('뒤로', '견적 → 청구 전환', '', { leftAct: 'nav', leftTo: '#/quote/' + id }) + '<div class="skeleton"></div>', 'settle')
+      try { d.p = await api(`/quotes/${id}/convert/preview`, { body: { useQuoteLabor: d.useQuoteLabor, useQuoteMaterial: d.useQuoteMaterial, ...(d.periodStart ? { periodStart: d.periodStart, periodEnd: d.periodEnd } : {}), ...(d.taxMode ? { taxMode: d.taxMode } : {}) } }); d.error = ''; d.periodStart = d.p.periodStart; d.periodEnd = d.p.periodEnd; d.taxMode = d.p.taxMode }
+      catch (e) { d.error = e.message; d.p = null }
+      if (route().path !== `quote/${id}/convert`) return
+    }
+    const p = d.p
+    const cmp = (label, c, key) => `<div class="card" style="padding:12px 16px"><div style="display:flex;justify-content:space-between;align-items:center"><b>${label} — 견적 금액 사용</b>${toggle(d[key], 'cv.toggle', `data-k="${key}"`)}</div>
+      <div class="sum" style="padding:0;margin-top:6px"><div class="line"><span class="l">견적</span><span>${won(c.quote)}</span></div><div class="line"><span class="l">실제 기록</span><span>${won(c.actual)}</span></div><div class="line"><span class="l">차이 (실제 − 견적)</span><span class="${c.diff ? 'red' : ''}">${c.diff >= 0 ? '+' : '−'} ${won(Math.abs(c.diff))}</span></div></div>
+      <div class="s label" style="margin-top:4px">${d[key] ? '견적 금액을 청구서에 씁니다' : '실제 기록을 씁니다 (기본)'}</div></div>`
+    app.innerHTML = screen(`
+      ${topbar('뒤로', '견적 → 청구 전환', '', { leftAct: 'nav', leftTo: '#/quote/' + id })}
+      ${d.error ? `<div class="card danger"><b>${esc(d.error)}</b><div class="s">${d.periodStart ? period(d.periodStart, d.periodEnd) : '견적서의 공사 기간'} 안에 청구서에 안 들어간 출근 기록이 있어야 합니다. 기간을 바꿔 보세요.</div></div>` : ''}
+      ${sec('청구 기간')}
+      <div class="two"><div class="field"><label>부터</label><input type="date" data-bind="periodStart" value="${esc(d.periodStart)}"></div><div class="field"><label>까지</label><input type="date" data-bind="periodEnd" value="${esc(d.periodEnd)}"></div></div>
+      ${p ? `
+        ${sec('견적 vs 실제', `출근 ${p.logCount}일`)}
+        ${cmp('인력', p.compare.labor, 'useQuoteLabor')}
+        ${cmp('자재 · 경비', p.compare.material, 'useQuoteMaterial')}
+        ${sec('세액공제')}
+        ${seg(Object.entries(TAX).map(([k, v]) => [k, v.short]), p.taxMode, 'cv.tax')}
+        ${sec('청구서 초안')}
+        <div class="card doc" style="margin-top:10px">${p.rows.map(r => `<div class="row ${r.excluded ? 'ex' : ''}"><div class="main"><div class="t">${esc(r.label)}</div><div class="s">${esc(r.detail)}</div></div><div class="amt">${r.excluded ? '제외' : won(r.amount)}</div></div>`).join('')}<div class="total"><span>청구 금액</span><b>${won(p.gross)}</b></div></div>
+        <div class="card blue"><div class="sum"><div class="line"><span class="l">청구 금액</span><span>${won(p.gross)}</span></div>${p.breakdown.parts.map(x => `<div class="line"><span class="l">${esc(x.label)}</span><span class="red">− ${won(x.amount)}</span></div>`).join('')}<div class="line net"><span class="l">실수령액</span><span>${won(p.net)}</span></div></div></div>
+        <div class="field"><label>입금 예정일</label><b>${kdate(p.dueDate)}</b></div>
+        ${fixed('<button class="btn primary" data-act="cv.create">청구서 초안 만들기</button>')}` : ''}
     `, 'settle')
   }
 
@@ -609,6 +834,13 @@
       <div class="note">잠금화면 알림(S-05)과 입금 알림은 앱 스토어 버전(푸시)에서 켜집니다. 지금은 설정값만 저장합니다.</div>
       ${sec('연결된 계좌')}
       <div class="card"><b>아직 연결할 수 없습니다</b><div class="s label" style="margin-top:4px">조회 전용 오픈뱅킹(금융결제원 이용기관 등록) 심사 후 제공합니다. 그때까지 입금은 청구서에서 직접 기록합니다.</div></div>
+      ${sec('계정 · 약관')}
+      <div class="card tight">
+        <a class="row link" href="/jobs/legal/terms" target="_blank" rel="noopener"><div class="main"><div class="t">이용약관</div></div><span class="chev">›</span></a>
+        <a class="row link" href="/jobs/legal/privacy" target="_blank" rel="noopener"><div class="main"><div class="t">개인정보처리방침</div></div><span class="chev">›</span></a>
+        <a class="row link" href="/jobs/legal/location" target="_blank" rel="noopener"><div class="main"><div class="t">위치정보 이용약관</div></div><span class="chev">›</span></a>
+        <button class="row link" data-act="soon" data-msg="회원 탈퇴는 미입금 청구서 확인 절차와 함께 다음 버전에 들어갑니다" style="width:100%;background:none;border:0;text-align:left"><div class="main"><div class="t red">회원 탈퇴</div></div><span class="badge">준비 중</span></button>
+      </div>
       <button class="btn ghost" data-act="logout">로그아웃</button>
       <div class="version">JOBS ${esc(window.JOBS_VERSION || '')}</div>
       ${fixed('<button class="btn primary" data-act="set.save">저장</button>')}
@@ -702,7 +934,65 @@
     async 'inv.photos.saved'() { await busy(async () => { const i = S.draft.inv; await api('/invoices/' + i.id, { method: 'PUT', body: { attachPhotos: !i.attachPhotos } }); S.draft = null; render() }) },
     'inv.pdf'() { const i = S.draft?.inv; if (i?.shareUrl) window.open(i.shareUrl, '_blank') },
     async 'inv.share'() { const i = S.draft?.inv; if (!i) return; if (navigator.share) { try { await navigator.share({ title: `${i.siteName} 청구서`, text: `실수령 ${won(i.net)} · 입금 예정일 ${i.dueDate}`, url: i.shareUrl }) } catch { /* 취소 */ } } else copyText(i.shareUrl) },
-    'inv.sendsheet'() { S.draft.to = S.draft.to ?? S.draft.inv.site?.contactPhone ?? ''; sendSheet(S.draft.inv) },
+    'inv.sendsheet'() { const i = S.draft.inv; S.draft.to = S.draft.to ?? i.site?.contactPhone ?? ''; S.draft.email = S.draft.email ?? ''; sendSheet({ title: '청구서 보내기', sub: `${i.siteCompany || i.siteName} · 실수령 ${won(i.net)} · 세액공제 ${TAX[i.taxMode]?.short}`, to: S.draft.to, email: S.draft.email, act: 'inv.send' }) },
+    'sheet.bot'() { botSheet() },
+    'bot.ask'(el) { botAnswer(el.dataset.q).catch(e => toast(e.message, true)) },
+    'bot.free'() { const el = document.getElementById('botq'); botAnswer(botIntent(el?.value)).catch(e => toast(e.message, true)) },
+    async 'log.checkout'(el) { await busy(async () => { let geo = null; try { geo = await getGeo() } catch { geo = null } ; const l = await api('/worklogs/' + el.dataset.id, { method: 'PUT', body: { checkOutAt: nowHm(), checkOutOnly: true, ...(geo ? { checkOutLat: geo.lat, checkOutLng: geo.lng } : {}) } }); toast(`퇴근 ${l.checkOutAt} 기록 · 근무 ${worked(l.checkInAt, l.checkOutAt) || '-'}`); render() }) },
+    // S-04 GPS 출근
+    'ci.geo'() { S.draft.loading = true; render() },
+    'ci.site'(el) { S.draft.siteId = el.dataset.id; render() },
+    async 'ci.save'() {
+      const d = S.draft, site = siteById(d.siteId), dist = d.geo && site?.lat ? distM(d.geo, site) : null
+      if (dist !== null && dist > (site.geoRadius || 150) && !confirm(`현장 밖입니다 (${km(dist)}). 그래도 출근을 기록할까요?`)) return
+      await busy(async () => {
+        try {
+          const l = await api('/worklogs', { body: { siteId: d.siteId, date: d.date, source: 'gps', attendance: 'full', checkInAt: nowHm(), photos: d.photos, ...(d.geo ? { checkInLat: d.geo.lat, checkInLng: d.geo.lng, geoDistanceM: dist } : {}) } })
+          toast(`${l.siteName} 출근 ${l.checkInAt}${dist !== null ? (dist <= (site.geoRadius || 150) ? ` · 현장 안 ${dist}m` : ` · 현장 밖 ${km(dist)}`) : ''}`)
+          S.month = l.date.slice(0, 7); S.sites = null; S.draft = null; go('#/home')
+        } catch (e) {
+          if (e.status === 409 && e.data?.existingId) { if (confirm('오늘 이 현장 기록이 이미 있습니다. 열어 볼까요?')) { S.draft = null; go('#/log/' + e.data.existingId) } ; return }
+          throw e
+        }
+      })
+    },
+    'year.pdf'() { window.print() },
+    // 견적서
+    'q.site'(el) { const d = S.draft; d.siteId = el.dataset.id; const s = siteById(d.siteId); if (s) { if (!d.clientName) d.clientName = s.company || ''; if (!d.contactPhone) d.contactPhone = s.contactPhone || '' } ; render() },
+    'q.kind'(el) { const card = el.closest('.card'); const i = [...app.querySelectorAll('[data-act="q.item.del"]')].findIndex(b => b.closest('.card') === card); if (i >= 0) { S.draft.items[i].kind = el.dataset.v; render() } },
+    'q.item.add'() { S.draft.items.push({ kind: 'material', name: '', qty: 1, unit: '식', unitPrice: '' }); render(); setTimeout(() => app.querySelector(`[data-bind="items.${S.draft.items.length - 1}.name"]`)?.focus(), 50) },
+    'q.item.del'(el) { S.draft.items.splice(+el.dataset.i, 1); if (!S.draft.items.length) S.draft.items.push({ kind: 'labor', name: '', qty: 1, unit: '공', unitPrice: '' }); render() },
+    'q.vat'(el) { S.draft.vatMode = el.dataset.v; render() },
+    async 'q.save'() {
+      const d = S.draft
+      const items = d.items.map(it => ({ kind: it.kind, name: it.name, qty: num(it.qty), unit: it.unit, unitPrice: num(it.unitPrice) })).filter(it => it.name || it.unitPrice)
+      if (!items.length) return toast('품목을 한 줄 이상 넣어 주세요', true)
+      if (!d.clientName && !d.siteId) return toast('받는 곳(업체) 또는 현장을 골라 주세요', true)
+      await busy(async () => {
+        const body = { siteId: d.siteId, clientName: d.clientName, contactPhone: d.contactPhone, periodStart: d.periodStart, periodEnd: d.periodEnd, vatMode: d.vatMode, items }
+        const q = d.id ? await api('/quotes/' + d.id, { method: 'PUT', body }) : await api('/quotes', { body })
+        toast(`견적서 저장 · 합계 ${won(q.total)}`); S.draft = null; go('#/quote/' + q.id)
+      })
+    },
+    async 'q.del'(el) { if (!confirm('견적서를 삭제할까요?')) return; await busy(async () => { await api('/quotes/' + el.dataset.id, { method: 'DELETE' }); toast('삭제했습니다'); S.draft = null; go('#/quotes') }) },
+    'q.sendsheet'() { const d = S.draft; d.to = d.to ?? d.contactPhone ?? ''; d.email = d.email ?? ''; const c = calcQuoteDraft(d); sendSheet({ title: '견적서 보내기', sub: `${d.clientName || siteById(d.siteId)?.name || ''} · 합계 ${won(c.total)} (${c.vatLabel})`, to: d.to, email: d.email, act: 'q.send' }) },
+    async 'q.send'(el) {
+      const d = S.draft, chn = el.dataset.ch
+      await busy(async () => {
+        const r = await api(`/quotes/${d.id}/send`, { body: { channel: chn, to: chn === 'email' ? d.email : d.to } })
+        closeSheet()
+        if (chn === 'link') { if (navigator.share) { try { await navigator.share({ title: '견적서', text: r.text, url: r.link }) } catch { /* 취소 */ } } else await copyText(r.text) }
+        else if (chn === 'pdf') window.open(r.link, '_blank')
+        else toast(chn === 'email' ? '메일로 보냈습니다' : chn === 'kakao' ? '카카오톡 대신 문자로 보냈습니다' : '문자로 보냈습니다')
+        S.draft = null; render()
+      })
+    },
+    // S-16 전환
+    'cv.toggle'(el) { const d = S.draft; d[el.dataset.k] = !d[el.dataset.k]; d.loading = true; render() },
+    'cv.tax'(el) { S.draft.taxMode = el.dataset.v; S.draft.loading = true; render() },
+    async 'cv.create'() { await busy(async () => { const d = S.draft; const i = await api(`/quotes/${d.id}/convert`, { body: { periodStart: d.periodStart, periodEnd: d.periodEnd, taxMode: d.taxMode, useQuoteLabor: d.useQuoteLabor, useQuoteMaterial: d.useQuoteMaterial } }); toast('청구서 초안을 만들었습니다'); S.draft = null; go('#/invoice/' + i.id) }) },
+    async 'dun.email'() { await busy(async () => { const d = S.draft; if (!d.email) return toast('받는 메일 주소를 입력해 주세요', true); await api(`/invoices/${d.id}/dunning`, { body: { level: d.level, channel: 'email', to: d.email, text: d.text } }); toast('독촉 메일을 보냈습니다'); S.draft = null; go('#/invoice/' + d.id) }) },
+
     async 'inv.send'(el) {
       const i = S.draft.inv, chn = el.dataset.ch
       await busy(async () => {
@@ -712,8 +1002,8 @@
           S.draft = null; render(); return
         }
         if (chn === 'pdf') { await api(`/invoices/${i.id}/send`, { body: { channel: 'pdf' } }); closeSheet(); window.open(i.shareUrl, '_blank'); S.draft = null; render(); return }
-        const r = await api(`/invoices/${i.id}/send`, { body: { channel: chn, to: S.draft.to } })
-        closeSheet(); toast(chn === 'kakao' ? '카카오톡 대신 문자로 보냈습니다' : '문자로 보냈습니다'); S.draft = null; render()
+        await api(`/invoices/${i.id}/send`, { body: { channel: chn, to: chn === 'email' ? S.draft.email : S.draft.to } })
+        closeSheet(); toast(chn === 'email' ? '메일로 보냈습니다' : chn === 'kakao' ? '카카오톡 대신 문자로 보냈습니다' : '문자로 보냈습니다'); S.draft = null; render()
       })
     },
     async 'inv.del'(el) { if (!confirm('청구서를 삭제할까요? 출근 기록은 남고 다시 청구서를 만들 수 있습니다.')) return; await busy(async () => { await api('/invoices/' + el.dataset.id, { method: 'DELETE' }); toast('삭제했습니다'); S.draft = null; go('#/settle') }) },
@@ -766,7 +1056,7 @@
     }
     if (el.dataset && el.dataset.bind) {
       setBind(el.dataset.bind, el.dataset.money ? num(el.value) : el.value)
-      if (['periodStart', 'periodEnd'].includes(el.dataset.bind) && S.draft && 'preview' in S.draft && isYmd(S.draft.periodStart) && isYmd(S.draft.periodEnd)) { S.draft.loading = true; render() }
+      if (['periodStart', 'periodEnd'].includes(el.dataset.bind) && S.draft && ('preview' in S.draft || 'useQuoteLabor' in S.draft) && isYmd(S.draft.periodStart) && isYmd(S.draft.periodEnd)) { S.draft.loading = true; render() }
       if (el.dataset.bind === 'date' && S.draft && 'expenses' in S.draft) render()
     }
   })

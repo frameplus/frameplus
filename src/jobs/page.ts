@@ -1,7 +1,8 @@
 // ============================================================================
 // JOBS — 서버가 내려주는 HTML: 앱 셸(/jobs) 과 공개 청구서 뷰(/jobs/v/:token)
 // ============================================================================
-import { TAX_MODES, type TaxMode, type InvoiceRow, fmt, retaxInvoice } from './calc'
+import { TAX_MODES, type TaxMode, type InvoiceRow, type QuoteItem, type QuoteCalc, fmt, retaxInvoice, quoteItemAmount } from './calc'
+import { LEGAL_TITLES, LEGAL_BODY, type LegalKind } from './legal'
 
 export const JOBS_VERSION = '0.1.0'
 
@@ -126,4 +127,75 @@ export function renderPublicInvoice(data: { inv: any; photos: any[]; logs: any[]
 </div>
 </body>
 </html>`
+}
+
+const DOC_CSS = `
+  *{box-sizing:border-box} body{margin:0;background:#F2F2F7;color:#1C1C1E;font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif;-webkit-font-smoothing:antialiased;font-size:15px}
+  .wrap{max-width:560px;margin:0 auto;padding:16px 16px 60px} .card{background:#fff;border-radius:12px;padding:18px 16px;margin-bottom:14px}
+  h1{font-size:24px;margin:0 0 4px;letter-spacing:.3em} .sub{color:#6B6B6B;font-size:15px;margin:0 0 2px} .site{font-size:22px;font-weight:800;margin:10px 0 2px}
+  .badge{display:inline-block;background:#F2F2F7;color:#3C3C43;border-radius:8px;padding:4px 10px;font-size:13px;font-weight:700} .badge.blue{background:#EAF2FC;color:#0A6CD6}
+  table{width:100%;border-collapse:collapse} td{padding:12px 0;box-shadow:inset 0 -1px 0 #EFEFF4;vertical-align:middle}
+  .lb{font-weight:700} .dt{color:#6B6B6B;font-size:13px;margin-top:2px} .amt{text-align:right;font-variant-numeric:tabular-nums;letter-spacing:-.03em;font-weight:600;white-space:nowrap}
+  .total{display:flex;justify-content:space-between;align-items:baseline;padding:14px 0 2px} .total b{font-size:24px;font-variant-numeric:tabular-nums;letter-spacing:-.03em}
+  .blue{background:#0A6CD6;color:#fff} .line{display:flex;justify-content:space-between;padding:7px 0;font-variant-numeric:tabular-nums}
+  .net{display:flex;justify-content:space-between;align-items:baseline;border-top:1px solid rgba(255,255,255,.35);margin-top:8px;padding-top:12px} .net b{font-size:30px;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+  h2{font-size:15px;color:#6B6B6B;margin:0 0 10px;font-weight:700} .kv{display:flex;justify-content:space-between;padding:8px 0;box-shadow:inset 0 -1px 0 #EFEFF4} .kv span:first-child{color:#6B6B6B}
+  .foot{color:#6B6B6B;font-size:13px;text-align:center;line-height:1.6} .btn{display:block;width:100%;height:56px;border:0;border-radius:12px;background:#0A6CD6;color:#fff;font-size:17px;font-weight:700;margin-top:6px}
+  .group{color:#6B6B6B;font-size:13px;font-weight:700;padding:12px 0 2px}
+  @media print{body{background:#fff}.btn{display:none}.card{border:1px solid #ddd;break-inside:avoid}}
+`
+
+/** 공개 견적서 — 문자 · 메일 링크의 목적지 */
+export function renderPublicQuote(data: { q: any; items: QuoteItem[]; calc: QuoteCalc }): string {
+  const { q, items, calc } = data
+  const statusKo: Record<string, string> = { draft: '초안', sent: '발송', converted: '청구서 전환' }
+  const group = (kind: 'labor' | 'material') => items.filter(i => i.kind === kind).map(i => `
+    <tr><td><div class="lb">${esc(i.name || '-')}</div><div class="dt">${esc(String(i.qty))}${esc(i.unit)} × ${fmt(i.unitPrice)}원</div></td><td class="amt">${fmt(quoteItemAmount(i))}원</td></tr>`).join('')
+  const periodTxt = q.period_start ? `${esc(kdate(q.period_start))} ~ ${esc(kdate(q.period_end || q.period_start))}` : '기간 미정'
+  return `<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>견적서 — ${esc(q.site_name || q.client_name || '')}</title><style>${DOC_CSS}</style></head>
+<body><div class="wrap">
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start"><div><h1>견 적 서</h1><p class="sub">${esc(q.client_name || '')} 귀하</p></div><span class="badge ${q.status === 'sent' ? 'blue' : ''}">${esc(statusKo[q.status] || q.status)}</span></div>
+    <div class="site">${esc(q.site_name || q.client_name || '')}</div>
+    <p class="sub">공사 기간 ${periodTxt}</p>
+    ${items.some(i => i.kind === 'labor') ? `<div class="group">인력</div><table>${group('labor')}</table>` : ''}
+    ${items.some(i => i.kind === 'material') ? `<div class="group">자재 · 경비</div><table>${group('material')}</table>` : ''}
+    <div class="kv" style="margin-top:8px"><span>인력</span><b>${fmt(calc.labor)}원</b></div>
+    <div class="kv"><span>자재 · 경비</span><b>${fmt(calc.material)}원</b></div>
+    ${calc.vatMode === 'inclusive' ? `<div class="kv"><span>부가세 10%</span><b>${fmt(calc.vat)}원</b></div>` : ''}
+    <div class="total"><span>견적 합계 <small style="color:#6B6B6B">(${esc(calc.vatLabel)})</small></span><b>${fmt(calc.total)}원</b></div>
+  </section>
+  <section class="card">
+    <div class="kv"><span>보내는 사람</span><b>${esc(q.user_name || '')} ${esc(q.user_phone ? String(q.user_phone).replace(/(\d{3})(\d{3,4})(\d{4})/, '$1-$2-$3') : '')}</b></div>
+    ${q.user_biz ? `<div class="kv"><span>사업자번호</span><b>${esc(q.user_biz)}</b></div>` : ''}
+    ${q.contact_phone ? `<div class="kv"><span>받는 분 연락처</span><b>${esc(q.contact_phone)}</b></div>` : ''}
+    <div class="kv"><span>세액공제</span><span style="color:#6B6B6B">견적 단계에서는 적용하지 않음 — 청구서에서 반영</span></div>
+  </section>
+  <p class="foot">이 견적서는 JOBS 앱에서 생성되었습니다.<br>작성 ${esc(kdate((q.created_at || '').slice(0, 10)))}</p>
+  <button class="btn" onclick="window.print()">PDF로 저장 · 인쇄</button>
+</div></body></html>`
+}
+
+/** 약관 · 개인정보처리방침 · 위치정보 이용약관 (초안) */
+export function renderLegalPage(kind: LegalKind): string {
+  const title = LEGAL_TITLES[kind]
+  const nav = (Object.keys(LEGAL_TITLES) as LegalKind[]).map(k => `<a href="/jobs/legal/${k}" ${k === kind ? 'class="on"' : ''}>${esc(LEGAL_TITLES[k].replace('JOBS ', ''))}</a>`).join('')
+  return `<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>
+<style>
+  *{box-sizing:border-box} body{margin:0;background:#F2F2F7;color:#1C1C1E;font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif;font-size:15px;line-height:1.65}
+  .wrap{max-width:640px;margin:0 auto;padding:16px 16px 60px} .nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px} .nav a{padding:8px 12px;border-radius:999px;background:#fff;color:#1C1C1E;text-decoration:none;font-weight:700;font-size:14px;box-shadow:inset 0 0 0 1px #E5E5EA} .nav a.on{background:#0A6CD6;color:#fff;box-shadow:none}
+  .draft{background:#FDE7E7;color:#E00000;border-radius:12px;padding:12px 14px;font-weight:700;margin-bottom:12px;font-size:14px}
+  .card{background:#fff;border-radius:12px;padding:20px 18px} h1{font-size:22px;margin:0 0 14px} h2{font-size:16px;margin:22px 0 6px} ol,ul{padding-left:20px} li{margin:4px 0}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0} th,td{border:1px solid #E5E5EA;padding:8px;text-align:left;vertical-align:top} th{background:#F9F9FB}
+  .eff{color:#6B6B6B;margin-top:24px;font-size:14px} .back{display:inline-block;margin-top:16px;color:#1C1C1E;font-weight:700}
+</style></head>
+<body><div class="wrap">
+  <div class="nav">${nav}</div>
+  <div class="draft">초안 — 법무 검토 전 문서입니다. «[ ]» 표시는 회사 정보로 채워야 하며, [확인 필요] 항목은 시행 전 확정해야 합니다.</div>
+  <div class="card"><h1>${esc(title)}</h1>${LEGAL_BODY[kind]}</div>
+  <a class="back" href="/jobs/#/settings">← JOBS 앱으로 돌아가기</a>
+</div></body></html>`
 }

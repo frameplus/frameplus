@@ -373,3 +373,72 @@ export function matchPayment(p: { amount: number; payerName: string }, invoices:
   }
   return { matchedBy, siteId, allocations, remainder: left, needsReview: left > 0 }
 }
+
+// ----------------------------------------------------------------------------
+// 견적서 (S-09) — 작업 전 금액을 문서로. 세액공제는 견적 단계에서 적용하지 않는다(청구서에서만).
+// ----------------------------------------------------------------------------
+export type VatMode = 'exclusive' | 'inclusive'
+export type QuoteItemKind = 'labor' | 'material'
+export interface QuoteItem { kind: QuoteItemKind; name: string; qty: number; unit: string; unitPrice: number }
+export interface QuoteCalc { labor: number; material: number; subtotal: number; vat: number; total: number; vatMode: VatMode; vatLabel: string }
+export const isVatMode = (v: unknown): v is VatMode => v === 'exclusive' || v === 'inclusive'
+export const isQuoteItemKind = (v: unknown): v is QuoteItemKind => v === 'labor' || v === 'material'
+export const quoteItemAmount = (it: QuoteItem): number => Math.round((Number(it.qty) || 0) * (Number(it.unitPrice) || 0))
+/** [가정] 별도 = 합계는 공급가액만(문서에 «부가세 별도» 명기), 포함 = 합계에 10% 를 더해 «부가세 포함» 표시 */
+export function calcQuote(items: QuoteItem[], vatMode: VatMode): QuoteCalc {
+  let labor = 0, material = 0
+  for (const it of items) { const a = quoteItemAmount(it); if (it.kind === 'material') material += a; else labor += a }
+  const subtotal = labor + material, vat = Math.round(subtotal * 0.1)
+  return vatMode === 'inclusive'
+    ? { labor, material, subtotal, vat, total: subtotal + vat, vatMode, vatLabel: '부가세 포함' }
+    : { labor, material, subtotal, vat, total: subtotal, vatMode, vatLabel: '부가세 별도' }
+}
+
+/**
+ * S-16 견적 → 청구 전환. 기본값은 실제 기록. 인력 / 자재·경비 묶음 단위로 견적 금액을 쓸 수 있다.
+ * [가정] 명세의 «줄마다 선택»을 인력 · 자재 두 묶음으로 단순화. 전환은 공급가액 기준(부가세 행은 넣지 않음) [확인 필요].
+ */
+export function applyQuoteToRows(rows: InvoiceRow[], quote: QuoteCalc, use: { labor: boolean; material: boolean }): InvoiceRow[] {
+  let out = rows.slice()
+  if (use.labor) {
+    out = out.filter(r => r.kind !== 'labor' && r.kind !== 'half' && r.kind !== 'overtime')
+    out.unshift({ kind: 'labor', label: '인력 (견적)', detail: '견적서 금액 적용', qty: 1, unitPrice: quote.labor, amount: quote.labor, excluded: false })
+  }
+  if (use.material) {
+    out = out.filter(r => r.kind !== 'expense')
+    const at = out.findIndex(r => r.excluded)
+    const row: InvoiceRow = { kind: 'expense', label: '자재 · 경비 (견적)', detail: '견적서 금액 적용', qty: 1, unitPrice: quote.material, amount: quote.material, excluded: false }
+    if (at < 0) out.push(row); else out.splice(at, 0, row)
+  }
+  return out
+}
+
+// ----------------------------------------------------------------------------
+// 연간 세액 정산서 (S-15) — WorkLog 집계, 편집 불가. taxMode 별 소계 분리.
+// ----------------------------------------------------------------------------
+export interface YearLogLike { date: string; siteId: string; siteName: string; taxMode: TaxMode; attendance: Attendance; gross: number; tax: number; net: number }
+export interface YearTotals { days: number; gross: number; tax: number; net: number }
+export interface YearSummary {
+  year: string
+  total: YearTotals
+  bySite: ({ siteId: string; siteName: string } & YearTotals)[]
+  byMonth: ({ month: string } & YearTotals)[]
+  byTaxMode: ({ taxMode: TaxMode; label: string } & YearTotals)[]
+}
+export function summarizeYear(logs: YearLogLike[], year: string): YearSummary {
+  const zero = (): YearTotals => ({ days: 0, gross: 0, tax: 0, net: 0 })
+  const total = zero()
+  const site = new Map<string, YearSummary['bySite'][0]>()
+  const byMonth = Array.from({ length: 12 }, (_, i) => ({ month: `${year}-${String(i + 1).padStart(2, '0')}`, ...zero() }))
+  const mode = new Map<TaxMode, YearSummary['byTaxMode'][0]>()
+  for (const l of logs) {
+    if (!l.date.startsWith(year + '-')) continue
+    const d = l.attendance === 'half' ? 0.5 : 1
+    const add = (t: YearTotals) => { t.days += d; t.gross += l.gross || 0; t.tax += l.tax || 0; t.net += l.net || 0 }
+    add(total)
+    const s = site.get(l.siteId) || { siteId: l.siteId, siteName: l.siteName, ...zero() }; add(s); site.set(l.siteId, s)
+    add(byMonth[+l.date.slice(5, 7) - 1])
+    const m = mode.get(l.taxMode) || { taxMode: l.taxMode, label: TAX_MODES[l.taxMode]?.label || l.taxMode, ...zero() }; add(m); mode.set(l.taxMode, m)
+  }
+  return { year, total, bySite: [...site.values()].sort((a, b) => b.net - a.net), byMonth, byTaxMode: [...mode.values()].sort((a, b) => b.net - a.net) }
+}

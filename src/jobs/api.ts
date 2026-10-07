@@ -8,6 +8,7 @@ import {
   type TaxMode, type SettlementRule, type Attendance, type InvoiceStatus, type InvoiceRow, type ExpenseType,
   TAX_MODES, EXPENSE_TYPES, isTaxMode, isSettlementRule, isExpenseType, isYmd, todayKst, monthEnd, addDays, daysBetween,
   calcWorkLog, buildInvoice, retaxInvoice, dueDateFor, invoiceStatus, dunningLevel, fmt,
+  type QuoteItem, type VatMode, calcQuote, quoteItemAmount, isVatMode, isQuoteItemKind, applyQuoteToRows, summarizeYear,
 } from './calc'
 
 export type JobsBindings = {
@@ -18,7 +19,8 @@ export type JobsBindings = {
   JOBS_PUBLIC_ORIGIN?: string
 }
 export type SmsSender = (env: any, opts: { to: string; text: string; type?: 'SMS' | 'LMS'; subject?: string }) => Promise<{ ok: boolean; error?: string }>
-export type JobsDeps = { sendSms: SmsSender; version: string }
+export type EmailSender = (env: any, opts: { to: string; subject: string; html: string }) => Promise<{ ok: boolean; error?: string }>
+export type JobsDeps = { sendSms: SmsSender; sendEmail: EmailSender; version: string }
 
 type UserRow = { id: string; phone: string; name: string; biz_no: string; default_tax_mode: TaxMode; clock_out_time: string; notif_prefs: string; status: string; created_at: string }
 type Env = { Bindings: JobsBindings; Variables: { jobsUser: UserRow } }
@@ -342,6 +344,14 @@ export function createJobsApi(deps: JobsDeps) {
     const u: UserRow = c.get('jobsUser'), db: D1Database = c.env.DB
     const body = await c.req.json().catch(() => null)
     if (!body || typeof body !== 'object') return c.json({ error: '잘못된 요청입니다' }, 400)
+    if (existing && body.checkOutOnly === true) {
+      // S-05 «퇴근 기록» — 시각 · 위치만 바꾸므로 청구서에 들어간 기록이어도 허용 (금액 불변)
+      const checkOutAt = hhmm(body.checkOutAt) || str(body.checkOutAt, 30)
+      await db.prepare('UPDATE jobs_worklogs SET check_out_at = ?, check_out_lat = ?, check_out_lng = ?, updated_at = ? WHERE id = ? AND user_id = ?')
+        .bind(checkOutAt, body.checkOutLat !== undefined ? numOrNull(body.checkOutLat) : existing.check_out_lat, body.checkOutLng !== undefined ? numOrNull(body.checkOutLng) : existing.check_out_lng, nowIso(), existing.id, u.id).run()
+      const rows = await loadLogs(db, u.id, 'AND w.id = ?', [existing.id])
+      return c.json(logOut(rows[0]))
+    }
     if (existing?.invoice_id) return c.json({ error: '청구서에 들어간 기록입니다. 청구서를 삭제한 뒤 수정해 주세요', invoiceId: existing.invoice_id }, 409)
     const siteId = str(body.siteId !== undefined ? body.siteId : existing?.site_id, 40)
     const site = siteId ? await loadSite(db, u.id, siteId) : null
@@ -410,8 +420,9 @@ export function createJobsApi(deps: JobsDeps) {
         const dup = await db.prepare('SELECT id FROM jobs_worklogs WHERE user_id = ? AND site_id = ? AND date = ? AND id != ?').bind(u.id, siteId, date, id).first<any>()
         if (dup) return c.json({ error: '이 날짜에 이 현장 기록이 이미 있습니다', existingId: dup.id }, 409)
       }
-      stmts.push(db.prepare(`UPDATE jobs_worklogs SET site_id=?, date=?, check_in_at=?, check_out_at=?, attendance=?, overtime_hours=?, day_rate=?, hour_rate=?, tax_mode_override=?, gross=?, tax=?, net=?, edited_manually=1, memo=?, updated_at=? WHERE id = ? AND user_id = ?`).bind(
-        siteId, date, checkInAt, checkOutAt, attendance, overtimeHours, dayRate, hourRate, taxModeOverride, amounts.gross, amounts.tax, amounts.net,
+      stmts.push(db.prepare(`UPDATE jobs_worklogs SET site_id=?, date=?, check_in_at=?, check_out_at=?, check_out_lat=?, check_out_lng=?, attendance=?, overtime_hours=?, day_rate=?, hour_rate=?, tax_mode_override=?, gross=?, tax=?, net=?, edited_manually=?, memo=?, updated_at=? WHERE id = ? AND user_id = ?`).bind(
+        siteId, date, checkInAt, checkOutAt, body.checkOutLat !== undefined ? numOrNull(body.checkOutLat) : existing.check_out_lat, body.checkOutLng !== undefined ? numOrNull(body.checkOutLng) : existing.check_out_lng, attendance, overtimeHours, dayRate, hourRate, taxModeOverride, amounts.gross, amounts.tax, amounts.net,
+        body.checkOutOnly === true ? (existing.edited_manually || 0) : 1, // 퇴근 버튼(S-05 전경 버전)은 «수정됨» 표시를 남기지 않는다
         body.memo !== undefined ? str(body.memo, 300) : existing.memo || '', now, id, u.id))
     }
     if (expenses) {
@@ -640,10 +651,18 @@ export function createJobsApi(deps: JobsDeps) {
     return c.json({ ok: true })
   })
 
-  function shareUrl(c: any, token: string) {
+  function shareUrl(c: any, token: string, kind: 'v' | 'q' = 'v') {
     const origin = (c.env.JOBS_PUBLIC_ORIGIN || new URL(c.req.url).origin).replace(/\/$/, '')
-    return `${origin}/jobs/v/${token}`
+    return `${origin}/jobs/${kind}/${token}`
   }
+  const isEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v)
+  const emailHtml = (title: string, lines: [string, string][], link: string, btn: string) => `
+    <div style="font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;padding:24px;color:#1C1C1E">
+      <h2 style="margin:0 0 14px;font-size:20px">${title}</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:15px">${lines.map(([k, v]) => `<tr><td style="padding:8px 0;color:#6B6B6B;border-bottom:1px solid #EFEFF4">${k}</td><td style="padding:8px 0;text-align:right;font-weight:600;border-bottom:1px solid #EFEFF4">${v}</td></tr>`).join('')}</table>
+      <p style="margin:22px 0"><a href="${link}" style="background:#0A6CD6;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:700">${btn}</a></p>
+      <p style="color:#8E8E93;font-size:12px">이 메일은 JOBS 앱 사용자가 보냈습니다. 링크는 로그인 없이 열리며 PDF로 저장할 수 있습니다.</p>
+    </div>`
   function invoiceText(inv: any, link: string) {
     return `[JOBS 청구서] ${inv.site_company || inv.site_name} 귀하\n${inv.site_name} · ${period(inv.period_start, inv.period_end)}\n청구 ${fmt(inv.gross)}원 − 세액공제(${TAX_MODES[inv.tax_mode as TaxMode]?.short || ''}) ${fmt(inv.tax)}원 = 실수령 ${fmt(inv.net)}원\n입금 예정일 ${inv.due_date}\n청구서 보기: ${link}`
   }
@@ -669,7 +688,11 @@ export function createJobsApi(deps: JobsDeps) {
       const r = await deps.sendSms(c.env, { to, text, type: 'LMS', subject: `${inv.site_name} 청구서` })
       if (!r.ok) return c.json({ error: '문자를 보내지 못했습니다', detail: r.error }, 503)
     } else if (channel === 'email') {
-      return c.json({ error: '메일 발송은 준비 중입니다. 링크 복사 또는 PDF 저장을 이용해 주세요' }, 501)
+      to = str(body.to, 120).toLowerCase()
+      if (!isEmail(to)) return c.json({ error: '받는 메일 주소를 입력해 주세요' }, 400)
+      const r = await deps.sendEmail(c.env, { to, subject: `[JOBS 청구서] ${inv.site_name} ${period(inv.period_start, inv.period_end)} · 실수령 ${fmt(inv.net)}원`,
+        html: emailHtml(`청구서 — ${inv.site_name}`, [['받는 곳', inv.site_company || '-'], ['기간', period(inv.period_start, inv.period_end)], ['청구 금액', fmt(inv.gross) + '원'], [`세액공제 (${TAX_MODES[inv.tax_mode as TaxMode]?.short || ''})`, '− ' + fmt(inv.tax) + '원'], ['실수령액', fmt(inv.net) + '원'], ['입금 예정일', inv.due_date]], link, '청구서 열기 · PDF 저장') })
+      if (!r.ok) return c.json({ error: '메일을 보내지 못했습니다', detail: r.error }, 503)
     }
     const stmts = [db.prepare('INSERT INTO jobs_sendlogs (id, user_id, doc_type, doc_id, channel, to_addr, amount, sent_at) VALUES (?,?,?,?,?,?,?,?)').bind(newId('sl'), u.id, 'invoice', inv.id, channel, to, inv.net, nowIso())]
     if (inv.status === 'draft') {
@@ -695,10 +718,15 @@ export function createJobsApi(deps: JobsDeps) {
     if (!inv) return c.json({ error: '청구서를 찾을 수 없습니다' }, 404)
     const body = await c.req.json<any>().catch(() => ({}))
     const level = body.level === 'firm' ? 'firm' : 'polite'
-    const channel = ['sms', 'kakao', 'link'].includes(body.channel) ? body.channel : 'link'
+    const channel = ['sms', 'kakao', 'email', 'link'].includes(body.channel) ? body.channel : 'link'
     const text = typeof body.text === 'string' && body.text.trim() ? body.text.trim().slice(0, 1000) : dunningText(inv, level, shareUrl(c, inv.share_token), today)
     let to = ''
-    if (channel !== 'link') {
+    if (channel === 'email') {
+      to = str(body.to, 120).toLowerCase()
+      if (!isEmail(to)) return c.json({ error: '받는 메일 주소를 입력해 주세요' }, 400)
+      const r = await deps.sendEmail(c.env, { to, subject: `[JOBS] 입금 요청 — ${inv.site_name} ${period(inv.period_start, inv.period_end)}`, html: `<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px;white-space:pre-wrap;line-height:1.6">${text.replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]!))}</div>` })
+      if (!r.ok) return c.json({ error: '메일을 보내지 못했습니다', detail: r.error }, 503)
+    } else if (channel !== 'link') {
       to = normPhone(body.to || (await loadSite(db, u.id, inv.site_id))?.contact_phone)
       if (!isPhone(to) && !/^0\d{8,10}$/.test(to)) return c.json({ error: '받는 사람 번호를 입력해 주세요' }, 400)
       const r = await deps.sendSms(c.env, { to, text, type: 'LMS', subject: '입금 요청' })
@@ -740,6 +768,171 @@ export function createJobsApi(deps: JobsDeps) {
     return c.json((res.results || []).map((r: any) => ({ ...sendlogOut(r), siteName: r.site_name || '' })))
   })
 
+  // ============================================================= QUOTES (S-09 · S-16) ====
+  function quoteOut(q: any) {
+    const items = safeJson<QuoteItem[]>(q.items, [])
+    const calc = calcQuote(items, q.vat_mode as VatMode)
+    return {
+      id: q.id, siteId: q.site_id || '', siteName: q.site_name || '', clientName: q.client_name || '', contactPhone: q.contact_phone || '',
+      periodStart: q.period_start || '', periodEnd: q.period_end || '', items: items.map(it => ({ ...it, amount: quoteItemAmount(it) })),
+      ...calc, status: q.status, shareToken: q.share_token || '', createdAt: q.created_at, updatedAt: q.updated_at,
+    }
+  }
+  async function loadQuote(db: D1Database, userId: string, id: string) {
+    return db.prepare('SELECT q.*, s.name AS site_name FROM jobs_quotes q LEFT JOIN jobs_sites s ON s.id = q.site_id WHERE q.id = ? AND q.user_id = ?').bind(id, userId).first<any>()
+  }
+  function quoteFromBody(body: any, prev?: any) {
+    const src: any[] = Array.isArray(body.items) ? body.items : (prev ? safeJson<any[]>(prev.items, []) : [])
+    if (src.length > 50) return { error: '품목은 50개까지 넣을 수 있습니다' }
+    const items: QuoteItem[] = []
+    for (const it of src) {
+      const qty = Number(it?.qty) || 0, unitPrice = int(it?.unitPrice, 0), name = str(it?.name, 60)
+      if (!name && !unitPrice) continue
+      if (qty < 0 || unitPrice < 0) return { error: '수량 · 단가는 0 이상이어야 합니다' }
+      items.push({ kind: isQuoteItemKind(it?.kind) ? it.kind : 'labor', name, qty, unit: str(it?.unit, 10) || '식', unitPrice })
+    }
+    const vatMode = body.vatMode !== undefined ? body.vatMode : prev?.vat_mode || 'exclusive'
+    if (!isVatMode(vatMode)) return { error: '부가세 방식이 올바르지 않습니다' }
+    const periodStart = body.periodStart !== undefined ? str(body.periodStart, 10) : prev?.period_start || ''
+    const periodEnd = body.periodEnd !== undefined ? str(body.periodEnd, 10) : prev?.period_end || ''
+    if ((periodStart && !isYmd(periodStart)) || (periodEnd && !isYmd(periodEnd)) || (periodStart && periodEnd && periodStart > periodEnd)) return { error: '공사 기간이 올바르지 않습니다' }
+    return { value: {
+      siteId: str(body.siteId !== undefined ? body.siteId : prev?.site_id, 40), clientName: str(body.clientName !== undefined ? body.clientName : prev?.client_name, 60),
+      contactPhone: str(body.contactPhone !== undefined ? body.contactPhone : prev?.contact_phone, 20), periodStart, periodEnd, items, vatMode: vatMode as VatMode, total: calcQuote(items, vatMode).total,
+    } }
+  }
+  api.get('/quotes', async (c) => {
+    const u = c.get('jobsUser')
+    const res = await c.env.DB.prepare('SELECT q.*, s.name AS site_name FROM jobs_quotes q LEFT JOIN jobs_sites s ON s.id = q.site_id WHERE q.user_id = ? ORDER BY q.updated_at DESC LIMIT 200').bind(u.id).all<any>()
+    return c.json((res.results || []).map(quoteOut))
+  })
+  api.post('/quotes', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB, body = await c.req.json<any>().catch(() => ({}))
+    const r = quoteFromBody(body)
+    if ('error' in r) return c.json({ error: r.error }, 400)
+    const v = r.value
+    if (v.siteId && !(await loadSite(db, u.id, v.siteId))) return c.json({ error: '현장을 찾을 수 없습니다' }, 400)
+    const id = newId('qt'), now = nowIso()
+    await db.prepare(`INSERT INTO jobs_quotes (id, user_id, site_id, client_name, contact_phone, period_start, period_end, items, vat_mode, total, status, share_token, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'draft',?,?,?)`)
+      .bind(id, u.id, v.siteId, v.clientName, v.contactPhone, v.periodStart, v.periodEnd, JSON.stringify(v.items), v.vatMode, v.total, randomHex(12), now, now).run()
+    return c.json(quoteOut(await loadQuote(db, u.id, id)), 201)
+  })
+  api.get('/quotes/:id', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const q = await loadQuote(db, u.id, c.req.param('id'))
+    if (!q) return c.json({ error: '견적서를 찾을 수 없습니다' }, 404)
+    const [sends, inv] = await Promise.all([
+      db.prepare('SELECT * FROM jobs_sendlogs WHERE doc_id = ? ORDER BY sent_at DESC').bind(q.id).all<any>(),
+      db.prepare('SELECT id, status, net FROM jobs_invoices WHERE quote_id = ? AND user_id = ?').bind(q.id, u.id).first<any>(),
+    ])
+    return c.json({ ...quoteOut(q), shareUrl: shareUrl(c, q.share_token, 'q'), sendLogs: (sends.results || []).map(sendlogOut), invoice: inv ? { id: inv.id, status: inv.status, net: inv.net } : null })
+  })
+  api.put('/quotes/:id', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const prev = await loadQuote(db, u.id, c.req.param('id'))
+    if (!prev) return c.json({ error: '견적서를 찾을 수 없습니다' }, 404)
+    if (prev.status === 'converted') return c.json({ error: '청구서로 전환된 견적서는 수정할 수 없습니다' }, 409)
+    const body = await c.req.json<any>().catch(() => ({}))
+    const r = quoteFromBody(body, prev)
+    if ('error' in r) return c.json({ error: r.error }, 400)
+    const v = r.value
+    if (v.siteId && !(await loadSite(db, u.id, v.siteId))) return c.json({ error: '현장을 찾을 수 없습니다' }, 400)
+    await db.prepare('UPDATE jobs_quotes SET site_id=?, client_name=?, contact_phone=?, period_start=?, period_end=?, items=?, vat_mode=?, total=?, updated_at=? WHERE id = ? AND user_id = ?')
+      .bind(v.siteId, v.clientName, v.contactPhone, v.periodStart, v.periodEnd, JSON.stringify(v.items), v.vatMode, v.total, nowIso(), prev.id, u.id).run()
+    return c.json(quoteOut(await loadQuote(db, u.id, prev.id)))
+  })
+  api.delete('/quotes/:id', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const prev = await loadQuote(db, u.id, c.req.param('id'))
+    if (!prev) return c.json({ error: '견적서를 찾을 수 없습니다' }, 404)
+    if (prev.status === 'converted') return c.json({ error: '청구서로 전환된 견적서는 삭제할 수 없습니다' }, 409)
+    await db.prepare('DELETE FROM jobs_quotes WHERE id = ? AND user_id = ?').bind(prev.id, u.id).run()
+    return c.json({ ok: true })
+  })
+  // S-10 보내기 — 견적서 (청구서와 같은 시트)
+  api.post('/quotes/:id/send', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const q = await loadQuote(db, u.id, c.req.param('id'))
+    if (!q) return c.json({ error: '견적서를 찾을 수 없습니다' }, 404)
+    const body = await c.req.json<any>().catch(() => ({}))
+    const channel = ['sms', 'kakao', 'email', 'link', 'pdf'].includes(body.channel) ? body.channel : 'link'
+    const qo = quoteOut(q), link = shareUrl(c, q.share_token, 'q')
+    const text = `[JOBS 견적서] ${qo.clientName || qo.siteName} 귀하\n${qo.siteName ? qo.siteName + ' · ' : ''}${qo.periodStart ? period(qo.periodStart, qo.periodEnd || qo.periodStart) : '기간 미정'}\n견적 합계 ${fmt(qo.total)}원 (${qo.vatLabel})\n견적서 보기: ${link}`
+    let to = ''
+    if (channel === 'sms' || channel === 'kakao') {
+      to = normPhone(body.to || q.contact_phone)
+      if (!isPhone(to) && !/^0\d{8,10}$/.test(to)) return c.json({ error: '받는 사람 번호를 입력해 주세요' }, 400)
+      const r = await deps.sendSms(c.env, { to, text, type: 'LMS', subject: `${qo.siteName || '견적서'}` })
+      if (!r.ok) return c.json({ error: '문자를 보내지 못했습니다', detail: r.error }, 503)
+    } else if (channel === 'email') {
+      to = str(body.to, 120).toLowerCase()
+      if (!isEmail(to)) return c.json({ error: '받는 메일 주소를 입력해 주세요' }, 400)
+      const r = await deps.sendEmail(c.env, { to, subject: `[JOBS 견적서] ${qo.siteName || qo.clientName} · 합계 ${fmt(qo.total)}원 (${qo.vatLabel})`,
+        html: emailHtml(`견적서 — ${qo.siteName || qo.clientName}`, [['받는 곳', qo.clientName || '-'], ['공사 기간', qo.periodStart ? period(qo.periodStart, qo.periodEnd || qo.periodStart) : '-'], ['인력', fmt(qo.labor) + '원'], ['자재 · 경비', fmt(qo.material) + '원'], [`견적 합계 (${qo.vatLabel})`, fmt(qo.total) + '원']], link, '견적서 열기 · PDF 저장') })
+      if (!r.ok) return c.json({ error: '메일을 보내지 못했습니다', detail: r.error }, 503)
+    }
+    const stmts = [db.prepare('INSERT INTO jobs_sendlogs (id, user_id, doc_type, doc_id, channel, to_addr, amount, sent_at) VALUES (?,?,?,?,?,?,?,?)').bind(newId('sl'), u.id, 'quote', q.id, channel, to, qo.total, nowIso())]
+    if (q.status === 'draft') stmts.push(db.prepare("UPDATE jobs_quotes SET status = 'sent', updated_at = ? WHERE id = ?").bind(nowIso(), q.id))
+    await db.batch(stmts)
+    return c.json({ ok: true, channel, link, text, quote: quoteOut(await loadQuote(db, u.id, q.id)) })
+  })
+  // S-16 견적 → 청구 전환 — 미리보기(견적 vs 실제) · 전환
+  async function convertPreview(c: any, q: any, body: any) {
+    if (!q.site_id) return { error: '견적서에 현장을 연결해야 청구서로 바꿀 수 있습니다', status: 400 }
+    const today = todayKst()
+    const p = await previewInvoice(c, { siteId: q.site_id, periodStart: body.periodStart || q.period_start || today.slice(0, 7) + '-01', periodEnd: body.periodEnd || q.period_end || monthEnd(today), taxMode: body.taxMode })
+    if ('error' in p) return p
+    const qo = quoteOut(q)
+    const actualLabor = p.calc.rows.filter(r => !r.excluded && (r.kind === 'labor' || r.kind === 'half' || r.kind === 'overtime')).reduce((s, r) => s + r.amount, 0)
+    const actualMaterial = p.calc.rows.filter(r => !r.excluded && r.kind === 'expense').reduce((s, r) => s + r.amount, 0)
+    return { p, qo, compare: { labor: { quote: qo.labor, actual: actualLabor, diff: actualLabor - qo.labor }, material: { quote: qo.material, actual: actualMaterial, diff: actualMaterial - qo.material } } }
+  }
+  api.post('/quotes/:id/convert/preview', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const q = await loadQuote(db, u.id, c.req.param('id'))
+    if (!q) return c.json({ error: '견적서를 찾을 수 없습니다' }, 404)
+    if (q.status === 'converted') return c.json({ error: '이미 청구서로 전환된 견적서입니다' }, 409)
+    const body = await c.req.json<any>().catch(() => ({}))
+    const r = await convertPreview(c, q, body)
+    if ('error' in r) return c.json({ error: r.error }, r.status as any)
+    const use = { labor: body.useQuoteLabor === true, material: body.useQuoteMaterial === true }
+    const rows = applyQuoteToRows(r.p.calc.rows, r.qo, use)
+    const tx = retaxInvoice(rows, r.p.taxMode, r.p.calc.dayPays)
+    return c.json({ quote: r.qo, site: siteOut(r.p.site), periodStart: r.p.periodStart, periodEnd: r.p.periodEnd, dueDate: r.p.dueDate, taxMode: r.p.taxMode, logCount: r.p.logs.length, compare: r.compare, use, rows, gross: tx.gross, tax: tx.tax, net: tx.net, breakdown: tx.breakdown })
+  })
+  api.post('/quotes/:id/convert', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const q = await loadQuote(db, u.id, c.req.param('id'))
+    if (!q) return c.json({ error: '견적서를 찾을 수 없습니다' }, 404)
+    if (q.status === 'converted') return c.json({ error: '이미 청구서로 전환된 견적서입니다' }, 409)
+    const body = await c.req.json<any>().catch(() => ({}))
+    const r = await convertPreview(c, q, body)
+    if ('error' in r) return c.json({ error: r.error }, r.status as any)
+    const use = { labor: body.useQuoteLabor === true, material: body.useQuoteMaterial === true }
+    const rows = applyQuoteToRows(r.p.calc.rows, r.qo, use)
+    const tx = retaxInvoice(rows, r.p.taxMode, r.p.calc.dayPays)
+    const id = newId('inv'), now = nowIso(), ids = r.p.logs.map((l: any) => l.id)
+    await db.batch([
+      db.prepare(`INSERT INTO jobs_invoices (id, user_id, site_id, period_start, period_end, rows, day_pays, gross, tax_mode, tax, net, due_date, status, paid_amount, attach_photos, edited_manually, memo, share_token, quote_id, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'draft',0,?,?,?,?,?,?,?)`).bind(id, u.id, r.p.site.id, r.p.periodStart, r.p.periodEnd, JSON.stringify(rows), JSON.stringify(r.p.calc.dayPays), tx.gross, r.p.taxMode, tx.tax, tx.net, r.p.dueDate, bool01(body.attachPhotos, 0), use.labor || use.material ? 1 : 0, str(body.memo, 300), randomHex(12), q.id, now, now),
+      db.prepare(`UPDATE jobs_worklogs SET invoice_id = ? WHERE id IN (${placeholders(ids.length)})`).bind(id, ...ids),
+      db.prepare("UPDATE jobs_quotes SET status = 'converted', updated_at = ? WHERE id = ?").bind(now, q.id),
+    ])
+    return c.json(invoiceOut(await loadInvoice(db, u.id, id), todayKst()), 201)
+  })
+
+  // ================================================== YEAR SUMMARY (S-15 연간 세액 정산서) ====
+  api.get('/year-summary', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const year = /^\d{4}$/.test(c.req.query('year') || '') ? c.req.query('year')! : todayKst().slice(0, 4)
+    const [res, years] = await Promise.all([
+      db.prepare('SELECT w.date, w.site_id, s.name AS site_name, COALESCE(w.tax_mode_override, s.tax_mode) AS tax_mode, w.attendance, w.gross, w.tax, w.net FROM jobs_worklogs w JOIN jobs_sites s ON s.id = w.site_id WHERE w.user_id = ? AND substr(w.date, 1, 4) = ?').bind(u.id, year).all<any>(),
+      db.prepare('SELECT DISTINCT substr(date, 1, 4) AS y FROM jobs_worklogs WHERE user_id = ? ORDER BY y DESC').bind(u.id).all<any>(),
+    ])
+    const summary = summarizeYear((res.results || []).map((r: any) => ({ date: r.date, siteId: r.site_id, siteName: r.site_name, taxMode: r.tax_mode, attendance: r.attendance, gross: r.gross || 0, tax: r.tax || 0, net: r.net || 0 })), year)
+    return c.json({ ...summary, user: { name: u.name || '', bizNo: u.biz_no || '', phone: u.phone }, years: (years.results || []).map((r: any) => r.y), generatedAt: todayKst() })
+  })
+
   return api
 }
 
@@ -752,4 +945,14 @@ export async function loadInvoiceByToken(db: D1Database, token: string) {
   const photos = inv.attach_photos ? await db.prepare('SELECT p.uri, p.taken_at, p.lat, p.lng FROM jobs_photos p JOIN jobs_worklogs w ON w.id = p.worklog_id WHERE w.invoice_id = ? AND p.attach_to_invoice = 1 ORDER BY p.taken_at LIMIT 12').bind(inv.id).all<any>() : { results: [] }
   const logs = await db.prepare('SELECT date, attendance, overtime_hours FROM jobs_worklogs WHERE invoice_id = ? ORDER BY date').bind(inv.id).all<any>()
   return { inv, photos: photos.results || [], logs: logs.results || [] }
+}
+
+/** 공개 견적서 뷰(/jobs/q/:token) 로더 */
+export async function loadQuoteByToken(db: D1Database, token: string) {
+  if (!/^[0-9a-f]{24}$/.test(token)) return null
+  await ensureJobsTables(db)
+  const q = await db.prepare('SELECT q.*, s.name AS site_name, s.address AS site_address, u.name AS user_name, u.phone AS user_phone, u.biz_no AS user_biz FROM jobs_quotes q LEFT JOIN jobs_sites s ON s.id = q.site_id JOIN jobs_users u ON u.id = q.user_id WHERE q.share_token = ?').bind(token).first<any>()
+  if (!q) return null
+  const items = (() => { try { return JSON.parse(q.items || '[]') as QuoteItem[] } catch { return [] as QuoteItem[] } })()
+  return { q, items, calc: calcQuote(items, q.vat_mode as VatMode) }
 }

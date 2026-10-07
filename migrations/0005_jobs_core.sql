@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS jobs_invoices (
   edited_manually INTEGER DEFAULT 0,
   memo TEXT DEFAULT '',
   share_token TEXT,
+  quote_id TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

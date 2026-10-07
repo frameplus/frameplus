@@ -11,9 +11,9 @@
 - **GitHub**: https://github.com/frameplus/frameplus
 
 ## JOBS 앱 (현장 반장 기록 · 청구 · 입금) — 1차
-- **경로**: `/jobs/` (모바일 PWA, 휴대폰 OTP 로그인 — ERP 계정과 무관) · 공개 청구서 `/jobs/v/:token` · API `/api/jobs/*`
+- **경로**: `/jobs/` (모바일 PWA, 휴대폰 OTP 로그인 — ERP 계정과 무관) · 공개 청구서 `/jobs/v/:token` · 공개 견적서 `/jobs/q/:token` · 약관 `/jobs/legal/{terms,privacy,location}` · API `/api/jobs/*`
 - **코드**: `src/jobs/` (calc · schema · api · page), `public/static/jobs/`, `migrations/0005_jobs_core.sql`, 테스트 `npm test`
-- **환경변수**: `JOBS_PUBLIC_ORIGIN`(공유 링크 origin), `SOLAPI_*`(인증 문자 · 청구서 문자), `JOBS_DEV_OTP=1`은 **로컬 전용**(인증번호를 응답에 표시)
+- **환경변수**: `JOBS_PUBLIC_ORIGIN`(공유 링크 origin), `SOLAPI_*`(인증 문자 · 청구서 문자), `RESEND_API_KEY`(청구서 · 견적서 메일), `JOBS_DEV_OTP=1`은 **로컬 전용**(인증번호를 응답에 표시)
 - **검토 보고서**: [docs/JOBS_REVIEW.md](./docs/JOBS_REVIEW.md) — 구현 범위 · 실사용 판단 · 출시 리스크(위치정보 · 직업안정법 · 오픈뱅킹 · 스토어 정책) · 착수 순서
 
 ## 로그인 정보

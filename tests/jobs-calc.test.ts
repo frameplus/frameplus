@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   taxOf, taxBreakdown, calcWorkLog, buildInvoice, retaxInvoice, dueDateFor, invoiceStatus, dunningLevel,
   matchPayment, normalizePayer, floor10, fmt, addDays, monthEnd, daysBetween,
+  calcQuote, applyQuoteToRows, summarizeYear,
 } from '../src/jobs/calc.ts'
 
 // ---- 명세 03 검증용 실제 수치 (8월 · 문정동) --------------------------------
@@ -148,4 +149,43 @@ test('입금 매칭 ③ 둘 다 아님 → needsReview', () => {
   assert.equal(r.matchedBy, null); assert.equal(r.needsReview, true); assert.equal(r.remainder, 123_456)
   assert.equal(normalizePayer('(주) 대성 건설'), '대성건설')
   assert.equal(normalizePayer('주식회사 한울건설'), '한울건설')
+})
+
+const quoteItems = [
+  { kind: 'labor' as const, name: '목공 2인 × 3일', qty: 6, unit: '공', unitPrice: 280_000 },
+  { kind: 'material' as const, name: '합판', qty: 10, unit: '장', unitPrice: 35_000 },
+]
+
+test('견적서 — 부가세 별도 / 포함', () => {
+  const ex = calcQuote(quoteItems, 'exclusive')
+  assert.equal(ex.labor, 1_680_000); assert.equal(ex.material, 350_000); assert.equal(ex.subtotal, 2_030_000)
+  assert.equal(ex.vat, 203_000); assert.equal(ex.total, 2_030_000); assert.equal(ex.vatLabel, '부가세 별도')
+  const inc = calcQuote(quoteItems, 'inclusive')
+  assert.equal(inc.total, 2_233_000); assert.equal(inc.vatLabel, '부가세 포함')
+  assert.equal(calcQuote([], 'exclusive').total, 0)
+})
+
+test('견적 → 청구 전환 — 인력만 견적 금액, 자재는 실제 · 제외 행 유지', () => {
+  const inv = buildInvoice(logs, expenses, 'rate33')
+  const q = calcQuote(quoteItems, 'exclusive')
+  const rows = applyQuoteToRows(inv.rows, q, { labor: true, material: false })
+  assert.equal(rows[0].label, '인력 (견적)'); assert.equal(rows[0].amount, 1_680_000)
+  assert.ok(!rows.some(r => r.kind === 'overtime'))
+  assert.ok(rows.some(r => r.label === '주유비') && rows.some(r => r.label === '주차비'))
+  assert.ok(rows.some(r => r.excluded))
+  assert.equal(retaxInvoice(rows, 'none', inv.dayPays).gross, 1_680_000 + 52_000 + 18_000)
+  const both = applyQuoteToRows(inv.rows, q, { labor: true, material: true })
+  assert.deepEqual(both.filter(r => !r.excluded).map(r => r.amount), [1_680_000, 350_000])
+  assert.equal(both[both.length - 1].excluded, true) // 공구비(제외) 는 맨 끝에 남는다
+  assert.deepEqual(applyQuoteToRows(inv.rows, q, { labor: false, material: false }), inv.rows)
+})
+
+test('연간 세액 정산서 집계 — 현장 · 월 · 세액공제 방식별', () => {
+  const mk = (date: string, siteId: string, taxMode: 'rate33' | 'dailyWorker', half = false) =>
+    ({ date, siteId, siteName: siteId === 's1' ? '문정동' : '위례', taxMode, attendance: (half ? 'half' : 'full') as 'half' | 'full', gross: half ? 140_000 : 280_000, tax: half ? 4_620 : 9_240, net: half ? 135_380 : 270_760 })
+  const y = summarizeYear([mk('2026-08-03', 's1', 'rate33'), mk('2026-08-04', 's1', 'rate33'), mk('2026-09-01', 's2', 'dailyWorker', true), mk('2025-12-30', 's1', 'rate33')], '2026')
+  assert.equal(y.total.days, 2.5); assert.equal(y.total.gross, 700_000); assert.equal(y.total.net, 676_900)
+  assert.equal(y.byMonth.length, 12); assert.equal(y.byMonth[7].days, 2); assert.equal(y.byMonth[8].net, 135_380); assert.equal(y.byMonth[0].net, 0)
+  assert.deepEqual(y.bySite.map(s => [s.siteName, s.days]), [['문정동', 2], ['위례', 0.5]])
+  assert.deepEqual(y.byTaxMode.map(m => [m.taxMode, m.net]), [['rate33', 541_520], ['dailyWorker', 135_380]])
 })
