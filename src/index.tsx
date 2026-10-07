@@ -1,7 +1,9 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { createJobsApi, loadInvoiceByToken } from './jobs/api'
+import { jobsShellHtml, renderPublicInvoice, JOBS_VERSION, JOBS_SW } from './jobs/page'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string }
 type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
 
 const app = new Hono<App>()
@@ -22,6 +24,7 @@ const PUBLIC_PATHS = ['/api/auth/login', '/api/auth/logout', '/api/health', '/ap
 app.use('/api/*', async (c, next) => {
   const path = new URL(c.req.url).pathname
   if (PUBLIC_PATHS.some(p => path === p)) return next()
+  if (path.startsWith('/api/jobs/')) return next() // JOBS 앱은 자체 휴대폰 OTP 세션을 쓴다 (src/jobs/api.ts)
   const sid = c.req.header('X-Session-Id') || ''
   if (!sid) return c.json({ error: 'Unauthorized' }, 401)
   const sess = await c.env.DB.prepare('SELECT * FROM sessions WHERE id = ? AND expires_at > ?').bind(sid, new Date().toISOString()).first()
@@ -248,6 +251,17 @@ app.delete('/api/projects/:id', async (c) => {
   await db.prepare('DELETE FROM projects WHERE id = ?').bind(id).run()
   return c.json({ success: true, deletedFinancial: force ? counts : undefined })
 })
+// ===== JOBS 앱 — 현장 반장 «기록 → 청구 → 입금» 모바일 앱 (ERP 와 분리된 모듈, 자체 인증) =====
+app.route('/api/jobs', createJobsApi({ sendSms: (env, o) => sendSolapi(env, o), version: JOBS_VERSION }))
+app.get('/jobs/v/:token', async (c) => {
+  const data = await loadInvoiceByToken(c.env.DB, c.req.param('token'))
+  if (!data) return c.html('<!DOCTYPE html><meta charset="utf-8"><p style="font:16px sans-serif;padding:40px;text-align:center">청구서를 찾을 수 없습니다.</p>', 404)
+  return c.html(renderPublicInvoice(data))
+})
+app.get('/jobs/sw.js', (c) => c.body(JOBS_SW, 200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }))
+app.get('/jobs', (c) => c.redirect('/jobs/' + (new URL(c.req.url).search || ''), 301)) // 서비스 워커 범위(/jobs/)에 맞춰 슬래시 고정
+app.get('/jobs/*', (c) => c.html(jobsShellHtml()))
+
 app.route('/api/projects', crud('projects'))
 app.route('/api/vendors', crud('vendors'))
 app.route('/api/meetings', crud('meetings'))

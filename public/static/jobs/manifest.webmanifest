@@ -1,0 +1,17 @@
+{
+  "name": "JOBS — 하루 기록 · 청구 · 입금",
+  "short_name": "JOBS",
+  "description": "건설 현장 반장이 하루 일한 것을 기록하고, 청구하고, 입금을 확인하는 앱",
+  "start_url": "/jobs/#/home",
+  "scope": "/jobs/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F2F2F7",
+  "theme_color": "#0A6CD6",
+  "lang": "ko",
+  "icons": [
+    { "src": "/static/jobs/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/static/jobs/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/static/jobs/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

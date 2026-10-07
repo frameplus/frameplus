@@ -28,7 +28,9 @@ jobs:
           APPVER=$(md5sum public/static/app.js | cut -c1-10)
           CSSVER=$(md5sum public/static/style.css | cut -c1-10)
           sed -i "s/__APPVER__/$APPVER/g; s/__CSSVER__/$CSSVER/g" src/index.tsx
-          echo "cache-bust → app.js?v=$APPVER, style.css?v=$CSSVER"
+          JOBSVER=$(cat public/static/jobs/app.js public/static/jobs/style.css | md5sum | cut -c1-10)
+          sed -i "s/__JOBSVER__/$JOBSVER/g" src/jobs/page.ts
+          echo "cache-bust → app.js?v=$APPVER, style.css?v=$CSSVER, jobs?v=$JOBSVER"
 
       - name: Build
         run: npm run build
