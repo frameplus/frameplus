@@ -199,5 +199,7 @@ export async function runJobsCron(env: JobsBindings, now = new Date(), opts: { p
   stats.push = await flushPushQueue(env, opts.pushLimit ?? (Number(env.JOBS_PUSH_BATCH) || 20), opts.fetchImpl)
   // 60일 지난 알림 정리
   await db.prepare('DELETE FROM jobs_notifications WHERE created_at < ?').bind(new Date(now.getTime() - 60 * 86400e3).toISOString()).run()
+  // 봇 «직접 묻기» 일일 횟수 — 3일 지나면 정리 (질문 문장은 원래 저장하지 않음)
+  await db.prepare("DELETE FROM jobs_kv WHERE k LIKE 'botq:%' AND updated_at < ?").bind(new Date(now.getTime() - 3 * 86400e3).toISOString()).run()
   return stats
 }

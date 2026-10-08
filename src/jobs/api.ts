@@ -7,9 +7,10 @@ import { ensureJobsTables } from './schema'
 import { createNotifications, flushPushQueue, runJobsCron, vapidFromEnv } from './notify'
 import { isAllowedPushEndpoint, b64urlDecode } from './webpush'
 import { signedPhotoPath, verifyPhotoSig } from './sign'
+import { BOT_DAILY_LIMIT, BOT_Q_MAX, BOT_SYSTEM_PROMPT, buildBotUserMessage, parseBotReply, askOpenAI, type BotContext } from './bot'
 import {
   type TaxMode, type SettlementRule, type Attendance, type InvoiceStatus, type InvoiceRow, type ExpenseType,
-  TAX_MODES, EXPENSE_TYPES, isTaxMode, isSettlementRule, isExpenseType, isYmd, todayKst, monthEnd, addDays, daysBetween,
+  TAX_MODES, SETTLEMENT_RULES, EXPENSE_TYPES, isTaxMode, isSettlementRule, isExpenseType, isYmd, todayKst, monthEnd, addDays, daysBetween,
   calcWorkLog, buildInvoice, retaxInvoice, dueDateFor, invoiceStatus, dunningLevel, fmt,
   type QuoteItem, type VatMode, calcQuote, quoteItemAmount, isVatMode, isQuoteItemKind, applyQuoteToRows, summarizeYear,
 } from './calc'
@@ -36,6 +37,12 @@ export type JobsBindings = {
   JOBS_PUSH_BATCH?: string
   /** 사진 서명 URL 비밀키(선택, 16자 이상). 없으면 첫 사용 시 무작위로 만들어 jobs_kv 에 보관 */
   JOBS_URL_SECRET?: string
+  /** S-12 봇 «직접 묻기» — ERP 와 같은 OpenAI 키. 없으면 503(추천 카드만 동작) */
+  OPENAI_API_KEY?: string
+  /** 봇 모델 (기본 gpt-4o-mini) */
+  JOBS_AI_MODEL?: string
+  /** 로컬 테스트용 OpenAI 호환 주소 — https 또는 (JOBS_DEV_OTP=1 일 때만) 127.0.0.1 */
+  JOBS_AI_BASE_URL?: string
 }
 export type SmsSender = (env: any, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string; variables?: Record<string, string> }) => Promise<{ ok: boolean; error?: string }>
 export type EmailSender = (env: any, opts: { to: string; subject: string; html: string }) => Promise<{ ok: boolean; error?: string }>
@@ -284,6 +291,7 @@ export function createJobsApi(deps: JobsDeps) {
       db.prepare('DELETE FROM jobs_payer_rules WHERE user_id = ?').bind(u.id),
       db.prepare('DELETE FROM jobs_push_subs WHERE user_id = ?').bind(u.id),
       db.prepare('DELETE FROM jobs_notifications WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_kv WHERE k LIKE ?').bind(`botq:${u.id}:%`),
       db.prepare("UPDATE jobs_sites SET contact_name = '', contact_phone = '', address = '', lat = NULL, lng = NULL, memo = '', archived = 1, updated_at = ? WHERE user_id = ?").bind(now, u.id),
       db.prepare("UPDATE jobs_quotes SET contact_phone = '', share_token = NULL, updated_at = ? WHERE user_id = ?").bind(now, u.id),
       db.prepare('UPDATE jobs_invoices SET share_token = NULL, updated_at = ? WHERE user_id = ?').bind(now, u.id),
@@ -1130,7 +1138,77 @@ export function createJobsApi(deps: JobsDeps) {
     return c.json({ ...summary, user: { name: u.name || '', bizNo: u.biz_no || '', phone: u.phone }, years: (years.results || []).map((r: any) => r.y), generatedAt: todayKst() })
   })
 
+  // ---------------------------------------------------- S-12 봇 «직접 묻기» (AI) ----
+  // 추천 카드 6종은 앱이 대시보드 숫자로 바로 답한다. 카드로 못 푸는 질문만 여기로 온다.
+  const aiReady = (env: JobsBindings) => !!(env.OPENAI_API_KEY && env.OPENAI_API_KEY.trim())
+  const botKey = (userId: string, day: string) => `botq:${userId}:${day}`
+  api.get('/bot/status', async (c) => {
+    const u = c.get('jobsUser')
+    const row = await c.env.DB.prepare('SELECT v FROM jobs_kv WHERE k = ?').bind(botKey(u.id, todayKst())).first<any>()
+    const used = Math.min(BOT_DAILY_LIMIT, Number(row?.v || 0))
+    return c.json({ ai: aiReady(c.env), limit: BOT_DAILY_LIMIT, used, remaining: BOT_DAILY_LIMIT - used })
+  })
+  api.post('/bot/ask', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB, today = todayKst()
+    const body = await c.req.json<any>().catch(() => ({}))
+    const q = str(body?.q, BOT_Q_MAX)
+    if (q.replace(/\s/g, '').length < 2) return c.json({ error: '질문을 두 글자 이상 입력해 주세요' }, 400)
+    if (!aiReady(c.env)) return c.json({ error: 'AI 답변은 아직 준비 중이에요. 위 카드에서 골라 주세요', code: 'ai_unavailable' }, 503)
+    // 하루 상한 — 원자적 증가 후 비교 (동시 요청도 정확)
+    const key = botKey(u.id, today)
+    const row = await db.prepare("INSERT INTO jobs_kv (k, v, updated_at) VALUES (?, '1', ?) ON CONFLICT(k) DO UPDATE SET v = CAST(CAST(v AS INTEGER) + 1 AS TEXT), updated_at = excluded.updated_at RETURNING v").bind(key, nowIso()).first<any>()
+    const used = Number(row?.v || 1)
+    if (used > BOT_DAILY_LIMIT) return c.json({ error: `직접 묻기는 하루 ${BOT_DAILY_LIMIT}번까지예요. 위 카드는 계속 쓸 수 있어요`, code: 'limit', remaining: 0 }, 429)
+    const ctx = await loadBotContext(db, u, today)
+    const r = await askOpenAI({ apiKey: c.env.OPENAI_API_KEY!.trim(), baseUrl: aiBaseUrl(c.env), model: (c.env.JOBS_AI_MODEL || '').trim() || undefined, system: BOT_SYSTEM_PROMPT, user: buildBotUserMessage(ctx, q) })
+    if (!r.ok) {
+      // 실패한 질문은 횟수에서 돌려준다 — 질문 문장은 어디에도 남기지 않는다
+      await db.prepare('UPDATE jobs_kv SET v = CAST(MAX(0, CAST(v AS INTEGER) - 1) AS TEXT) WHERE k = ?').bind(key).run()
+      console.warn('jobs bot: ai error', r.status, r.error)
+      return c.json({ error: 'AI 답변을 받지 못했어요. 잠시 후 다시 물어봐 주세요', code: 'ai_error' }, 502)
+    }
+    return c.json({ ...parseBotReply(r.text), remaining: Math.max(0, BOT_DAILY_LIMIT - used) })
+  })
+
   return api
+}
+
+/** 봇 컨텍스트 — 금액 요약만. 이름 · 전화번호 · 주소 · 사업자번호 · 입금자명 · 메모 · 위치는 조회하지 않는다 */
+async function loadBotContext(db: D1Database, u: UserRow, today: string): Promise<BotContext> {
+  const monthStart = today.slice(0, 7) + '-01', yearStart = today.slice(0, 4) + '-01-01'
+  const back = new Date(monthStart + 'T00:00:00Z'); back.setUTCMonth(back.getUTCMonth() - 12)
+  const from13 = back.toISOString().slice(0, 10)
+  const DAYS = "CASE w.attendance WHEN 'half' THEN 0.5 ELSE 1 END"
+  const [sites, months, siteTotals, recent, unbilled, invs, pays] = await Promise.all([
+    db.prepare('SELECT name, company, day_rate, overtime_rate, hour_rate, tax_mode, settlement_rule, archived FROM jobs_sites WHERE user_id = ? ORDER BY archived, updated_at DESC LIMIT 30').bind(u.id).all<any>(),
+    db.prepare(`SELECT substr(w.date,1,7) AS m, SUM(${DAYS}) AS d, SUM(w.gross) AS g, SUM(w.tax) AS t, SUM(w.net) AS n FROM jobs_worklogs w WHERE w.user_id = ? AND w.date >= ? AND w.date <= ? GROUP BY m ORDER BY m`).bind(u.id, from13, monthEnd(monthStart)).all<any>(),
+    db.prepare(`SELECT s.name AS site, SUM(CASE WHEN w.date >= ? THEN ${DAYS} ELSE 0 END) AS md, SUM(CASE WHEN w.date >= ? THEN w.net ELSE 0 END) AS mn, SUM(${DAYS}) AS yd, SUM(w.gross) AS yg, SUM(w.tax) AS yt, SUM(w.net) AS yn FROM jobs_worklogs w JOIN jobs_sites s ON s.id = w.site_id WHERE w.user_id = ? AND w.date >= ? GROUP BY s.id ORDER BY yn DESC LIMIT 30`).bind(monthStart, monthStart, u.id, yearStart).all<any>(),
+    db.prepare('SELECT w.date, s.name AS site, w.attendance, w.overtime_hours, w.gross, w.tax, w.net, w.invoice_id FROM jobs_worklogs w JOIN jobs_sites s ON s.id = w.site_id WHERE w.user_id = ? AND w.date >= ? AND w.date <= ? ORDER BY w.date DESC, s.name LIMIT 60').bind(u.id, addDays(today, -34), today).all<any>(),
+    db.prepare(`SELECT s.name AS site, SUM(${DAYS}) AS d, SUM(w.net) AS n, MIN(w.date) AS a, MAX(w.date) AS b FROM jobs_worklogs w JOIN jobs_sites s ON s.id = w.site_id WHERE w.user_id = ? AND w.invoice_id IS NULL GROUP BY s.id ORDER BY a LIMIT 20`).bind(u.id).all<any>(),
+    db.prepare("SELECT i.*, s.name AS site_name, s.company AS site_company FROM jobs_invoices i JOIN jobs_sites s ON s.id = i.site_id WHERE i.user_id = ? AND i.status != 'paid' ORDER BY i.due_date LIMIT 20").bind(u.id).all<any>(),
+    db.prepare('SELECT substr(p.paid_at,1,10) AS d, p.amount, p.needs_review, s.name AS site FROM jobs_payments p LEFT JOIN jobs_invoices i ON i.id = p.invoice_id LEFT JOIN jobs_sites s ON s.id = COALESCE(p.site_id, i.site_id) WHERE p.user_id = ? AND p.excluded = 0 AND p.paid_at >= ? ORDER BY p.paid_at DESC LIMIT 20').bind(u.id, addDays(today, -59)).all<any>(),
+  ])
+  const invRows = invs.results || []
+  await refreshInvoiceStatuses(db, invRows, today)
+  const n = (v: unknown) => Number(v) || 0
+  return {
+    today,
+    defaultTax: TAX_MODES[u.default_tax_mode]?.label || '3.3% 사업소득',
+    sites: (sites.results || []).map((s: any) => ({ name: s.name, company: s.company || '', dayRate: n(s.day_rate), overtimeRate: n(s.overtime_rate || s.hour_rate), taxLabel: TAX_MODES[s.tax_mode as TaxMode]?.label || s.tax_mode, ruleLabel: SETTLEMENT_RULES[s.settlement_rule as SettlementRule]?.label || s.settlement_rule, archived: !!s.archived })),
+    months: (months.results || []).map((m: any) => ({ month: m.m, days: n(m.d), gross: n(m.g), tax: n(m.t), net: n(m.n) })),
+    siteTotals: (siteTotals.results || []).map((r: any) => ({ site: r.site, monthDays: n(r.md), monthNet: n(r.mn), yearDays: n(r.yd), yearGross: n(r.yg), yearTax: n(r.yt), yearNet: n(r.yn) })),
+    recentLogs: (recent.results || []).map((l: any) => ({ date: l.date, site: l.site, attendance: l.attendance, overtimeHours: n(l.overtime_hours), gross: n(l.gross), tax: n(l.tax), net: n(l.net), invoiced: !!l.invoice_id })),
+    unbilled: (unbilled.results || []).map((r: any) => ({ site: r.site, days: n(r.d), net: n(r.n), from: r.a, to: r.b })),
+    openInvoices: invRows.map((i: any) => invoiceOut(i, today)).map(i => ({ site: i.siteName, periodStart: i.periodStart, periodEnd: i.periodEnd, net: i.net, paid: i.paidAmount, remaining: i.remaining, dueDate: i.dueDate, status: i.status, daysOverdue: i.daysOverdue })),
+    recentPayments: (pays.results || []).map((p: any) => ({ date: p.d, site: p.site || '', amount: n(p.amount), needsReview: !!p.needs_review })),
+  }
+}
+function aiBaseUrl(env: JobsBindings): string | undefined {
+  const b = (env.JOBS_AI_BASE_URL || '').trim()
+  if (!b) return undefined
+  if (/^https:\/\/[^/]+/.test(b)) return b
+  if (env.JOBS_DEV_OTP === '1' && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(b)) return b
+  return undefined
 }
 
 /** 공개 조회 (로그인 없이 열리는 읽기 전용 청구서) 에서 쓰는 로더 */

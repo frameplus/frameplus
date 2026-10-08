@@ -4,7 +4,7 @@ import { createJobsApi, loadInvoiceByToken, loadQuoteByToken, servePhoto } from 
 import { runJobsCron } from './jobs/notify'
 import { jobsShellHtml, renderPublicInvoice, renderPublicQuote, renderLegalPage, JOBS_VERSION, JOBS_SW } from './jobs/page'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string; JOBS_PHOTOS?: R2Bucket; JOBS_KAKAO_TPL_INVOICE?: string; JOBS_KAKAO_TPL_DUNNING?: string; JOBS_KAKAO_TPL_QUOTE?: string; JOBS_VAPID_PUBLIC?: string; JOBS_VAPID_PRIVATE?: string; JOBS_VAPID_SUBJECT?: string; JOBS_CRON_SECRET?: string; JOBS_PUSH_BATCH?: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string; JOBS_PHOTOS?: R2Bucket; JOBS_KAKAO_TPL_INVOICE?: string; JOBS_KAKAO_TPL_DUNNING?: string; JOBS_KAKAO_TPL_QUOTE?: string; JOBS_VAPID_PUBLIC?: string; JOBS_VAPID_PRIVATE?: string; JOBS_VAPID_SUBJECT?: string; JOBS_CRON_SECRET?: string; JOBS_PUSH_BATCH?: string; JOBS_URL_SECRET?: string; JOBS_AI_MODEL?: string; JOBS_AI_BASE_URL?: string }
 type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
 
 const app = new Hono<App>()

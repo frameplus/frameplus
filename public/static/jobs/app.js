@@ -664,10 +664,21 @@
     S.botDash = null
     sheet(`<h3>물어보세요</h3><div class="s">숫자 먼저, 설명은 한 줄</div><div id="botAns"></div>
       <div class="chips" style="margin-bottom:12px">${BOT_CARDS.map(([k, l]) => `<button type="button" class="chip" data-act="bot.ask" data-q="${k}">${l}</button>`).join('')}</div>
-      <div class="field" style="box-shadow:inset 0 0 0 1px var(--line2)"><input id="botq" placeholder="직접 묻기 (예: 이번 달 세금)" style="text-align:left"><button type="button" class="act" data-act="bot.free">보내기</button></div>
+      <div class="field" style="box-shadow:inset 0 0 0 1px var(--line2)"><input id="botq" maxlength="200" enterkeyhint="send" placeholder="직접 묻기 (예: 9월에 문정동 며칠 갔어?)" style="text-align:left"><button type="button" class="act" data-act="bot.free">보내기</button></div>
+      <div class="note" id="botNote" style="margin:-4px 0 12px">카드에 없는 질문은 AI(OpenAI)가 기록 요약 — 현장 · 날짜 · 금액 — 만 보고 답해요. 이름 · 전화번호 · 주소는 보내지 않아요.</div>
       <button class="btn ghost" data-act="soon" data-msg="음성 질문은 다음 버전에 들어갑니다">🎤 음성으로 묻기 · 준비 중</button>`)
+    api('/bot/status').then(st => { const n = document.getElementById('botNote'); if (n) n.textContent = st.ai ? `카드에 없는 질문은 AI(OpenAI)가 기록 요약 — 현장 · 날짜 · 금액 — 만 보고 답해요 · 오늘 ${st.remaining}번 남음. 이름 · 전화번호 · 주소는 보내지 않아요.` : '지금은 위 카드 질문만 답할 수 있어요. 직접 묻기 AI 답변은 준비 중입니다.' }).catch(() => null)
   }
+  // 카드로 바로 답할 수 있는 질문인지 — 특정 기간 · 현장을 콕 집은 질문은 '' (AI 로)
   function botIntent(text) {
+    const t = (text || '').replace(/\s/g, '')
+    const m = /(\d{1,2})월/.exec(t)
+    if (m && +m[1] !== +todayKst().slice(5, 7)) return ''
+    if (/작년|올해|연간|분기|반기|이번주|지난주|저번주|어제|그제|그저께|오늘|언제|며칠|몇일|몇번|몇건|평균|제일|가장|현장별|비싼|싼|많이|적게/.test(t)) return ''
+    if ((S.sites || []).some(s => { const k = (s.name || '').replace(/\s/g, '').replace(/현장$/, ''); return k.length >= 2 && t.includes(k) })) return ''
+    return botIntentLoose(t)
+  }
+  function botIntentLoose(text) {
     const t = (text || '').replace(/\s/g, '')
     if (/청구서|청구/.test(t)) return 'invoice'
     if (/지난달|비교|저번달/.test(t)) return 'compare'
@@ -677,7 +688,7 @@
     if (/얼마|벌|수익|실수령/.test(t)) return 'month'
     return ''
   }
-  async function botAnswer(kind) {
+  async function botAnswer(kind, note) {
     const box = document.getElementById('botAns'); if (!box) return
     box.innerHTML = '<div class="ans label">생각 중…</div>'
     const month = todayKst().slice(0, 7)
@@ -695,7 +706,24 @@
       case 'invoice': html = `<b class="big">청구서 만들기</b><div>이번 달 출근 ${d.monthDays}일 · 실수령 ${won(d.monthNet)} · 현장별로 한 장씩 만듭니다</div><a class="btn sm primary" href="#/invoice/new" style="margin-top:8px">청구서 만들러 가기</a>`; break
       default: html = '<div>아직 이 질문은 못 알아들어요. 위 카드 중에서 골라 주세요.</div>'
     }
-    box.innerHTML = `<div class="ans">${html}</div>`
+    box.innerHTML = `<div class="ans">${html}${note ? `<div class="s" style="margin-top:6px">${esc(note)}</div>` : ''}</div>`
+  }
+  // 카드로 못 푸는 질문 — 서버가 기록 요약만 AI 에 보내고 {big, line, action} 으로 돌려준다
+  async function botAsk(text) {
+    const box = document.getElementById('botAns'); if (!box) return
+    box.innerHTML = `<div class="ans"><div class="s">“${esc(text)}”</div><div class="label">기록을 보고 있어요…</div></div>`
+    try {
+      const r = await api('/bot/ask', { body: { q: text } })
+      if (!document.getElementById('botAns')) return
+      const act = r.action ? `<a class="btn sm ${r.action.key === 'invoice_new' ? 'primary' : ''}" href="${esc(r.action.href)}" style="margin-top:8px">${esc(r.action.label)}</a>` : ''
+      box.innerHTML = `<div class="ans"><div class="s">“${esc(text)}”</div>${r.big ? `<b class="big ${/^[−-]/.test(r.big) ? 'red' : ''}">${esc(r.big)}</b>` : ''}<div>${esc(r.line)}</div>${act}<div class="s" style="margin-top:6px">AI 답변 · 오늘 ${r.remaining}번 남음 · 중요한 숫자는 기록 화면에서 한 번 더 확인하세요</div></div>`
+      const note = document.getElementById('botNote'); if (note) note.textContent = note.textContent.replace(/오늘 \d+번 남음/, `오늘 ${r.remaining}번 남음`)
+    } catch (e) {
+      const loose = botIntentLoose(text)
+      if (e.status === 503 && loose) return botAnswer(loose, '이번 달 기준으로 답했어요 — 기간 · 현장별 답변은 AI 준비 후 가능합니다')
+      if (e.status === 429) { const note = document.getElementById('botNote'); if (note) note.textContent = note.textContent.replace(/오늘 \d+번 남음/, '오늘 0번 남음') }
+      box.innerHTML = `<div class="ans"><div class="s">“${esc(text)}”</div><div>${esc(e.message)}</div></div>`
+    }
   }
 
   // ------------------------------------------------------------ S-15 연간 세액 정산서 ----
@@ -1012,7 +1040,12 @@
     'inv.sendsheet'() { const i = S.draft.inv; S.draft.to = S.draft.to ?? i.site?.contactPhone ?? ''; S.draft.email = S.draft.email ?? ''; sendSheet({ title: '청구서 보내기', sub: `${i.siteCompany || i.siteName} · 실수령 ${won(i.net)} · 세액공제 ${TAX[i.taxMode]?.short}`, to: S.draft.to, email: S.draft.email, act: 'inv.send' }) },
     'sheet.bot'() { botSheet() },
     'bot.ask'(el) { botAnswer(el.dataset.q).catch(e => toast(e.message, true)) },
-    'bot.free'() { const el = document.getElementById('botq'); botAnswer(botIntent(el?.value)).catch(e => toast(e.message, true)) },
+    async 'bot.free'() {
+      const el = document.getElementById('botq'); const text = (el?.value || '').trim()
+      if (!text) { toast('질문을 입력해 주세요', true); el?.focus(); return }
+      const k = botIntent(text)
+      await (k ? botAnswer(k) : botAsk(text))
+    },
     async 'log.checkout'(el) { await busy(async () => { let geo = null; try { geo = await getGeo() } catch { geo = null } ; const l = await api('/worklogs/' + el.dataset.id, { method: 'PUT', body: { checkOutAt: nowHm(), checkOutOnly: true, ...(geo ? { checkOutLat: geo.lat, checkOutLng: geo.lng } : {}) } }); toast(`퇴근 ${l.checkOutAt} 기록 · 근무 ${worked(l.checkInAt, l.checkOutAt) || '-'}`); render() }) },
     // S-04 GPS 출근
     'ci.geo'() { S.draft.loading = true; render() },
@@ -1139,6 +1172,11 @@
   }
 
   // ------------------------------------------------------------ 이벤트 ----
+  // 봇 입력창 Enter = 보내기 (한글 조합 중 Enter 는 무시)
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || !e.target || e.target.id !== 'botq') return
+    e.preventDefault(); ACT['bot.free']().catch(err => toast(err.message, true))
+  })
   document.addEventListener('click', e => {
     const el = e.target.closest('[data-act]')
     if (!el || el.disabled) return
