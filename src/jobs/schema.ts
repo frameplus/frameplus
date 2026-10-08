@@ -190,6 +190,10 @@ CREATE TABLE IF NOT EXISTS jobs_payments (
   excluded INTEGER DEFAULT 0,
   needs_review INTEGER DEFAULT 0,
   memo TEXT DEFAULT '',
+  deposit_id TEXT,
+  bank TEXT DEFAULT '',
+  paid_time TEXT DEFAULT '',
+  dedupe_key TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_payments_user ON jobs_payments(user_id, paid_at);
@@ -242,12 +246,24 @@ CREATE TABLE IF NOT EXISTS jobs_payer_rules (
 );
 `
 
+/** 보강 컬럼 인덱스 — migrations/0005 끝에도 같은 문장이 있다 */
+export const JOBS_POST_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS idx_jobs_payments_dedupe ON jobs_payments(user_id, dedupe_key)',
+  'CREATE INDEX IF NOT EXISTS idx_jobs_payments_deposit ON jobs_payments(deposit_id)',
+]
+
 let ready = false
 /** 첫 요청에서 1회 실행 (ERP ensureTables 와 같은 방식). 멱등. */
 export async function ensureJobsTables(db: D1Database): Promise<void> {
   if (ready) return
   await db.exec(JOBS_DDL.split('\n').map(l => l.trim()).filter(Boolean).join(' '))
   // 기존 DB 보강 (컬럼이 이미 있으면 무시) — ERP ensureTables 의 alterStmts 와 같은 방식
-  for (const stmt of ['ALTER TABLE jobs_invoices ADD COLUMN quote_id TEXT', 'ALTER TABLE jobs_users ADD COLUMN deleted_at TEXT', 'ALTER TABLE jobs_worklogs ADD COLUMN checkout_auto INTEGER DEFAULT 0']) { try { await db.prepare(stmt).run() } catch { /* already exists */ } }
+  for (const stmt of [
+    'ALTER TABLE jobs_invoices ADD COLUMN quote_id TEXT', 'ALTER TABLE jobs_users ADD COLUMN deleted_at TEXT', 'ALTER TABLE jobs_worklogs ADD COLUMN checkout_auto INTEGER DEFAULT 0',
+    // 4-4 입금 붙여넣기: 한 입금(deposit)을 여러 청구서에 나눠 기록 · 중복 판별 (잔액 · 계좌번호 · 원문은 저장하지 않음)
+    'ALTER TABLE jobs_payments ADD COLUMN deposit_id TEXT', "ALTER TABLE jobs_payments ADD COLUMN bank TEXT DEFAULT ''", "ALTER TABLE jobs_payments ADD COLUMN paid_time TEXT DEFAULT ''", 'ALTER TABLE jobs_payments ADD COLUMN dedupe_key TEXT',
+  ]) { try { await db.prepare(stmt).run() } catch { /* already exists */ } }
+  // 위에서 보강한 컬럼에 거는 인덱스 — 컬럼 보강 뒤에 만들어야 기존 DB 에서도 실패하지 않는다
+  for (const stmt of JOBS_POST_INDEXES) { try { await db.prepare(stmt).run() } catch { /* ignore */ } }
   ready = true
 }

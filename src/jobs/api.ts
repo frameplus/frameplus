@@ -12,6 +12,7 @@ import {
   type TaxMode, type SettlementRule, type Attendance, type InvoiceStatus, type InvoiceRow, type ExpenseType,
   TAX_MODES, SETTLEMENT_RULES, EXPENSE_TYPES, isTaxMode, isSettlementRule, isExpenseType, isYmd, todayKst, monthEnd, addDays, daysBetween,
   calcWorkLog, buildInvoice, retaxInvoice, dueDateFor, invoiceStatus, dunningLevel, fmt,
+  matchPayment, normalizePayer, parseDeposits, type OpenInvoiceLike, type MatchedBy,
   type QuoteItem, type VatMode, calcQuote, quoteItemAmount, isVatMode, isQuoteItemKind, applyQuoteToRows, summarizeYear,
 } from './calc'
 
@@ -144,7 +145,7 @@ function invoiceOut(i: any, today: string) {
     createdAt: i.created_at, updatedAt: i.updated_at,
   }
 }
-const paymentOut = (p: any) => ({ id: p.id, invoiceId: p.invoice_id, siteId: p.site_id, siteName: p.site_name, amount: p.amount, payerName: p.payer_name || '', paidAt: p.paid_at, method: p.method, source: p.source, matchedBy: p.matched_by, excluded: !!p.excluded, needsReview: !!p.needs_review, memo: p.memo || '', createdAt: p.created_at })
+const paymentOut = (p: any) => ({ id: p.id, invoiceId: p.invoice_id, siteId: p.site_id, siteName: p.site_name, amount: p.amount, payerName: p.payer_name || '', paidAt: p.paid_at, paidTime: p.paid_time || '', method: p.method, source: p.source, matchedBy: p.matched_by, excluded: !!p.excluded, needsReview: !!p.needs_review, memo: p.memo || '', depositId: p.deposit_id || null, bank: p.bank || '', createdAt: p.created_at })
 const sendlogOut = (s: any) => ({ id: s.id, docType: s.doc_type, docId: s.doc_id, channel: s.channel, to: s.to_addr || '', amount: s.amount || 0, dunningLevel: s.dunning_level || '', sentAt: s.sent_at, readAt: s.read_at || null })
 
 /** 예정일이 지난 청구서는 조회 시점에 overdue 로 전환 (크론 없이도 동작) */
@@ -292,6 +293,7 @@ export function createJobsApi(deps: JobsDeps) {
       db.prepare('DELETE FROM jobs_push_subs WHERE user_id = ?').bind(u.id),
       db.prepare('DELETE FROM jobs_notifications WHERE user_id = ?').bind(u.id),
       db.prepare('DELETE FROM jobs_kv WHERE k LIKE ?').bind(`botq:${u.id}:%`),
+      db.prepare("UPDATE jobs_payments SET payer_name = '', dedupe_key = NULL WHERE user_id = ?").bind(u.id), // 입금 기록은 보관하되 입금자 이름은 지운다
       db.prepare("UPDATE jobs_sites SET contact_name = '', contact_phone = '', address = '', lat = NULL, lng = NULL, memo = '', archived = 1, updated_at = ? WHERE user_id = ?").bind(now, u.id),
       db.prepare("UPDATE jobs_quotes SET contact_phone = '', share_token = NULL, updated_at = ? WHERE user_id = ?").bind(now, u.id),
       db.prepare('UPDATE jobs_invoices SET share_token = NULL, updated_at = ? WHERE user_id = ?').bind(now, u.id),
@@ -959,9 +961,210 @@ export function createJobsApi(deps: JobsDeps) {
   })
   api.get('/payments', async (c) => {
     const u = c.get('jobsUser'), db = c.env.DB
+    // review=1 → 달과 무관하게 «확인 필요» 전부 (S-28 상단 카드)
+    if (c.req.query('review') === '1') {
+      const res = await db.prepare('SELECT p.*, s.name AS site_name FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id WHERE p.user_id = ? AND p.needs_review = 1 AND p.excluded = 0 ORDER BY p.paid_at DESC, p.created_at DESC LIMIT 100').bind(u.id).all<any>()
+      return c.json((res.results || []).map(paymentOut))
+    }
     const month = /^\d{4}-\d{2}$/.test(c.req.query('month') || '') ? c.req.query('month') : ''
-    const res = await db.prepare(`SELECT p.*, s.name AS site_name FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id WHERE p.user_id = ? ${month ? 'AND substr(p.paid_at,1,7) = ?' : ''} ORDER BY p.paid_at DESC, p.created_at DESC LIMIT 200`).bind(u.id, ...(month ? [month] : [])).all<any>()
+    const res = await db.prepare(`SELECT p.*, s.name AS site_name FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id WHERE p.user_id = ? ${month ? 'AND substr(p.paid_at,1,7) = ?' : ''} ORDER BY p.paid_at DESC, p.paid_time DESC, p.created_at DESC LIMIT 200`).bind(u.id, ...(month ? [month] : [])).all<any>()
     return c.json((res.results || []).map(paymentOut))
+  })
+
+  // ============================================ 입금 자동 기록 (S-27~29 대체 — 은행 문자 · 거래내역 붙여넣기) ====
+  // 오픈뱅킹 이용기관 등록 전까지: 붙여넣기 → 미리 보기 → 기록. 매칭은 calc.matchPayment(① 금액 ② 입금자명 · 규칙 ③ 확인 필요)
+  type OpenInv = OpenInvoiceLike & { status: string; siteName: string; periodStart: string; periodEnd: string; paidStart: number }
+  async function loadOpenInvoices(db: D1Database, userId: string): Promise<OpenInv[]> {
+    const res = await db.prepare("SELECT i.id, i.site_id, i.net, i.paid_amount, i.due_date, i.status, i.period_start, i.period_end, s.name AS site_name, s.company, s.contact_name FROM jobs_invoices i JOIN jobs_sites s ON s.id = i.site_id WHERE i.user_id = ? AND i.status != 'paid' AND i.net > COALESCE(i.paid_amount, 0) ORDER BY i.due_date, i.created_at").bind(userId).all<any>()
+    return (res.results || []).map((r: any) => ({ id: r.id, siteId: r.site_id, net: r.net || 0, paidAmount: r.paid_amount || 0, paidStart: r.paid_amount || 0, dueDate: r.due_date || '', company: r.company || '', contactName: r.contact_name || '', status: r.status, siteName: r.site_name || '', periodStart: r.period_start, periodEnd: r.period_end }))
+  }
+  const statusAfterPay = (inv: { status: string; net: number; dueDate: string }, paid: number, today: string) => invoiceStatus((inv.status === 'draft' ? 'sent' : inv.status) as InvoiceStatus, inv.net, paid, inv.dueDate, today)
+  const insertPayment = (db: D1Database, v: { id?: string; userId: string; invoiceId: string | null; siteId: string | null; amount: number; payerName: string; paidAt: string; paidTime: string; source: string; matchedBy: string; needsReview: boolean; memo?: string; depositId: string; dedupeKey: string | null; bank: string }) =>
+    db.prepare('INSERT INTO jobs_payments (id, user_id, invoice_id, site_id, amount, payer_name, paid_at, paid_time, method, source, matched_by, needs_review, memo, deposit_id, dedupe_key, bank) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(v.id || newId('pay'), v.userId, v.invoiceId, v.siteId, v.amount, v.payerName, v.paidAt, v.paidTime, 'transfer', v.source, v.matchedBy, v.needsReview ? 1 : 0, v.memo || '', v.depositId, v.dedupeKey, v.bank)
+  const MATCH_NOTE: Record<string, string> = { amount: '미입금액과 금액이 정확히 같은 청구서', payer: '입금자명이 현장 업체명 · 담당자와 같음', rule: '입금자 규칙(앞으로 이 입금자는 이 현장)', manual: '직접 지정' }
+  /** 한 번에 기록하는 입금 상한 — [확인 필요] D1 호출 한도(무료 플랜 요청당 50회)를 넘지 않도록 */
+  const IMPORT_MAX = 30
+
+  async function depositImport(c: any, apply: boolean) {
+    const u: UserRow = c.get('jobsUser'), db: D1Database = c.env.DB, today = todayKst()
+    const body = await c.req.json().catch(() => ({}))
+    const text = typeof body?.text === 'string' ? body.text : ''
+    if (!text.trim()) return c.json({ error: '은행 입금 문자나 거래내역을 붙여넣어 주세요' }, 400)
+    if (text.length > 50_000) return c.json({ error: '한 번에 5만 자까지 붙여넣을 수 있습니다. 나눠서 넣어 주세요' }, 400)
+    const skip = new Set<string>(Array.isArray(body?.skip) ? body.skip.slice(0, 200).map((x: unknown) => String(x)) : [])
+    const parsed = parseDeposits(text, today)
+    const deps = parsed.deposits
+    if (apply && deps.filter(d => !skip.has(d.key)).length > IMPORT_MAX) return c.json({ error: `한 번에 ${IMPORT_MAX}건까지 기록할 수 있습니다. 나눠서 붙여넣어 주세요` }, 400)
+    const existing = new Set<string>()
+    for (let i = 0; i < deps.length; i += 50) {
+      const part = deps.slice(i, i + 50).map(d => d.key)
+      const r = await db.prepare(`SELECT DISTINCT dedupe_key FROM jobs_payments WHERE user_id = ? AND dedupe_key IN (${placeholders(part.length)})`).bind(u.id, ...part).all<any>()
+      for (const x of r.results || []) existing.add(x.dedupe_key)
+    }
+    const minD = deps.length ? addDays(deps[0].paidAt, -1) : today, maxD = deps.length ? addDays(deps[deps.length - 1].paidAt, 1) : today
+    const [manualRes, open, ruleRes, siteRes] = await Promise.all([
+      db.prepare("SELECT p.id, p.amount, p.paid_at, s.name AS site_name FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id WHERE p.user_id = ? AND p.source = 'manual' AND p.dedupe_key IS NULL AND p.excluded = 0 AND p.paid_at BETWEEN ? AND ? ORDER BY p.paid_at").bind(u.id, minD, maxD).all<any>(),
+      loadOpenInvoices(db, u.id),
+      db.prepare('SELECT payer_name, site_id FROM jobs_payer_rules WHERE user_id = ?').bind(u.id).all<any>(),
+      db.prepare('SELECT id, name FROM jobs_sites WHERE user_id = ?').bind(u.id).all<any>(),
+    ])
+    const manual = manualRes.results || []
+    const rules = (ruleRes.results || []).map((r: any) => ({ payerName: r.payer_name, siteId: r.site_id }))
+    const siteName = new Map<string, string>((siteRes.results || []).map((r: any) => [r.id, r.name]))
+    const invById = new Map(open.map(i => [i.id, i]))
+    const usedManual = new Set<string>()
+    const items: any[] = [], stmts: D1PreparedStatement[] = []
+    const count = { auto: 0, partial: 0, review: 0, merge: 0, duplicate: 0, skip: 0 }
+    let newAmount = 0
+    for (const d of deps) {
+      const base = { key: d.key, paidAt: d.paidAt, time: d.time, amount: d.amount, payerName: d.payerName, bank: d.bank, source: d.source, dateGuessed: d.dateGuessed }
+      if (skip.has(d.key)) { count.skip++; items.push({ ...base, outcome: 'skip' }); continue }
+      if (existing.has(d.key)) { count.duplicate++; items.push({ ...base, outcome: 'duplicate', note: '이미 기록된 입금이라 건너뜁니다' }); continue }
+      // S-13 직접 기록과 같은 입금(금액 같고 날짜 ±1일) — 새로 만들지 않고 합친다
+      const m = manual.find((p: any) => !usedManual.has(p.id) && p.amount === d.amount && Math.abs(daysBetween(p.paid_at, d.paidAt)) <= 1)
+      if (m) {
+        usedManual.add(m.id); count.merge++
+        items.push({ ...base, outcome: 'merge', siteName: m.site_name || '', note: `직접 기록한 입금(${m.paid_at})과 같은 건이라 합칩니다` })
+        if (apply) stmts.push(db.prepare("UPDATE jobs_payments SET dedupe_key = ?, bank = ?, paid_time = CASE WHEN COALESCE(paid_time, '') = '' THEN ? ELSE paid_time END, payer_name = CASE WHEN COALESCE(payer_name, '') = '' THEN ? ELSE payer_name END, deposit_id = COALESCE(deposit_id, id) WHERE id = ? AND user_id = ?").bind(d.key, d.bank, d.time, d.payerName, m.id, u.id))
+        continue
+      }
+      const r = matchPayment({ amount: d.amount, payerName: d.payerName }, open, rules)
+      const allocations = r.allocations.map(a => {
+        const inv = invById.get(a.invoiceId)!
+        inv.paidAmount += a.amount // 다음 입금 매칭에 반영 (같은 청구서를 두 번 채우지 않게)
+        return { invoiceId: a.invoiceId, amount: a.amount, siteName: inv.siteName, period: period(inv.periodStart, inv.periodEnd), remainingAfter: Math.max(0, inv.net - inv.paidAmount) }
+      })
+      const outcome = allocations.length ? (r.remainder > 0 ? 'partial' : 'auto') : 'review'
+      count[outcome as 'auto' | 'partial' | 'review']++
+      newAmount += d.amount
+      const sName = r.siteId ? (siteName.get(r.siteId) || '') : ''
+      items.push({ ...base, outcome, matchedBy: r.matchedBy, matchNote: r.matchedBy ? MATCH_NOTE[r.matchedBy] : '', siteName: sName, allocations, remainder: r.remainder,
+        note: outcome === 'review' ? (r.siteId ? `${sName}에 입금 안 된 청구서가 없어 확인이 필요합니다` : '금액이 일치하는 청구서가 없습니다 — 현장을 지정해 주세요') : outcome === 'partial' ? `청구서보다 ${fmt(r.remainder)}원 많이 들어왔습니다 — 남은 금액은 확인 필요` : '' })
+      if (!apply) continue
+      const depositId = newId('dep')
+      for (const a of r.allocations) {
+        const inv = invById.get(a.invoiceId)!
+        stmts.push(insertPayment(db, { userId: u.id, invoiceId: inv.id, siteId: inv.siteId, amount: a.amount, payerName: d.payerName, paidAt: d.paidAt, paidTime: d.time, source: d.source, matchedBy: r.matchedBy || 'manual', needsReview: false, depositId, dedupeKey: d.key, bank: d.bank }))
+      }
+      if (r.remainder > 0) stmts.push(insertPayment(db, { userId: u.id, invoiceId: null, siteId: r.siteId, amount: r.remainder, payerName: d.payerName, paidAt: d.paidAt, paidTime: d.time, source: d.source, matchedBy: r.matchedBy || 'none', needsReview: true, memo: allocations.length ? '청구서보다 많이 들어온 금액' : '', depositId, dedupeKey: d.key, bank: d.bank }))
+    }
+    if (apply) {
+      const now = nowIso()
+      for (const inv of open) if (inv.paidAmount !== inv.paidStart) stmts.push(db.prepare('UPDATE jobs_invoices SET paid_amount = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(inv.paidAmount, statusAfterPay(inv, inv.paidAmount, today), now, inv.id, u.id))
+      if (stmts.length) await db.batch(stmts)
+    }
+    return c.json({ applied: apply, items, skipped: parsed.skipped, summary: { found: deps.length, ...count, newAmount } })
+  }
+  api.post('/payments/import/preview', (c) => depositImport(c, false))
+  api.post('/payments/import', (c) => depositImport(c, true))
+
+  async function loadPayment(db: D1Database, userId: string, id: string) {
+    return db.prepare('SELECT p.*, s.name AS site_name FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id WHERE p.id = ? AND p.user_id = ?').bind(id, userId).first<any>()
+  }
+  // S-29 — 입금 1건 상세 · 후보 현장(미입금 청구서가 있는 현장)
+  api.get('/payments/:id', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const p = await loadPayment(db, u.id, c.req.param('id'))
+    if (!p) return c.json({ error: '입금 기록을 찾을 수 없습니다' }, 404)
+    const groupRes = p.deposit_id
+      ? await db.prepare('SELECT p.*, s.name AS site_name, i.period_start, i.period_end FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id LEFT JOIN jobs_invoices i ON i.id = p.invoice_id WHERE p.user_id = ? AND p.deposit_id = ? ORDER BY p.invoice_id IS NULL, p.created_at').bind(u.id, p.deposit_id).all<any>()
+      : await db.prepare('SELECT p.*, s.name AS site_name, i.period_start, i.period_end FROM jobs_payments p LEFT JOIN jobs_sites s ON s.id = p.site_id LEFT JOIN jobs_invoices i ON i.id = p.invoice_id WHERE p.id = ?').bind(p.id).all<any>()
+    const group = groupRes.results || []
+    const open = await loadOpenInvoices(db, u.id)
+    const bySite = new Map<string, { siteId: string; siteName: string; company: string; unpaid: number; invoices: number }>()
+    for (const i of open) { const s = bySite.get(i.siteId) || { siteId: i.siteId, siteName: i.siteName, company: i.company || '', unpaid: 0, invoices: 0 }; s.unpaid += i.net - i.paidAmount; s.invoices++; bySite.set(i.siteId, s) }
+    const rules = (await db.prepare('SELECT r.id, r.payer_name, r.site_id, s.name AS site_name FROM jobs_payer_rules r LEFT JOIN jobs_sites s ON s.id = r.site_id WHERE r.user_id = ?').bind(u.id).all<any>()).results || []
+    const payer = normalizePayer(p.payer_name || '')
+    const rule = payer ? rules.find((r: any) => normalizePayer(r.payer_name) === payer) : null
+    const suggested = p.site_id || rule?.site_id || ''
+    const candidates = [...bySite.values()].sort((a, b) => Number(b.siteId === suggested) - Number(a.siteId === suggested) || b.unpaid - a.unpaid)
+    return c.json({
+      payment: paymentOut(p), total: group.reduce((s: number, g: any) => s + (g.amount || 0), 0),
+      group: group.map((g: any) => ({ ...paymentOut(g), period: g.period_start ? period(g.period_start, g.period_end) : '' })),
+      matchNote: MATCH_NOTE[p.matched_by] || '', candidates, suggestedSiteId: suggested, rule: rule ? { id: rule.id, siteId: rule.site_id, siteName: rule.site_name || '' } : null,
+    })
+  })
+  // S-29 기록하기 — 고른 현장의 미입금 청구서에 예정일 순으로 채운다. 남으면 확인 필요로 남김
+  api.post('/payments/:id/assign', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB, today = todayKst()
+    const p = await loadPayment(db, u.id, c.req.param('id'))
+    if (!p) return c.json({ error: '입금 기록을 찾을 수 없습니다' }, 404)
+    if (p.invoice_id) return c.json({ error: '이미 청구서에 기록된 입금입니다. «현장 수정»을 먼저 눌러 주세요' }, 409)
+    if (!(p.amount > 0)) return c.json({ error: '금액이 없는 입금 기록입니다' }, 409)
+    const body = await c.req.json<any>().catch(() => ({}))
+    const site = await loadSite(db, u.id, str(body.siteId, 40))
+    if (!site) return c.json({ error: '현장을 골라 주세요' }, 400)
+    const open = (await loadOpenInvoices(db, u.id)).filter(i => i.siteId === site.id)
+    if (!open.length) return c.json({ error: '이 현장에는 입금 안 된 청구서가 없습니다. 청구서를 먼저 만들어 주세요' }, 409)
+    let left = p.amount
+    const allocs: { inv: OpenInv; amount: number }[] = []
+    for (const inv of open) { if (left <= 0) break; const take = Math.min(inv.net - inv.paidAmount, left); allocs.push({ inv, amount: take }); left -= take }
+    const depositId = p.deposit_id || newId('dep'), now = nowIso()
+    const stmts: D1PreparedStatement[] = [
+      db.prepare("UPDATE jobs_payments SET invoice_id = ?, site_id = ?, amount = ?, matched_by = 'manual', needs_review = 0, excluded = 0, deposit_id = ?, memo = '' WHERE id = ? AND user_id = ?").bind(allocs[0].inv.id, site.id, allocs[0].amount, depositId, p.id, u.id),
+    ]
+    for (const a of allocs.slice(1)) stmts.push(insertPayment(db, { userId: u.id, invoiceId: a.inv.id, siteId: site.id, amount: a.amount, payerName: p.payer_name || '', paidAt: p.paid_at, paidTime: p.paid_time || '', source: p.source, matchedBy: 'manual', needsReview: false, depositId, dedupeKey: p.dedupe_key, bank: p.bank || '' }))
+    if (left > 0) stmts.push(insertPayment(db, { userId: u.id, invoiceId: null, siteId: site.id, amount: left, payerName: p.payer_name || '', paidAt: p.paid_at, paidTime: p.paid_time || '', source: p.source, matchedBy: 'manual', needsReview: true, memo: '청구서보다 많이 들어온 금액', depositId, dedupeKey: p.dedupe_key, bank: p.bank || '' }))
+    for (const a of allocs) { const paid = a.inv.paidAmount + a.amount; stmts.push(db.prepare('UPDATE jobs_invoices SET paid_amount = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(paid, statusAfterPay(a.inv, paid, today), now, a.inv.id, u.id)) }
+    const remember = body.rememberPayer === true && !!(p.payer_name || '').trim()
+    if (remember) stmts.push(db.prepare('INSERT INTO jobs_payer_rules (id, user_id, payer_name, site_id) VALUES (?,?,?,?) ON CONFLICT(user_id, payer_name) DO UPDATE SET site_id = excluded.site_id').bind(newId('pr'), u.id, p.payer_name.trim(), site.id))
+    await db.batch(stmts)
+    const unpaidBefore = open.reduce((s, i) => s + i.net - i.paidAmount, 0)
+    return c.json({ ok: true, siteName: site.name, allocations: allocs.map(a => ({ invoiceId: a.inv.id, amount: a.amount, period: period(a.inv.periodStart, a.inv.periodEnd) })), remainder: left, unpaidBefore, unpaidAfter: Math.max(0, unpaidBefore - (p.amount - left)), rememberedPayer: remember })
+  })
+  // «정산과 무관한 입금» — 청구서에 붙지 않은 건만
+  api.post('/payments/:id/exclude', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const p = await loadPayment(db, u.id, c.req.param('id'))
+    if (!p) return c.json({ error: '입금 기록을 찾을 수 없습니다' }, 404)
+    if (p.invoice_id) return c.json({ error: '청구서에 기록된 입금입니다. «현장 수정» 후 제외해 주세요' }, 409)
+    await db.prepare('UPDATE jobs_payments SET excluded = 1, needs_review = 0 WHERE id = ? AND user_id = ?').bind(p.id, u.id).run()
+    return c.json({ ok: true })
+  })
+  // 지난 입금에서 다시 지정 — 제외를 풀고 확인 필요로 되돌림
+  api.post('/payments/:id/include', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const p = await loadPayment(db, u.id, c.req.param('id'))
+    if (!p) return c.json({ error: '입금 기록을 찾을 수 없습니다' }, 404)
+    if (!p.excluded) return c.json({ error: '제외된 입금이 아닙니다' }, 409)
+    await db.prepare("UPDATE jobs_payments SET excluded = 0, needs_review = 1, memo = '' WHERE id = ? AND user_id = ?").bind(p.id, u.id).run()
+    return c.json({ ok: true })
+  })
+  // «잘못 기록되었나요? 현장 수정» — 자동 · 지정 기록을 되돌려 한 건의 «확인 필요»로 합친다 (붙여넣기로 들어온 입금만)
+  api.post('/payments/:id/unassign', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB, today = todayKst()
+    const p = await loadPayment(db, u.id, c.req.param('id'))
+    if (!p) return c.json({ error: '입금 기록을 찾을 수 없습니다' }, 404)
+    if (p.source === 'manual') return c.json({ error: '직접 기록한 입금은 청구서 화면에서 확인해 주세요' }, 409)
+    const group = p.deposit_id ? ((await db.prepare('SELECT * FROM jobs_payments WHERE user_id = ? AND deposit_id = ? ORDER BY created_at').bind(u.id, p.deposit_id).all<any>()).results || []) : [p]
+    const total = group.reduce((s: number, g: any) => s + (g.amount || 0), 0)
+    const byInv = new Map<string, number>()
+    for (const g of group) if (g.invoice_id) byInv.set(g.invoice_id, (byInv.get(g.invoice_id) || 0) + g.amount)
+    const stmts: D1PreparedStatement[] = [], now = nowIso()
+    for (const [invId, amt] of byInv) {
+      const inv = await db.prepare('SELECT id, net, paid_amount, due_date, status FROM jobs_invoices WHERE id = ? AND user_id = ?').bind(invId, u.id).first<any>()
+      if (!inv) continue
+      const paid = Math.max(0, (inv.paid_amount || 0) - amt)
+      stmts.push(db.prepare('UPDATE jobs_invoices SET paid_amount = ?, status = ?, updated_at = ? WHERE id = ? AND user_id = ?').bind(paid, statusAfterPay({ status: inv.status, net: inv.net, dueDate: inv.due_date }, paid, today), now, inv.id, u.id))
+    }
+    const keep = group[0]
+    stmts.push(db.prepare("UPDATE jobs_payments SET invoice_id = NULL, site_id = NULL, amount = ?, matched_by = 'none', needs_review = 1, excluded = 0, memo = '' WHERE id = ? AND user_id = ?").bind(total, keep.id, u.id))
+    for (const g of group.slice(1)) stmts.push(db.prepare('DELETE FROM jobs_payments WHERE id = ? AND user_id = ?').bind(g.id, u.id))
+    await db.batch(stmts)
+    return c.json({ ok: true, paymentId: keep.id, amount: total })
+  })
+  // S-37 «입금자 규칙» — S-29 체크로 쌓이고 여기서만 지운다
+  api.get('/payer-rules', async (c) => {
+    const u = c.get('jobsUser')
+    const res = await c.env.DB.prepare('SELECT r.id, r.payer_name, r.site_id, r.created_at, s.name AS site_name FROM jobs_payer_rules r LEFT JOIN jobs_sites s ON s.id = r.site_id WHERE r.user_id = ? ORDER BY r.created_at DESC').bind(u.id).all<any>()
+    return c.json((res.results || []).map((r: any) => ({ id: r.id, payerName: r.payer_name, siteId: r.site_id, siteName: r.site_name || '(삭제된 현장)', createdAt: r.created_at })))
+  })
+  api.delete('/payer-rules/:id', async (c) => {
+    const u = c.get('jobsUser')
+    const r = await c.env.DB.prepare('DELETE FROM jobs_payer_rules WHERE id = ? AND user_id = ?').bind(c.req.param('id'), u.id).run()
+    if (!r.meta?.changes) return c.json({ error: '규칙을 찾을 수 없습니다' }, 404)
+    return c.json({ ok: true })
   })
   api.get('/sendlogs', async (c) => {
     const u = c.get('jobsUser'), db = c.env.DB

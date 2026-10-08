@@ -185,6 +185,10 @@ CREATE TABLE IF NOT EXISTS jobs_payments (
   excluded INTEGER DEFAULT 0,
   needs_review INTEGER DEFAULT 0,
   memo TEXT DEFAULT '',
+  deposit_id TEXT,
+  bank TEXT DEFAULT '',
+  paid_time TEXT DEFAULT '',
+  dedupe_key TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_payments_user ON jobs_payments(user_id, paid_at);
@@ -235,3 +239,7 @@ CREATE TABLE IF NOT EXISTS jobs_payer_rules (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(user_id, payer_name)
 );
+
+-- 보강 컬럼 인덱스 (schema.ts JOBS_POST_INDEXES 와 동일)
+CREATE INDEX IF NOT EXISTS idx_jobs_payments_dedupe ON jobs_payments(user_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS idx_jobs_payments_deposit ON jobs_payments(deposit_id);

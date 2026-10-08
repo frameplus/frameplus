@@ -10,11 +10,13 @@
 - **Production**: https://frameplus-erp.pages.dev
 - **GitHub**: https://github.com/frameplus/frameplus
 
-## JOBS 앱 (현장 반장 기록 · 청구 · 입금) — 1차
+## JOBS 앱 (현장 반장 기록 · 청구 · 입금) — 1~4차
 - **경로**: `/jobs/` (모바일 PWA, 휴대폰 OTP 로그인 — ERP 계정과 무관) · 공개 청구서 `/jobs/v/:token` · 공개 견적서 `/jobs/q/:token` · 약관 `/jobs/legal/{terms,privacy,location}` · API `/api/jobs/*`
 - **코드**: `src/jobs/` (calc · schema · api · page), `public/static/jobs/`, `migrations/0005_jobs_core.sql`, 테스트 `npm test`
 - **환경변수**: `JOBS_PUBLIC_ORIGIN`(공유 링크 origin), `SOLAPI_*`(인증 문자 · 청구서 문자), `RESEND_API_KEY`(청구서 · 견적서 메일), `JOBS_KAKAO_TPL_INVOICE|DUNNING|QUOTE`(알림톡 템플릿 ID, 심사 후), `JOBS_DEV_OTP=1`은 **로컬 전용**(인증번호를 응답에 표시)
 - **R2 바인딩(선택)**: Pages → Settings → Bindings → R2 bucket `JOBS_PHOTOS`(버킷 `jobs-photos`). 있으면 사진을 R2 에, 없으면 D1 base64 에 저장. 로컬: `npx wrangler pages dev dist --local --r2 JOBS_PHOTOS --binding JOBS_DEV_OTP=1`
+- **알림(4차)**: 웹 푸시(VAPID, RFC 8291 암호화 직접 구현) + 앱 알림함. 퇴근 알람 3회 → 90분 뒤 자동 퇴근 · 입금 예정 D-3 · 연체 · 평일 저녁 미기록. Pages 는 크론이 없어 별도 Worker `workers/jobs-cron`(10분마다)이 `POST /api/jobs/cron/run` 호출. 설정: `JOBS_VAPID_PUBLIC|PRIVATE|SUBJECT`, `JOBS_CRON_SECRET` — [docs/JOBS_NOTIFICATIONS.md](./docs/JOBS_NOTIFICATIONS.md)
+- **입금 자동 기록(4차, S-27~29 대체)**: 은행 입금 문자 · 인터넷뱅킹 거래내역(엑셀 복사)을 붙여넣으면 `POST /api/jobs/payments/import` 가 날짜 · 금액 · 입금자만 읽어 매칭 ①금액 ②입금자명 · 규칙 ③확인 필요 → S-29 현장 지정 · «앞으로 이 입금자는 이 현장» 규칙. 잔액 · 계좌번호 · 원문 미저장, 같은 문자 재붙여넣기 · 직접 기록과 중복 방지, 한 번에 30건. 오픈뱅킹은 금융결제원 이용기관 등록 후
 - **봇 «직접 묻기»(S-12)**: 카드 6종은 앱이 바로 답하고, 기간 · 현장을 콕 집은 질문만 `POST /api/jobs/bot/ask` → OpenAI(ERP 와 같은 `OPENAI_API_KEY`, 모델 `JOBS_AI_MODEL` 기본 gpt-4o-mini). 사용자당 하루 20회, 기록 요약만 전송(이름 · 전화번호 · 주소 · 사업자번호 · 입금자명 · 메모 · 위치 제외), 질문 문장은 저장 안 함. 키가 없으면 503 → 카드 답변으로 폴백
 - **사진 주소**: 어느 저장소든 `/jobs/photo/:id?e=만료&s=서명`(HMAC-SHA256) 서명 URL 로만 열린다 — 앱 24시간 · 공개 청구서 6시간, 서명 없음 · 위조 · 만료는 403. 비밀키 `JOBS_URL_SECRET`(선택, 16자+) 없으면 첫 사용 시 자동 생성해 D1 `jobs_kv` 에 보관
 - **네이티브 래핑**: `capacitor.config.ts` + [docs/JOBS_CAPACITOR.md](./docs/JOBS_CAPACITOR.md), 알림톡 문안 [docs/JOBS_KAKAO_TEMPLATES.md](./docs/JOBS_KAKAO_TEMPLATES.md)

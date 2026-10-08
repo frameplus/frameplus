@@ -150,7 +150,8 @@
           if (b === 'new') return await renderQuote('new', r.query)
           if (c === 'convert') return await renderConvert(b)
           return await renderQuote(b, r.query)
-        case 'payments': return await renderPayments()
+        case 'payments': return b === 'import' ? await renderImport() : await renderPayments()
+        case 'payment': return await renderPaymentDetail(b)
         case 'sendlogs': return await renderSendlogs()
         case 'settings': return await renderSettings()
         case 'notifications': return await renderNotifications()
@@ -310,7 +311,7 @@
   async function renderSettle() {
     app.innerHTML = screen(`<div class="hdr"><div class="ttl">정산</div><div class="skeleton" style="background:rgba(255,255,255,.2)"></div></div>`, 'settle')
     const month = todayKst().slice(0, 7)
-    const [invs, pays, quotes] = await Promise.all([api('/invoices'), api('/payments?month=' + month), api('/quotes')])
+    const [invs, pays, quotes, review] = await Promise.all([api('/invoices'), api('/payments?month=' + month), api('/quotes'), api('/payments?review=1').catch(() => [])])
     if (route().path !== 'settle') return
     await loadSites()
     const open = invs.filter(i => ['sent', 'partial', 'overdue'].includes(i.status)).sort((a, b) => (b.daysOverdue - a.daysOverdue) || a.dueDate.localeCompare(b.dueDate))
@@ -324,7 +325,8 @@
         <div class="line"><span>미입금 청구서</span><span class="num">${open.length}건${open.filter(i => i.status === 'overdue').length ? ` · <span class="red">예정일 지남 ${open.filter(i => i.status === 'overdue').length}건</span>` : ''}</span></div>
       </div>
       <div style="display:flex;gap:10px"><button class="btn" data-act="nav" data-to="#/quote/new" style="flex:0 0 38%">새 견적서</button><button class="btn primary" data-act="nav" data-to="#/invoice/new" style="flex:1">새 청구서 만들기</button></div>
-      <div class="note" style="margin-top:10px">계좌를 연결하면 입금이 자동으로 기록됩니다 — 오픈뱅킹 이용기관 등록 후 제공 예정. 지금은 청구서에서 «입금 확인»으로 직접 기록합니다.</div>
+      ${review.length ? `<a class="card warn" href="#/payments" style="display:block;margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b>확인 필요 입금 ${review.length}건</b><span class="badge red">${won(review.reduce((t, p) => t + p.amount, 0))}</span></div><div class="s label" style="margin-top:4px">금액이 맞는 청구서를 못 찾은 입금 — 현장을 지정해 주세요 ›</div></a>` : ''}
+      <div class="card tight" style="margin-top:12px"><a class="row link" href="#/payments/import"><div class="main"><div class="t">입금 문자 붙여넣기 · 자동 기록</div><div class="s">은행 입금 문자나 인터넷뱅킹 거래내역을 붙여넣으면 청구서에 바로 기록됩니다</div></div><span class="chev">›</span></a></div>
       ${quotes.length ? sec('견적서', '전체 보기', '#/quotes') + `<div class="card tight">${quotes.slice(0, 3).map(quoteRow).join('')}</div>` : ''}
       ${sec('미입금', '입금 내역', '#/payments')}
       ${open.length ? `<div class="card tight">${open.map(i => invRow(i)).join('')}</div>` : '<div class="card"><div class="empty" style="padding:14px">미입금 청구서가 없습니다</div></div>'}
@@ -556,7 +558,7 @@
       <div class="field"><label>현장 사진 ${i.photoCount}장 첨부 (날짜 · 위치 각인)</label>${toggle(i.attachPhotos, 'inv.photos.saved', i.photoCount ? '' : 'disabled')}</div>
       <div class="field"><label>입금 예정일</label><b>${kdate(i.dueDate)}</b></div>
       <div class="note">출근일: ${i.worklogs.map(w => `${+w.date.slice(8, 10)}${w.attendance === 'half' ? '(반)' : ''}${w.overtime_hours ? `+${w.overtime_hours}h` : ''}`).join(' · ') || '-'}</div>
-      ${i.payments.length ? sec('입금 내역') + `<div class="card tight">${i.payments.map(p => `<div class="row"><div class="main"><div class="t">${kshort(p.paidAt)} · ${p.method === 'cash' ? '현금' : p.method === 'check' ? '수표' : '계좌이체'}</div><div class="s">${esc(p.payerName || '입금자 미입력')}</div></div><div class="amt">${won(p.amount)}</div></div>`).join('')}</div>` : ''}
+      ${i.payments.length ? sec('입금 내역') + `<div class="card tight">${i.payments.map(p => `<a class="row link" href="#/payment/${p.id}"><div class="main"><div class="t">${kshort(p.paidAt)} · ${p.method === 'cash' ? '현금' : p.method === 'check' ? '수표' : '계좌이체'}</div><div class="s">${esc(p.payerName || '입금자 미입력')} · ${payBadge(p)}</div></div><div class="amt">${won(p.amount)}</div></a>`).join('')}</div>` : ''}
       ${i.sendLogs.length ? sec('보낸 기록') + `<div class="card tight">${i.sendLogs.map(s => `<div class="row"><div class="main"><div class="t">${s.docType === 'dunning' ? '독촉' : '청구서'} · ${s.channel === 'sms' ? '문자' : s.channel === 'kakao' ? '카카오톡' : s.channel === 'pdf' ? 'PDF' : '링크'}</div><div class="s">${esc((s.sentAt || '').replace('T', ' ').slice(0, 16))}${s.to ? ' · ' + esc(ph(s.to)) : ''}</div></div></div>`).join('')}</div>` : ''}
       ${!i.payments.length ? `<button class="btn ghost danger" data-act="inv.del" data-id="${i.id}">청구서 삭제 (기록은 남습니다)</button>` : ''}
       ${fixed(paid ? '<button class="btn" data-act="inv.share">링크 공유</button>' : `<button class="btn secondary" data-act="nav" data-to="#/invoice/${i.id}/pay">입금 확인</button><button class="btn primary" data-act="inv.sendsheet">청구서 보내기</button>`)}
@@ -849,17 +851,92 @@
   }
 
   // ------------------------------------------------------------ 입금 내역 · 보낸 기록 ----
+  const payBadge = p => p.excluded ? '<span class="badge">제외</span>' : p.needsReview ? '<span class="badge red">확인 필요</span>' : p.source === 'manual' ? '<span class="badge">직접 입력</span>' : p.matchedBy === 'manual' ? '<span class="badge">직접 지정</span>' : '<span class="badge sky">자동 기록</span>'
   async function renderPayments() {
     const month = S.month || (S.month = todayKst().slice(0, 7))
     app.innerHTML = screen(topbar('뒤로', '입금 내역', '', { leftAct: 'nav', leftTo: '#/settle' }) + '<div class="skeleton"></div>', 'settle')
-    const pays = await api('/payments?month=' + month)
+    const [pays, review] = await Promise.all([api('/payments?month=' + month), api('/payments?review=1')])
     if (route().path !== 'payments') return
-    const total = pays.filter(p => !p.excluded).reduce((s, p) => s + p.amount, 0)
+    const live = pays.filter(p => !p.excluded)
+    const total = live.reduce((t, p) => t + p.amount, 0)
+    const autoN = live.filter(p => p.source !== 'manual' && !p.needsReview).length, manualN = live.filter(p => p.source === 'manual').length
     app.innerHTML = screen(`
       ${topbar('뒤로', '입금 내역', '', { leftAct: 'nav', leftTo: '#/settle' })}
-      <div class="hdr" style="margin-top:0"><div class="sub" style="display:flex;align-items:center;gap:4px"><button class="tb" data-act="month.prev" style="color:#fff;font-size:22px;min-width:36px;height:36px;padding:0">‹</button><span>${kmonth(month)} 입금</span><button class="tb" data-act="month.next" style="color:#fff;font-size:22px;min-width:36px;height:36px;padding:0">›</button></div><div class="big">${fmt(total)}<small>원</small></div><div class="line"><span>${pays.length}건 · 직접 기록</span><span>자동 기록은 계좌 연결 후</span></div></div>
-      ${pays.length ? `<div class="card tight">${pays.map(p => `<a class="row link" href="#/invoice/${p.invoiceId}"><div class="main"><div class="t">${kshort(p.paidAt)} · ${esc(p.siteName || '')}</div><div class="s">${esc(p.payerName || '입금자 미입력')} · ${p.method === 'cash' ? '현금' : p.method === 'check' ? '수표' : '계좌이체'} · <span class="badge">직접 입력</span></div></div><div class="amt">${won(p.amount)}</div></a>`).join('')}</div>` : '<div class="card"><div class="empty">이 달 입금 기록이 없습니다</div></div>'}
+      <div class="hdr" style="margin-top:0"><div class="sub" style="display:flex;align-items:center;gap:4px"><button class="tb" data-act="month.prev" style="color:#fff;font-size:22px;min-width:36px;height:36px;padding:0">‹</button><span>${kmonth(month)} 입금</span><button class="tb" data-act="month.next" style="color:#fff;font-size:22px;min-width:36px;height:36px;padding:0">›</button></div><div class="big">${fmt(total)}<small>원</small></div><div class="line"><span>자동 ${autoN}건 · 직접 ${manualN}건</span><span>${review.length ? `<span class="red">확인 필요 ${review.length}건</span>` : '확인 필요 없음'}</span></div></div>
+      <button class="btn primary" data-act="nav" data-to="#/payments/import">입금 문자 · 거래내역 붙여넣기</button>
+      ${review.length ? sec('확인 필요') + review.map(p => `<div class="card warn">
+        <div class="row" style="box-shadow:none;padding:0;min-height:0"><div class="main"><div class="t">${esc(p.payerName || '입금자 없음')}</div><div class="s">${kshort(p.paidAt)}${p.paidTime ? ' ' + esc(p.paidTime) : ''}${p.bank ? ' · ' + esc(p.bank) : ''}</div></div><div class="amt">${won(p.amount)}</div></div>
+        <div class="s label" style="margin:8px 0 10px">${esc(p.memo || (p.siteName ? `${p.siteName}에 입금 안 된 청구서가 없습니다` : '금액이 일치하는 청구서가 없습니다'))}</div>
+        <div style="display:flex;gap:8px"><a class="btn sm primary" href="#/payment/${p.id}" style="flex:1">현장 지정하기</a><button class="btn sm" data-act="pay.exclude" data-id="${p.id}" style="flex:0 0 40%">정산과 무관</button></div>
+      </div>`).join('') : ''}
+      ${sec(kmonth(month) + ' 입금')}
+      ${pays.length ? `<div class="card tight">${pays.map(p => `<a class="row link" href="#/payment/${p.id}"><div class="main"><div class="t">${kshort(p.paidAt)}${p.paidTime ? ' ' + esc(p.paidTime) : ''} · ${esc(p.siteName || (p.excluded ? '정산과 무관' : '현장 미지정'))}</div><div class="s">${esc(p.payerName || '입금자 미입력')} · ${payBadge(p)}</div></div><div class="amt" style="${p.excluded ? 'color:var(--muted);text-decoration:line-through' : ''}">${won(p.amount)}</div></a>`).join('')}</div>` : '<div class="card"><div class="empty">이 달 입금 기록이 없습니다</div></div>'}
+      <div class="note">자동 기록이 틀렸으면 그 줄을 눌러 «현장 수정». 제외한 입금도 눌러서 다시 지정할 수 있습니다.</div>
     `, 'settle')
+  }
+  // ---- 입금 붙여넣기 (S-27 대체: 계좌 연결 없이 은행 문자 · 거래내역으로 자동 기록)
+  const IMP_OUT = { auto: ['sky', '자동 기록'], partial: ['sky', '자동 기록 · 남은 금액 확인'], review: ['red', '확인 필요'], merge: ['', '직접 기록과 합침'], duplicate: ['', '이미 기록됨'], skip: ['', '빼 둠'] }
+  const IMP_WRITES = ['auto', 'partial', 'review', 'merge']
+  async function renderImport() {
+    if (!S.draft) S.draft = { text: '', preview: null, previewText: '', skip: [] }
+    const d = S.draft, pv = d.preview
+    const writes = pv ? pv.items.filter(i => IMP_WRITES.includes(i.outcome) && !d.skip.includes(i.key)).length : 0
+    const previewHtml = !pv ? '' : `
+      ${sec(`찾은 입금 ${pv.summary.found}건`)}
+      ${pv.items.length ? `<div class="card tight">${pv.items.map(i => { const [cls, label] = IMP_OUT[i.outcome] || ['', i.outcome], off = d.skip.includes(i.key)
+        return `<div class="row" style="align-items:flex-start${off ? ';opacity:.45' : ''}"><div class="main">
+          <div class="t">${esc(i.payerName || '입금자 없음')} <span class="badge ${off ? '' : cls}">${off ? '빼 둠' : label}</span></div>
+          <div class="s">${kshort(i.paidAt)}${i.time ? ' ' + esc(i.time) : ''}${i.dateGuessed ? ' <span class="red">(날짜 없음 → 오늘)</span>' : ''}${i.bank ? ' · ' + esc(i.bank) : ''}${i.source === 'excel' ? ' · 거래내역' : ''}</div>
+          ${(i.allocations || []).map(a => `<div class="s">→ ${esc(a.siteName)} ${esc(a.period)} 청구서에 ${won(a.amount)} · ${a.remainingAfter ? '남은 ' + won(a.remainingAfter) : '완납'}</div>`).join('')}
+          ${i.matchNote ? `<div class="s">근거: ${esc(i.matchNote)}</div>` : ''}
+          ${i.note ? `<div class="s ${i.outcome === 'review' ? 'red' : 'label'}">${esc(i.note)}</div>` : ''}
+        </div><div style="text-align:right;flex:none"><div class="amt">${won(i.amount)}</div>${IMP_WRITES.includes(i.outcome) ? `<button type="button" class="btn sm" data-act="imp.skip" data-key="${esc(i.key)}" style="margin-top:6px;min-height:34px;padding:0 12px;box-shadow:inset 0 0 0 1px var(--line2)">${off ? '넣기' : '빼기'}</button>` : ''}</div></div>` }).join('')}</div>` : '<div class="card"><div class="empty" style="padding:14px">입금 내역을 찾지 못했습니다. 문자 전체(은행명 · 날짜 · «입금» · 금액)를 복사했는지 확인해 주세요.</div></div>'}
+      ${pv.skipped.length ? `<div class="note">읽지 않은 ${pv.skipped.length}건 — ${pv.skipped.slice(0, 5).map(x => `${esc(x.reason)}: «${esc(x.text.slice(0, 28))}»`).join(' · ')}${pv.skipped.length > 5 ? ' …' : ''}</div>` : ''}`
+    app.innerHTML = screen(`
+      ${topbar('뒤로', '입금 붙여넣기', '', { leftAct: 'nav', leftTo: '#/payments' })}
+      <div class="note">은행 입금 문자를 길게 눌러 <b>복사</b> → 아래에 <b>붙여넣기</b>. 여러 건은 빈 줄로 나눠 주세요. 인터넷뱅킹 거래내역을 엑셀에서 제목 줄까지 복사해 붙여도 됩니다. <b>잔액 · 계좌번호 · 원문은 저장하지 않습니다.</b></div>
+      <textarea class="ta" data-bind="text" placeholder="[Web발신]&#10;우리 10/08 14:23&#10;1002-***-123456&#10;입금 1,000,000원&#10;대성건설">${esc(d.text)}</textarea>
+      <div style="display:flex;gap:10px;margin:10px 0 4px"><button class="btn" data-act="imp.paste" style="flex:0 0 42%">클립보드에서</button><button class="btn ${pv ? '' : 'primary'}" data-act="imp.preview" style="flex:1">${pv ? '다시 미리 보기' : '미리 보기'}</button></div>
+      ${previewHtml}
+      ${pv && writes ? fixed(`<button class="btn primary" data-act="imp.apply">${writes}건 기록하기</button>`) : ''}
+    `, 'settle')
+  }
+  // ---- S-29 입금 현장 지정 · 상세
+  async function renderPaymentDetail(id) {
+    app.innerHTML = screen(topbar('뒤로', '입금', '', { leftAct: 'nav', leftTo: '#/payments' }) + '<div class="skeleton"></div>', 'settle')
+    const r = await api('/payments/' + encodeURIComponent(id))
+    if (route().path !== 'payment/' + id) return
+    const p = r.payment
+    if (!S.draft) S.draft = { siteId: r.candidates.some(c => c.siteId === r.suggestedSiteId) ? r.suggestedSiteId : '', remember: true, exclude: false }
+    const d = S.draft
+    const srcLabel = p.source === 'manual' ? '직접 입력' : p.source === 'excel' ? '거래내역 붙여넣기' : '입금 문자 붙여넣기'
+    const head = `<div class="hdr" style="margin-top:0"><div class="sub">${esc(p.payerName || '입금자 없음')} · ${kdate(p.paidAt)}${p.paidTime ? ' ' + esc(p.paidTime) : ''}${p.bank ? ' · ' + esc(p.bank) : ''}</div><div class="big">${fmt(p.invoiceId ? r.total : p.amount)}<small>원</small></div><div class="line"><span>${srcLabel}</span><span>${payBadge(p)}</span></div></div>`
+    let body = ''
+    if (p.excluded) {
+      body = `<div class="card"><b>정산과 무관한 입금으로 제외했습니다</b><div class="s label" style="margin-top:4px">정산 합계 · 미입금 계산에 들어가지 않습니다. 잘못 뺐다면 다시 지정하세요.</div></div>${fixed(`<button class="btn primary" data-act="pay.include" data-id="${p.id}">다시 지정하기</button>`)}`
+    } else if (!p.invoiceId) {
+      const c = r.candidates.find(x => x.siteId === d.siteId)
+      const sentence = d.exclude ? '<div class="ans">이 입금은 정산 합계에서 빠집니다. 나중에 입금 내역에서 다시 지정할 수 있어요.</div>'
+        : !c ? '' : p.amount < c.unpaid ? `<div class="ans"><b>${esc(c.siteName)}</b> 미입금 ${won(c.unpaid)} 중 <b>${won(p.amount)}</b>이 입금되어 <b>${won(c.unpaid - p.amount)}</b>이 남습니다.</div>`
+        : p.amount === c.unpaid ? `<div class="ans"><b>${esc(c.siteName)}</b> 미입금 ${won(c.unpaid)}이 <b>모두 입금</b>되어 완납됩니다.</div>`
+        : `<div class="ans"><b>${esc(c.siteName)}</b> 미입금 ${won(c.unpaid)}이 모두 입금되고, 남는 <b>${won(p.amount - c.unpaid)}</b>은 확인 필요로 남겨 둡니다.</div>`
+      const others = r.group.filter(g => g.id !== p.id && g.invoiceId)
+      body = `
+        ${others.length ? `<div class="note">이 입금 중 ${won(others.reduce((t, g) => t + g.amount, 0))}은 ${others.map(g => esc(g.siteName) + ' ' + esc(g.period)).join(', ')} 청구서에 이미 기록됐습니다. 남은 ${won(p.amount)}의 현장을 고르세요.</div>` : ''}
+        ${sec('입금된 현장을 선택하세요')}
+        ${r.candidates.length ? r.candidates.map(x => `<button type="button" class="pick ${d.siteId === x.siteId && !d.exclude ? 'on' : ''}" data-act="pay.pick" data-id="${x.siteId}"><span class="rd"></span><div class="main"><div class="t">${esc(x.siteName)}${x.siteId === r.suggestedSiteId ? ' <span class="badge sky">추천</span>' : ''}</div><div class="s">${x.company ? esc(x.company) + ' · ' : ''}미입금 청구서 ${x.invoices}건</div></div><div class="amt">${won(x.unpaid)}</div></button>`).join('') : '<div class="card"><div class="empty" style="padding:14px">입금 안 된 청구서가 있는 현장이 없습니다. 청구서를 먼저 만들거나 «정산과 무관»으로 두세요.</div></div>'}
+        <button type="button" class="pick ${d.exclude ? 'on' : ''}" data-act="pay.pick" data-id="__exclude"><span class="rd"></span><div class="main"><div class="t">정산과 무관한 입금</div><div class="s">개인 송금 · 환불 등 — 나중에 다시 지정할 수 있어요</div></div></button>
+        ${sentence}
+        ${p.payerName && !d.exclude ? `<div class="field"><label>앞으로 «${esc(p.payerName)}» 입금은 이 현장에 자동 기록</label>${toggle(d.remember, 'pay.remember')}</div>` : ''}
+        ${fixed(`<button class="btn primary" data-act="pay.assign" ${d.siteId || d.exclude ? '' : 'disabled'}>${d.exclude ? '제외하기' : '기록하기'}</button>`)}`
+    } else {
+      body = `
+        ${sec('기록된 곳')}
+        <div class="card tight">${r.group.map(g => `<a class="row link" href="${g.invoiceId ? '#/invoice/' + g.invoiceId : '#/payment/' + g.id}"><div class="main"><div class="t">${esc(g.siteName || '현장 미지정')}${g.period ? ' · ' + esc(g.period) : ''}</div><div class="s">${g.invoiceId ? '청구서에 기록' : g.excluded ? '정산과 무관' : `<span class="red">확인 필요</span> ${esc(g.memo || '')}`}</div></div><div class="amt">${won(g.amount)}</div></a>`).join('')}</div>
+        ${r.matchNote ? `<div class="note">기록 근거: ${esc(r.matchNote)}</div>` : ''}
+        ${p.source !== 'manual' ? `<button class="btn" data-act="pay.unassign" data-id="${p.id}">잘못 기록되었나요? 현장 수정</button>` : '<div class="note">청구서에서 «입금 확인»으로 직접 기록한 입금입니다.</div>'}`
+    }
+    app.innerHTML = screen(`${topbar('뒤로', p.invoiceId || p.excluded ? '입금' : '입금 현장 지정', '', { leftAct: 'nav', leftTo: '#/payments' })}${head}${body}`, 'settle')
   }
   async function renderSendlogs() {
     app.innerHTML = screen(topbar('뒤로', '보낸 기록', '', { leftAct: 'nav', leftTo: '#/all' }) + '<div class="skeleton"></div>', 'all')
@@ -894,8 +971,10 @@
       <div class="field"><label>입금 예정일 · 연체 알림 (D-3 · 초과 · 10일)</label>${toggle(d.prefs.due, 'set.pref', 'data-k="due"')}</div>
       <div class="field"><label>출근 미기록 알림 (평일 저녁 7시)</label>${toggle(d.prefs.noRecord, 'set.pref', 'data-k="noRecord"')}</div>
       <div class="note">현장마다 퇴근 알람 시각이 있으면 현장 설정이 우선합니다. 알림은 푸시를 켜지 않아도 홈의 종 아이콘(알림함)에 쌓입니다.</div>
-      ${sec('연결된 계좌')}
-      <div class="card"><b>아직 연결할 수 없습니다</b><div class="s label" style="margin-top:4px">조회 전용 오픈뱅킹(금융결제원 이용기관 등록) 심사 후 제공합니다. 그때까지 입금은 청구서에서 직접 기록합니다.</div></div>
+      ${sec('입금 자동 기록')}
+      <div class="card tight"><a class="row link" href="#/payments/import"><div class="main"><div class="t">입금 문자 · 거래내역 붙여넣기</div><div class="s">계좌 연결 없이 청구서에 자동 기록 · 잔액 · 계좌번호는 저장하지 않음</div></div><span class="chev">›</span></a></div>
+      <div class="card" id="ruleCard"><div class="label">입금자 규칙 불러오는 중…</div></div>
+      <div class="note">계좌 연결(오픈뱅킹 조회 전용 · 출금 불가)은 금융결제원 이용기관 등록 후 제공할 예정입니다.</div>
       ${sec('계정 · 약관')}
       <div class="card tight">
         <a class="row link" href="/jobs/legal/terms" target="_blank" rel="noopener"><div class="main"><div class="t">이용약관</div></div><span class="chev">›</span></a>
@@ -907,7 +986,17 @@
       <div class="version">JOBS ${esc(window.JOBS_VERSION || '')}</div>
       ${fixed('<button class="btn primary" data-act="set.save">저장</button>')}
     `, 'all')
-    refreshPushCard()
+    refreshPushCard(); refreshRules()
+  }
+  async function refreshRules() {
+    const el = document.getElementById('ruleCard'); if (!el) return
+    try {
+      const rules = await api('/payer-rules')
+      if (!document.getElementById('ruleCard')) return
+      el.innerHTML = rules.length
+        ? `<b>입금자 규칙 ${rules.length}</b><div class="s label" style="margin:2px 0 4px">이 이름으로 들어온 입금은 해당 현장에 자동 기록됩니다</div>${rules.map(r => `<div class="row"><div class="main"><div class="t">${esc(r.payerName)}</div><div class="s">→ ${esc(r.siteName)}</div></div><button type="button" class="btn sm" data-act="rule.del" data-id="${r.id}" style="min-height:36px;padding:0 12px">지우기</button></div>`).join('')}`
+        : '<b>입금자 규칙 없음</b><div class="s label" style="margin-top:4px">입금 현장 지정에서 «앞으로 이 입금자는 이 현장»을 켜면 여기에 쌓입니다</div>'
+    } catch (e) { el.innerHTML = `<div class="label">${esc(e.message)}</div>` }
   }
 
   // ------------------------------------------------------------ 웹 푸시 (이 기기 알림) ----
@@ -956,6 +1045,40 @@
     back() { if (history.length > 1) history.back(); else go('#/home') },
     soon(el) { toast(el.dataset.msg || '준비 중입니다') },
     logout() { logout(true) },
+    async 'imp.paste'() {
+      try { const t = await navigator.clipboard.readText(); if (!t || !t.trim()) return toast('클립보드가 비어 있습니다', true); S.draft.text = t; S.draft.preview = null; render() }
+      catch { toast('붙여넣기 권한이 없습니다. 입력칸을 길게 눌러 붙여넣어 주세요', true) }
+    },
+    async 'imp.preview'() { await busy(async () => { const d = S.draft; if (!d.text.trim()) throw new Error('붙여넣은 내용이 없습니다'); d.preview = await api('/payments/import/preview', { body: { text: d.text } }); d.previewText = d.text; d.skip = []; render() }) },
+    'imp.skip'(el) { const d = S.draft, k = el.dataset.key; d.skip = d.skip.includes(k) ? d.skip.filter(x => x !== k) : [...d.skip, k]; render() },
+    async 'imp.apply'() {
+      await busy(async () => {
+        const d = S.draft
+        if (d.text !== d.previewText) { d.preview = await api('/payments/import/preview', { body: { text: d.text } }); d.previewText = d.text; d.skip = []; render(); toast('내용이 바뀌어 다시 미리 봤습니다. 확인 후 눌러 주세요'); return }
+        const r = await api('/payments/import', { body: { text: d.text, skip: d.skip } }), x = r.summary
+        toast(`자동 기록 ${x.auto + x.partial}건 · 확인 필요 ${x.review}건${x.merge ? ` · 합침 ${x.merge}건` : ''}`)
+        const first = r.items.find(i => IMP_WRITES.includes(i.outcome)); if (first) S.month = first.paidAt.slice(0, 7)
+        S.draft = null; go('#/payments')
+      })
+    },
+    'pay.pick'(el) { const d = S.draft; if (el.dataset.id === '__exclude') { d.exclude = true; d.siteId = '' } else { d.exclude = false; d.siteId = el.dataset.id } ; render() },
+    'pay.remember'() { S.draft.remember = !S.draft.remember; render() },
+    async 'pay.assign'() {
+      await busy(async () => {
+        const d = S.draft, id = route().parts[1]
+        if (d.exclude) { await api('/payments/' + id + '/exclude', { body: {} }); toast('정산과 무관한 입금으로 제외했습니다'); S.draft = null; go('#/payments'); return }
+        const r = await api('/payments/' + id + '/assign', { body: { siteId: d.siteId, rememberPayer: !!d.remember } })
+        toast(`${r.siteName}에 기록했습니다${r.remainder ? ` · 남은 ${won(r.remainder)}은 확인 필요` : ''}${r.rememberedPayer ? ' · 입금자 규칙 저장' : ''}`)
+        S.draft = null; go('#/payments')
+      })
+    },
+    async 'pay.exclude'(el) { await busy(async () => { await api('/payments/' + el.dataset.id + '/exclude', { body: {} }); toast('정산과 무관한 입금으로 제외했습니다'); render() }) },
+    async 'pay.include'(el) { await busy(async () => { await api('/payments/' + el.dataset.id + '/include', { body: {} }); S.draft = null; toast('확인 필요로 되돌렸습니다. 현장을 지정해 주세요'); render() }) },
+    async 'pay.unassign'(el) {
+      if (!confirm('이 입금의 청구서 기록을 되돌리고 현장을 다시 고를까요?')) return
+      await busy(async () => { const r = await api('/payments/' + el.dataset.id + '/unassign', { body: {} }); S.draft = null; toast('되돌렸습니다. 현장을 다시 골라 주세요'); if (r.paymentId !== route().parts[1]) go('#/payment/' + r.paymentId); else render() })
+    },
+    async 'rule.del'(el) { if (!confirm('이 입금자 규칙을 지울까요? 이미 기록된 입금은 그대로입니다.')) return; await busy(async () => { await api('/payer-rules/' + el.dataset.id, { method: 'DELETE' }); toast('지웠습니다'); refreshRules() }) },
     'month.prev'() { S.month = shiftMonth(S.month || todayKst().slice(0, 7), -1); S.draft = null; render() },
     'month.next'() { S.month = shiftMonth(S.month || todayKst().slice(0, 7), 1); S.draft = null; render() },
     'home.range'(el) { S.rangeTab = el.dataset.v; render() },

@@ -457,3 +457,198 @@ export function clockoutStage(clockOut: string, now: string, checkIn = ''): numb
   if (past >= 90) return 4
   return Math.floor(past / 30) + 1
 }
+
+// ----------------------------------------------------------------------------
+// 입금 붙여넣기 파서 (S-27~29 대체) — 은행 입금 문자 · 인터넷뱅킹 거래내역(엑셀 복사) → 입금 목록
+//   오픈뱅킹(금융결제원 이용기관 등록) 전까지의 현실적인 자동 기록 경로.
+//   잔액 · 계좌번호는 읽기만 하고 버린다 — 결과에는 날짜 · 시각 · 금액 · 입금자 · 은행만 남는다.
+// ----------------------------------------------------------------------------
+export interface ParsedDeposit {
+  paidAt: string
+  /** 'HH:MM' — 문자에 시각이 없으면 '' */
+  time: string
+  amount: number
+  payerName: string
+  bank: string
+  source: 'sms' | 'excel'
+  /** 날짜를 못 찾아 오늘로 넣었으면 true */
+  dateGuessed: boolean
+  /** 중복 판별 키 — 날짜 · 시각 · 금액 · 정규화한 입금자 */
+  key: string
+}
+export interface DepositParseResult { deposits: ParsedDeposit[]; skipped: { text: string; reason: string }[] }
+
+const BANKS: [RegExp, string][] = [
+  [/^(KB국민|KB|국민)/, 'KB국민'], [/^신한/, '신한'], [/^우리/, '우리'], [/^(NH농협|NH|농협)/, 'NH농협'], [/^하나/, '하나'],
+  [/^(IBK기업|IBK|기업)/, 'IBK기업'], [/^(SC제일|SC|제일)/, 'SC제일'], [/^(한국씨티|씨티)/, '씨티'], [/^(카카오뱅크|카카오)/, '카카오뱅크'],
+  [/^(토스뱅크|토스)/, '토스뱅크'], [/^(케이뱅크|K뱅크)/, '케이뱅크'], [/^(MG새마을금고|새마을금고|새마을|MG)/, '새마을금고'], [/^신협/, '신협'],
+  [/^우체국/, '우체국'], [/^수협/, '수협'], [/^(BNK부산|부산)/, '부산'], [/^(BNK경남|경남)/, '경남'], [/^(iM뱅크|DGB대구|대구)/, 'iM뱅크'],
+  [/^광주/, '광주'], [/^전북/, '전북'], [/^제주/, '제주'], [/^(KDB산업|산업)/, 'KDB산업'],
+]
+/** 입금자 칸에 자주 섞이는 거래 유형 · 채널 단어 — 이름으로 쓰지 않는다 */
+const PAYER_NOISE = /^(입금|출금|원|잔액|타행|이체|타행이체|당행이체|자동이체|대체|인터넷|인터넷뱅킹|모바일|모바일뱅킹|스마트폰|스마트뱅킹|폰뱅킹|창구|ATM|CD|FBS|FBS입금|CMS|CMS입금|오픈뱅킹|계좌|통장|보통예금|입출금통장|입출금|예금|저축예금|내|님|님이|송금|입금확인|체크|체크카드|Web발신|국외발신|국제발신|알림|안내|입금되었습니다|입금됨)$/i
+
+const pad2 = (n: number | string) => String(n).padStart(2, '0')
+function validYmd(y: number, m: number, d: number): string {
+  if (m < 1 || m > 12 || d < 1 || d > 31) return ''
+  const s = `${y}-${pad2(m)}-${pad2(d)}`
+  return isYmd(s) && parseYmd(s).getUTCDate() === d ? s : ''
+}
+/** 연도 없는 MM/DD — 오늘 + 1일보다 미래면 작년으로 */
+function inferYear(m: number, d: number, today: string): string {
+  const y = Number(today.slice(0, 4))
+  const s = validYmd(y, m, d)
+  if (!s) return ''
+  return s > addDays(today, 1) ? validYmd(y - 1, m, d) : s
+}
+function findDate(t: string, today: string): string {
+  let m = /(20\d{2})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})/.exec(t)
+  if (m) return validYmd(+m[1], +m[2], +m[3])
+  m = /(?<![\d,])(20\d{2})(\d{2})(\d{2})(?!\d)/.exec(t)
+  if (m) { const s = validYmd(+m[1], +m[2], +m[3]); if (s) return s }
+  m = /(\d{1,2})\s*월\s*(\d{1,2})\s*일/.exec(t)
+  if (m) return inferYear(+m[1], +m[2], today)
+  m = /(?<![\d*\-/.])(\d{1,2})[/.](\d{1,2})(?![\d*\-/.])/.exec(t)
+  if (m) return inferYear(+m[1], +m[2], today)
+  return ''
+}
+function findTime(t: string): string {
+  const m = /(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?!\d)/.exec(t)
+  return m ? `${pad2(m[1])}:${m[2]}` : ''
+}
+const toAmount = (s: string) => { const n = Number(String(s).replace(/[,\s원₩]/g, '')); return Number.isFinite(n) && n > 0 && n < 1e11 ? Math.round(n) : 0 }
+const depositKey = (paidAt: string, time: string, amount: number, payer: string) => `${paidAt} ${time}|${amount}|${normalizePayer(payer)}`
+function payerFromTokens(text: string): string {
+  const toks = text.replace(/\(주\)|㈜|\(유\)|주식회사|유한회사/g, ' ').split(/[\s,|:;/→>]+/).map(x => x.replace(/^[\[(【<]+|[\])】>]+$/g, '').trim()).filter(Boolean)
+  // 글자(한글 · 영문)가 하나라도 있어야 이름 — 숫자 · 기호만 남은 조각(계좌 꼬리 · 금액)은 버린다
+  const keep = toks.filter(x => /[가-힣A-Za-z]/.test(x) && !PAYER_NOISE.test(x))
+  return keep.join(' ').slice(0, 30)
+}
+
+/** 은행 입금 문자 1건 */
+function parseSmsChunk(chunk: string, today: string): ParsedDeposit | { reason: string } {
+  let t = chunk.replace(/\[(Web발신|국외발신|국제발신)\]/g, ' ').replace(/ /g, ' ').trim()
+  if (/입금\s*취소|취소\s*입금/.test(t)) return { reason: '입금 취소 문자' }
+  // 토스 · 카카오뱅크 알림형: «대성건설님이 1,000,000원을 보냈어요»
+  const toss = /([^\n]+?)\s*님이\s*([0-9][0-9,]*)\s*원을?\s*(보냈|입금)/.exec(t)
+  if (!/입금/.test(t) && !toss) return { reason: /출금|지급|결제|승인|이체출금|송금완료/.test(t) ? '출금 · 결제 문자' : '입금 문자가 아님' }
+  // 은행: 첫 줄 맨 앞 또는 [KB] 같은 대괄호 — 뒤에 한글이 붙으면 회사명(예: 우리건설)으로 본다
+  let bank = ''
+  const lines = t.split('\n').map(x => x.trim()).filter(Boolean)
+  const head = (lines[0] || '').replace(/^\[|\]/g, ' ').trim()
+  for (const [re, name] of BANKS) {
+    const m = new RegExp(re.source + '(?![가-힣])').exec(head)
+    if (m && m.index === 0) { bank = name; lines[0] = (lines[0] || '').replace(/^\[?/, '').slice(m[0].length).replace(/^\]/, ''); break }
+  }
+  t = lines.join('\n')
+  t = t.replace(/잔액\s*:?\s*-?[0-9,]+\s*원?/g, ' ')
+  let amount = 0, payer = ''
+  if (toss) { amount = toAmount(toss[2]); payer = toss[1].replace(/^.*\n/, '') }
+  else {
+    const m = /입금\s*:?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*원?/.exec(t) || /([0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)\s*원\s*입금/.exec(t)
+    if (!m) return { reason: '입금 금액을 찾지 못함' }
+    amount = toAmount(m[1])
+  }
+  if (!amount) return { reason: '입금 금액을 찾지 못함' }
+  let paidAt = findDate(t, today)
+  const dateGuessed = !paidAt
+  if (!paidAt) paidAt = today
+  const time = findTime(t)
+  if (!payer) {
+    const rest = t
+      .replace(/(20\d{2})\s*[-./년]\s*\d{1,2}\s*[-./월]\s*\d{1,2}\s*일?/g, ' ')
+      .replace(/\d{1,2}\s*월\s*\d{1,2}\s*일/g, ' ')
+      .replace(/(?<![\d*\-/.])\d{1,2}[/.]\d{1,2}(?![\d*\-/.])/g, ' ')
+      .replace(/\d{1,2}:\d{2}(:\d{2})?/g, ' ')
+      .replace(/[0-9*]{2,}(?:-[0-9*]+)+/g, ' ')     // 110-***-123456
+      .replace(/\d*\*+\d*/g, ' ')                     // 123456**789, (1234*)
+      .replace(/입금\s*:?\s*[0-9,]+\s*원?/g, ' ')
+      .replace(/[0-9,]+\s*원/g, ' ')
+      .replace(/\([^)]*\)/g, ' ')
+    payer = payerFromTokens(rest)
+  }
+  return { paidAt, time, amount, payerName: payer, bank, source: 'sms', dateGuessed, key: depositKey(paidAt, time, amount, payer) }
+}
+
+/** 문자 여러 건을 1건씩으로 — 빈 줄 · [Web발신] 기준, 한 줄에 날짜+입금+금액이 다 있는 목록형은 줄 단위 */
+function splitSms(text: string): string[] {
+  const out: string[] = []
+  for (const block of text.split(/\n\s*\n/)) {
+    for (const part of block.split(/(?=\[Web발신\])/)) {
+      const lines = part.split('\n').filter(l => l.trim())
+      const listLike = lines.filter(l => /입금/.test(l) && /\d{1,2}[/.]\d{1,2}|20\d{2}[-./]\d{1,2}/.test(l) && /[0-9]{1,3}(,[0-9]{3})+|[0-9]{4,}/.test(l.replace(/잔액\s*[0-9,]+/g, '')))
+      if (listLike.length > 1 && listLike.length === lines.filter(l => /입금/.test(l)).length && lines.length === listLike.length) out.push(...lines)
+      else if (part.trim()) out.push(part)
+    }
+  }
+  return out
+}
+
+const HDR = (s: string) => s.replace(/\s+/g, '').replace(/\((원|₩|KRW)\)|\[(원)\]/g, '')
+function splitRow(line: string, delim: '\t' | ','): string[] {
+  if (delim === '\t') return line.split('\t').map(x => x.trim())
+  const out: string[] = []; let cur = '', q = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (q) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++ } else if (ch === '"') q = false; else cur += ch }
+    else if (ch === '"') q = true
+    else if (ch === ',') { out.push(cur.trim()); cur = '' }
+    else cur += ch
+  }
+  out.push(cur.trim())
+  return out
+}
+/** 거래내역 표 — 제목 줄(입금액 · 거래일시 · 입금자/기재내용 등)이 있어야 한다 */
+function parseTable(lines: string[], today: string): DepositParseResult | null {
+  for (let h = 0; h < Math.min(lines.length, 15); h++) {
+    const delim: '\t' | ',' | '' = lines[h].includes('\t') ? '\t' : lines[h].split(',').length >= 3 ? ',' : ''
+    if (!delim) continue
+    const hdr = splitRow(lines[h], delim).map(HDR)
+    const inIdx = hdr.findIndex(x => /^(입금액?|입금금액|맡기신금액?|받은금액|입금하신금액)$/.test(x))
+    const dateIdx = hdr.findIndex(x => /거래일시|거래일자|거래일|^일자$|^날짜$|^일시$|입금일|거래날짜|^거래시각$/.test(x))
+    if (inIdx < 0 || dateIdx < 0) continue
+    const outIdx = hdr.findIndex(x => /^(출금액?|출금금액|찾으신금액?|보낸금액|지급액?|지급금액)$/.test(x))
+    const timeIdx = hdr.findIndex(x => /^(거래)?시간$|^시각$/.test(x))
+    const PAYER_ORDER = [/입금자|의뢰인/, /보낸분|보내는분|보낸사람/, /기재내용|통장표시|표시내용/, /^내용$|거래내용/, /적요/, /메모/]
+    const payerIdx: number[] = []
+    for (const re of PAYER_ORDER) hdr.forEach((x, i) => { if (re.test(x) && !payerIdx.includes(i) && i !== inIdx && i !== outIdx) payerIdx.push(i) })
+    const res: DepositParseResult = { deposits: [], skipped: [] }
+    for (const line of lines.slice(h + 1)) {
+      if (!line.trim()) continue
+      const cells = splitRow(line, delim)
+      if (cells.length <= Math.max(inIdx, dateIdx)) { res.skipped.push({ text: line.slice(0, 80), reason: '칸 수가 제목 줄과 다름' }); continue }
+      const amount = toAmount(cells[inIdx])
+      if (!amount) continue // 출금 줄 · 빈 줄은 조용히 건너뜀
+      const paidAt = findDate(cells[dateIdx], today)
+      if (!paidAt) { res.skipped.push({ text: line.slice(0, 80), reason: '날짜를 읽지 못함' }); continue }
+      const time = findTime(cells[dateIdx]) || (timeIdx >= 0 ? findTime(cells[timeIdx]) : '')
+      let payer = ''
+      for (const i of payerIdx) { const v = payerFromTokens(cells[i] || ''); if (v) { payer = v; break } }
+      res.deposits.push({ paidAt, time, amount, payerName: payer, bank: '', source: 'excel', dateGuessed: false, key: depositKey(paidAt, time, amount, payer) })
+    }
+    return res
+  }
+  return null
+}
+
+/** 붙여넣은 텍스트 → 입금 목록. 같은 키(날짜 · 시각 · 금액 · 입금자)가 두 번 나오면 한 번만 */
+export function parseDeposits(text: string, today: string): DepositParseResult {
+  const norm = String(text || '').replace(/\r\n?/g, '\n').replace(/ /g, ' ').slice(0, 50_000)
+  const lines = norm.split('\n')
+  const table = parseTable(lines, today)
+  const raw: DepositParseResult = table || { deposits: [], skipped: [] }
+  if (!table) {
+    for (const chunk of splitSms(norm)) {
+      const r = parseSmsChunk(chunk, today)
+      if ('reason' in r) raw.skipped.push({ text: chunk.replace(/\s+/g, ' ').trim().slice(0, 80), reason: r.reason })
+      else raw.deposits.push(r)
+    }
+  }
+  const seen = new Set<string>(), deposits: ParsedDeposit[] = []
+  for (const d of raw.deposits) {
+    if (seen.has(d.key)) { raw.skipped.push({ text: `${d.paidAt} ${d.payerName} ${fmt(d.amount)}원`, reason: '같은 입금이 두 번 붙여넣어짐' }); continue }
+    seen.add(d.key); deposits.push(d)
+  }
+  deposits.sort((a, b) => (a.paidAt + a.time).localeCompare(b.paidAt + b.time))
+  return { deposits, skipped: raw.skipped }
+}
