@@ -442,3 +442,18 @@ export function summarizeYear(logs: YearLogLike[], year: string): YearSummary {
   }
   return { year, total, bySite: [...site.values()].sort((a, b) => b.net - a.net), byMonth, byTaxMode: [...mode.values()].sort((a, b) => b.net - a.net) }
 }
+
+// ----------------------------------------------------------------------------
+// 퇴근 알람 (S-05) — 30분 간격 최대 3회, 그 뒤(+90분) 자동 기록
+// ----------------------------------------------------------------------------
+const hmToMin = (s: string) => (/^\d{2}:\d{2}$/.test(s || '') ? +s.slice(0, 2) * 60 + +s.slice(3) : NaN)
+/** 0: 아직 아님 · 1~3: n번째 알림 · 4: 자동 퇴근 기록. 퇴근 알람 시각 이후에 출근한 기록(야간 등)은 대상 아님 */
+export function clockoutStage(clockOut: string, now: string, checkIn = ''): number {
+  const co = hmToMin(clockOut), n = hmToMin(now), ci = hmToMin(checkIn)
+  if (isNaN(co) || isNaN(n)) return 0
+  if (!isNaN(ci) && ci >= co) return 0
+  const past = n - co
+  if (past < 0) return 0
+  if (past >= 90) return 4
+  return Math.floor(past / 30) + 1
+}

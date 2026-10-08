@@ -1,9 +1,10 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { createJobsApi, loadInvoiceByToken, loadQuoteByToken, servePhoto } from './jobs/api'
+import { runJobsCron } from './jobs/notify'
 import { jobsShellHtml, renderPublicInvoice, renderPublicQuote, renderLegalPage, JOBS_VERSION, JOBS_SW } from './jobs/page'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string; JOBS_PHOTOS?: R2Bucket; JOBS_KAKAO_TPL_INVOICE?: string; JOBS_KAKAO_TPL_DUNNING?: string; JOBS_KAKAO_TPL_QUOTE?: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string; JOBS_PHOTOS?: R2Bucket; JOBS_KAKAO_TPL_INVOICE?: string; JOBS_KAKAO_TPL_DUNNING?: string; JOBS_KAKAO_TPL_QUOTE?: string; JOBS_VAPID_PUBLIC?: string; JOBS_VAPID_PRIVATE?: string; JOBS_VAPID_SUBJECT?: string; JOBS_CRON_SECRET?: string; JOBS_PUSH_BATCH?: string }
 type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
 
 const app = new Hono<App>()
@@ -2349,5 +2350,7 @@ export default {
   fetch: app.fetch,
   scheduled: async (_event: any, env: Bindings, ctx: any) => {
     ctx.waitUntil(runMeetingNotify(env))
+    // JOBS 알림 — Pages 에서는 호출되지 않으므로 workers/jobs-cron 이 /api/jobs/cron/run 을 대신 호출한다
+    ctx.waitUntil(runJobsCron(env as any).catch(() => null))
   }
 }

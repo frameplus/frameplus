@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS jobs_worklogs (
   edited_manually INTEGER DEFAULT 0,
   memo TEXT DEFAULT '',
   invoice_id TEXT,
+  checkout_auto INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(user_id, site_id, date)
@@ -188,6 +189,43 @@ CREATE TABLE IF NOT EXISTS jobs_payments (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_payments_user ON jobs_payments(user_id, paid_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_payments_invoice ON jobs_payments(invoice_id);
+
+CREATE TABLE IF NOT EXISTS jobs_push_subs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  endpoint TEXT UNIQUE NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  ua TEXT DEFAULT '',
+  last_ok_at TEXT,
+  fail_count INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_push_user ON jobs_push_subs(user_id);
+
+CREATE TABLE IF NOT EXISTS jobs_notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  ref_id TEXT DEFAULT '',
+  dedupe_key TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  push_payload TEXT DEFAULT '',
+  push_state INTEGER DEFAULT 0,
+  read_at TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(user_id, dedupe_key)
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_notif_user ON jobs_notifications(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_jobs_notif_push ON jobs_notifications(push_state, created_at);
+
+CREATE TABLE IF NOT EXISTS jobs_kv (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL,
+  updated_at TEXT
+);
 
 CREATE TABLE IF NOT EXISTS jobs_payer_rules (
   id TEXT PRIMARY KEY,

@@ -4,6 +4,8 @@
 // ============================================================================
 import { Hono } from 'hono'
 import { ensureJobsTables } from './schema'
+import { createNotifications, flushPushQueue, runJobsCron, vapidFromEnv } from './notify'
+import { isAllowedPushEndpoint, b64urlDecode } from './webpush'
 import {
   type TaxMode, type SettlementRule, type Attendance, type InvoiceStatus, type InvoiceRow, type ExpenseType,
   TAX_MODES, EXPENSE_TYPES, isTaxMode, isSettlementRule, isExpenseType, isYmd, todayKst, monthEnd, addDays, daysBetween,
@@ -23,6 +25,14 @@ export type JobsBindings = {
   JOBS_KAKAO_TPL_INVOICE?: string
   JOBS_KAKAO_TPL_DUNNING?: string
   JOBS_KAKAO_TPL_QUOTE?: string
+  /** 웹 푸시 VAPID 키 (scripts/jobs-vapid-keys.mjs 로 생성) — 없으면 앱 알림함에만 쌓인다 */
+  JOBS_VAPID_PUBLIC?: string
+  JOBS_VAPID_PRIVATE?: string
+  JOBS_VAPID_SUBJECT?: string
+  /** POST /api/jobs/cron/run 호출 비밀값 (workers/jobs-cron 의 CRON_SECRET 과 같아야 함) */
+  JOBS_CRON_SECRET?: string
+  /** 크론 1회당 푸시 전송 상한 (기본 20) */
+  JOBS_PUSH_BATCH?: string
 }
 export type SmsSender = (env: any, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string; variables?: Record<string, string> }) => Promise<{ ok: boolean; error?: string }>
 export type EmailSender = (env: any, opts: { to: string; subject: string; html: string }) => Promise<{ ok: boolean; error?: string }>
@@ -84,7 +94,7 @@ function logOut(w: any) {
     id: w.id, siteId: w.site_id, siteName: w.site_name, siteCompany: w.site_company, date: w.date, source: w.source,
     checkInAt: w.check_in_at || '', checkOutAt: w.check_out_at || '', checkInLat: w.check_in_lat, checkInLng: w.check_in_lng, geoDistanceM: w.geo_distance_m,
     attendance: w.attendance as Attendance, overtimeHours: w.overtime_hours || 0, dayRate: w.day_rate || 0, hourRate: w.hour_rate || 0,
-    taxModeOverride: w.tax_mode_override || null, gross: w.gross || 0, tax: w.tax || 0, net: w.net || 0, editedManually: !!w.edited_manually,
+    taxModeOverride: w.tax_mode_override || null, gross: w.gross || 0, tax: w.tax || 0, net: w.net || 0, editedManually: !!w.edited_manually, checkoutAuto: !!w.checkout_auto,
     memo: w.memo || '', invoiceId: w.invoice_id || null, createdAt: w.created_at, updatedAt: w.updated_at,
     expenses: (w.expenses || []).map(expOut), photos: (w.photos || []).map(photoOut),
   }
@@ -124,7 +134,7 @@ export function createJobsApi(deps: JobsDeps) {
   // ---- 인증 (OTP) 외 모든 경로는 Bearer 세션 필수 ------------------------------
   api.use('*', async (c, next) => {
     const path = new URL(c.req.url).pathname
-    if (/\/(auth\/(request-code|verify)|health)$/.test(path)) return next()
+    if (/\/(auth\/(request-code|verify)|health|cron\/run)$/.test(path)) return next()
     const auth = c.req.header('Authorization') || ''
     const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
     if (!token) return c.json({ error: '로그인이 필요합니다', code: 'unauthorized' }, 401)
@@ -248,6 +258,8 @@ export function createJobsApi(deps: JobsDeps) {
       db.prepare('DELETE FROM jobs_expenses WHERE user_id = ?').bind(u.id),
       db.prepare('DELETE FROM jobs_worklogs WHERE user_id = ?').bind(u.id),
       db.prepare('DELETE FROM jobs_payer_rules WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_push_subs WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_notifications WHERE user_id = ?').bind(u.id),
       db.prepare("UPDATE jobs_sites SET contact_name = '', contact_phone = '', address = '', lat = NULL, lng = NULL, memo = '', archived = 1, updated_at = ? WHERE user_id = ?").bind(now, u.id),
       db.prepare("UPDATE jobs_quotes SET contact_phone = '', share_token = NULL, updated_at = ? WHERE user_id = ?").bind(now, u.id),
       db.prepare('UPDATE jobs_invoices SET share_token = NULL, updated_at = ? WHERE user_id = ?').bind(now, u.id),
@@ -404,11 +416,17 @@ export function createJobsApi(deps: JobsDeps) {
     const u: UserRow = c.get('jobsUser'), db: D1Database = c.env.DB
     const body = await c.req.json().catch(() => null)
     if (!body || typeof body !== 'object') return c.json({ error: '잘못된 요청입니다' }, 400)
-    if (existing && body.checkOutOnly === true) {
-      // S-05 «퇴근 기록» — 시각 · 위치만 바꾸므로 청구서에 들어간 기록이어도 허용 (금액 불변)
-      const checkOutAt = hhmm(body.checkOutAt) || str(body.checkOutAt, 30)
-      await db.prepare('UPDATE jobs_worklogs SET check_out_at = ?, check_out_lat = ?, check_out_lng = ?, updated_at = ? WHERE id = ? AND user_id = ?')
-        .bind(checkOutAt, body.checkOutLat !== undefined ? numOrNull(body.checkOutLat) : existing.check_out_lat, body.checkOutLng !== undefined ? numOrNull(body.checkOutLng) : existing.check_out_lng, nowIso(), existing.id, u.id).run()
+    if (existing && (body.checkOutOnly === true || body.confirmCheckout === true)) {
+      // S-05 «퇴근 기록» · 자동 퇴근 «맞아요» — 시각 · 위치만 바꾸므로 청구서에 들어간 기록이어도 허용 (금액 불변)
+      if (body.confirmCheckout === true) {
+        await db.prepare('UPDATE jobs_worklogs SET checkout_auto = 0, updated_at = ? WHERE id = ? AND user_id = ?').bind(nowIso(), existing.id, u.id).run()
+      } else if (body.onlyIfEmpty === true && existing.check_out_at) {
+        // 알림 «퇴근 기록» 버튼이 두 번 눌려도 처음 기록을 덮어쓰지 않는다
+      } else {
+        const checkOutAt = hhmm(body.checkOutAt) || str(body.checkOutAt, 30)
+        await db.prepare('UPDATE jobs_worklogs SET check_out_at = ?, check_out_lat = ?, check_out_lng = ?, checkout_auto = 0, updated_at = ? WHERE id = ? AND user_id = ?')
+          .bind(checkOutAt, body.checkOutLat !== undefined ? numOrNull(body.checkOutLat) : existing.check_out_lat, body.checkOutLng !== undefined ? numOrNull(body.checkOutLng) : existing.check_out_lng, nowIso(), existing.id, u.id).run()
+      }
       const rows = await loadLogs(db, u.id, 'AND w.id = ?', [existing.id])
       return c.json(logOut(rows[0]))
     }
@@ -482,7 +500,7 @@ export function createJobsApi(deps: JobsDeps) {
         const dup = await db.prepare('SELECT id FROM jobs_worklogs WHERE user_id = ? AND site_id = ? AND date = ? AND id != ?').bind(u.id, siteId, date, id).first<any>()
         if (dup) return c.json({ error: '이 날짜에 이 현장 기록이 이미 있습니다', existingId: dup.id }, 409)
       }
-      stmts.push(db.prepare(`UPDATE jobs_worklogs SET site_id=?, date=?, check_in_at=?, check_out_at=?, check_out_lat=?, check_out_lng=?, attendance=?, overtime_hours=?, day_rate=?, hour_rate=?, tax_mode_override=?, gross=?, tax=?, net=?, edited_manually=?, memo=?, updated_at=? WHERE id = ? AND user_id = ?`).bind(
+      stmts.push(db.prepare(`UPDATE jobs_worklogs SET site_id=?, date=?, check_in_at=?, check_out_at=?, check_out_lat=?, check_out_lng=?, attendance=?, overtime_hours=?, day_rate=?, hour_rate=?, tax_mode_override=?, gross=?, tax=?, net=?, edited_manually=?, memo=?, checkout_auto=0, updated_at=? WHERE id = ? AND user_id = ?`).bind(
         siteId, date, checkInAt, checkOutAt, body.checkOutLat !== undefined ? numOrNull(body.checkOutLat) : existing.check_out_lat, body.checkOutLng !== undefined ? numOrNull(body.checkOutLng) : existing.check_out_lng, attendance, overtimeHours, dayRate, hourRate, taxModeOverride, amounts.gross, amounts.tax, amounts.net,
         body.checkOutOnly === true ? (existing.edited_manually || 0) : 1, // 퇴근 버튼(S-05 전경 버전)은 «수정됨» 표시를 남기지 않는다
         body.memo !== undefined ? str(body.memo, 300) : existing.memo || '', now, id, u.id))
@@ -559,12 +577,14 @@ export function createJobsApi(deps: JobsDeps) {
     const month = /^\d{4}-\d{2}$/.test(c.req.query('month') || '') ? c.req.query('month')! : today.slice(0, 7)
     const from = month + '-01', to = monthEnd(from)
     const rangeFrom = addDays(today, -29)
-    const [monthLogs, rangeLogs, invRes, paidRes, todayRes] = await Promise.all([
+    const [monthLogs, rangeLogs, invRes, paidRes, todayRes, unreadRes, autoRes] = await Promise.all([
       loadLogs(db, u.id, 'AND w.date BETWEEN ? AND ?', [from, to]),
       db.prepare('SELECT date, attendance, net, invoice_id FROM jobs_worklogs WHERE user_id = ? AND date BETWEEN ? AND ?').bind(u.id, rangeFrom, today).all<any>(),
       db.prepare("SELECT i.*, s.name AS site_name, s.company AS site_company FROM jobs_invoices i JOIN jobs_sites s ON s.id = i.site_id WHERE i.user_id = ? AND i.status != 'draft'").bind(u.id).all<any>(),
       db.prepare('SELECT COALESCE(SUM(amount),0) paid FROM jobs_payments WHERE user_id = ? AND excluded = 0 AND substr(paid_at,1,7) = ?').bind(u.id, month).first<any>(),
       loadLogs(db, u.id, 'AND w.date = ?', [today]),
+      db.prepare('SELECT COUNT(*) n FROM jobs_notifications WHERE user_id = ? AND read_at IS NULL').bind(u.id).first<any>(),
+      db.prepare('SELECT w.id, w.date, w.check_out_at, s.name AS site_name FROM jobs_worklogs w JOIN jobs_sites s ON s.id = w.site_id WHERE w.user_id = ? AND w.checkout_auto = 1 AND w.date >= ? ORDER BY w.date DESC LIMIT 5').bind(u.id, addDays(today, -14)).all<any>(),
     ])
     const invoices = invRes.results || []
     await refreshInvoiceStatuses(db, invoices, today)
@@ -616,7 +636,73 @@ export function createJobsApi(deps: JobsDeps) {
       unsettled: openOut,
       dueSoon,
       calendar: { byDate, dueMarks, overdueLogDates: Array.from(overdueLogDates) },
+      unreadNotifications: unreadRes?.n || 0,
+      autoCheckouts: (autoRes.results || []).map((w: any) => ({ id: w.id, date: w.date, siteName: w.site_name, checkOutAt: w.check_out_at || '' })),
     })
+  })
+
+  // ======================================================= NOTIFICATIONS ====
+  api.get('/notifications', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const [list, cnt, subs] = await Promise.all([
+      db.prepare('SELECT id, kind, title, body, url, read_at, created_at FROM jobs_notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(u.id).all<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_notifications WHERE user_id = ? AND read_at IS NULL').bind(u.id).first<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_push_subs WHERE user_id = ?').bind(u.id).first<any>(),
+    ])
+    return c.json({ unread: cnt?.n || 0, devices: subs?.n || 0, items: (list.results || []).map((n: any) => ({ id: n.id, kind: n.kind, title: n.title, body: n.body || '', url: n.url || '', read: !!n.read_at, createdAt: n.created_at })) })
+  })
+  api.post('/notifications/read', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB, body = await c.req.json<any>().catch(() => ({}))
+    if (body.all === true) {
+      await db.prepare('UPDATE jobs_notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL').bind(nowIso(), u.id).run()
+    } else {
+      const ids = (Array.isArray(body.ids) ? body.ids : []).map((v: unknown) => str(v, 40)).filter(Boolean).slice(0, 100)
+      if (!ids.length) return c.json({ error: '읽음 처리할 알림이 없습니다' }, 400)
+      await db.prepare(`UPDATE jobs_notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND id IN (${placeholders(ids.length)})`).bind(nowIso(), u.id, ...ids).run()
+    }
+    const cnt = await db.prepare('SELECT COUNT(*) n FROM jobs_notifications WHERE user_id = ? AND read_at IS NULL').bind(u.id).first<any>()
+    return c.json({ ok: true, unread: cnt?.n || 0 })
+  })
+
+  // ============================================================== PUSH ====
+  api.get('/push/key', (c) => c.json({ publicKey: c.env.JOBS_VAPID_PUBLIC && c.env.JOBS_VAPID_PRIVATE ? c.env.JOBS_VAPID_PUBLIC : null }))
+  api.post('/push/subscribe', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB, body = await c.req.json<any>().catch(() => ({}))
+    const endpoint = str(body.endpoint, 1000), p256dh = str(body.keys?.p256dh, 200), auth = str(body.keys?.auth, 100)
+    if (!isAllowedPushEndpoint(endpoint, c.env.JOBS_DEV_OTP === '1')) return c.json({ error: '지원하지 않는 푸시 주소입니다' }, 400)
+    let okKeys = false
+    try { const k = b64urlDecode(p256dh), a = b64urlDecode(auth); okKeys = k.length === 65 && k[0] === 4 && a.length === 16 } catch { okKeys = false }
+    if (!okKeys) return c.json({ error: '푸시 구독 키가 올바르지 않습니다' }, 400)
+    await db.prepare(`INSERT INTO jobs_push_subs (id, user_id, endpoint, p256dh, auth, ua) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth, ua = excluded.ua, fail_count = 0`)
+      .bind(newId('ps'), u.id, endpoint, p256dh, auth, str(c.req.header('User-Agent'), 200)).run()
+    const n = await db.prepare('SELECT COUNT(*) n FROM jobs_push_subs WHERE user_id = ?').bind(u.id).first<any>()
+    return c.json({ ok: true, devices: n?.n || 0 })
+  })
+  api.post('/push/unsubscribe', async (c) => {
+    const u = c.get('jobsUser'), body = await c.req.json<any>().catch(() => ({}))
+    await c.env.DB.prepare('DELETE FROM jobs_push_subs WHERE user_id = ? AND endpoint = ?').bind(u.id, str(body.endpoint, 1000)).run()
+    return c.json({ ok: true })
+  })
+  api.post('/push/test', async (c) => {
+    const u = c.get('jobsUser')
+    if (!vapidFromEnv(c.env)) return c.json({ error: '푸시 키(JOBS_VAPID_*)가 아직 설정되지 않았습니다' }, 503)
+    await createNotifications(c.env.DB, [{ userId: u.id, kind: 'test', dedupe: `test:${Date.now()}`, title: 'JOBS 알림 테스트', body: '이 알림이 보이면 퇴근 알람 · 입금 예정일 알림을 받을 수 있습니다', url: '/jobs/#/settings', push: { urgency: 'high' } }])
+    const r = await flushPushQueue(c.env, 5)
+    return c.json({ ok: true, ...r })
+  })
+
+  // ============================================================== CRON ====
+  // 외부 크론(workers/jobs-cron)이 10분마다 호출. Bearer 세션 대신 X-Jobs-Cron 비밀값으로 보호
+  api.post('/cron/run', async (c) => {
+    const secret = c.env.JOBS_CRON_SECRET
+    if (!secret) return c.json({ error: 'cron not configured' }, 503)
+    const got = c.req.header('X-Jobs-Cron') || ''
+    if ((await sha256Hex(got)) !== (await sha256Hex(secret))) return c.json({ error: 'forbidden' }, 403)
+    let now = new Date()
+    const q = c.req.query('now')
+    if (c.env.JOBS_DEV_OTP === '1' && q) { const d = new Date(q); if (!isNaN(d.getTime())) now = d } // 로컬 테스트 전용 시각 주입
+    return c.json({ ok: true, at: now.toISOString(), ...(await runJobsCron(c.env, now)) })
   })
 
   // =========================================================== INVOICES ====

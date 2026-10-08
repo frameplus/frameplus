@@ -4,7 +4,7 @@
 import { TAX_MODES, type TaxMode, type InvoiceRow, type QuoteItem, type QuoteCalc, fmt, retaxInvoice, quoteItemAmount } from './calc'
 import { LEGAL_TITLES, LEGAL_BODY, type LegalKind } from './legal'
 
-export const JOBS_VERSION = '0.1.0'
+export const JOBS_VERSION = '0.2.0'
 
 /** 서비스 워커 — /jobs/sw.js 로 서빙해야 /jobs/ 범위를 제어할 수 있다. 셸·정적 자원만 캐시, API 는 항상 네트워크. */
 export const JOBS_SW = `/* JOBS service worker v${JOBS_VERSION} */
@@ -18,6 +18,28 @@ self.addEventListener('fetch', e => {
   if (url.pathname === '/jobs/' || url.pathname.startsWith('/static/jobs/')) {
     e.respondWith(fetch(e.request).then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => null); return res }).catch(() => caches.match(e.request, { ignoreSearch: true })))
   }
+})
+// 웹 푸시 (명세 05) — 페이로드는 서버가 RFC 8291 로 암호화, 브라우저가 복호화해 넘겨준다
+self.addEventListener('push', e => {
+  let d = {}
+  try { d = e.data ? e.data.json() : {} } catch (_) { d = { title: 'JOBS', body: e.data ? e.data.text() : '' } }
+  const opts = { body: d.body || '', icon: '/static/jobs/icon-192.png', badge: '/static/jobs/icon-192.png', lang: 'ko', data: { url: d.url || '/jobs/#/home', log: d.log || '', id: d.id || '' } }
+  if (d.tag) { opts.tag = d.tag; opts.renotify = true }
+  if (Array.isArray(d.actions) && d.actions.length) opts.actions = d.actions.slice(0, 2)
+  e.waitUntil(self.registration.showNotification(d.title || 'JOBS', opts))
+})
+self.addEventListener('notificationclick', e => {
+  e.notification.close()
+  const data = e.notification.data || {}
+  let url = data.url || '/jobs/#/home'
+  if (e.action === 'checkout' && data.log) url = '/jobs/#/home?do=checkout&log=' + encodeURIComponent(data.log)
+  else if (e.action === 'edit' && data.log) url = '/jobs/#/log/' + encodeURIComponent(data.log)
+  if (data.id) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'nid=' + encodeURIComponent(data.id)
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const w = list.find(c => new URL(c.url).pathname.indexOf('/jobs/') === 0)
+    if (w) { w.postMessage({ type: 'jobs-nav', url: url }); return w.focus() }
+    return self.clients.openWindow(url)
+  }))
 })
 `
 

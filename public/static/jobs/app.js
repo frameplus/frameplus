@@ -124,6 +124,7 @@
     if (!S.token) { if (r.parts[0] !== 'login') { location.replace('#/login'); return } ; if (S.draftKey !== 'login') { S.draft = null; S.draftKey = 'login' } ; return renderLogin() }
     if (!S.user) { try { S.user = (await api('/auth/me')).user } catch (e) { if (S.token) app.innerHTML = `<div class="empty"><b>불러오지 못했습니다</b>${esc(e.message)}<br><br><button class="btn sm" data-act="reload">다시 시도</button></div>`; return } }
     if (r.parts[0] === 'login') { location.replace('#/home'); return }
+    if (r.query.nid) api('/notifications/read', { body: { ids: [r.query.nid] } }).catch(() => null) // 푸시 알림을 눌러 들어온 경우 읽음 처리
     if (S.draftKey !== r.path) { S.draft = null; S.draftKey = r.path }
     const [a, b, c] = r.parts
     if (S.lastPath !== r.path) { window.scrollTo(0, 0); S.lastPath = r.path } // 화면이 바뀔 때만 맨 위로 — 같은 화면의 재렌더(스테퍼 · 토글)는 스크롤 유지
@@ -152,6 +153,7 @@
         case 'payments': return await renderPayments()
         case 'sendlogs': return await renderSendlogs()
         case 'settings': return await renderSettings()
+        case 'notifications': return await renderNotifications()
         default: location.replace('#/home')
       }
     } catch (e) {
@@ -201,6 +203,11 @@
   const logRow = l => `<a class="row link" href="#/log/${l.id}"><div class="main"><div class="t">${esc(kshort(l.date))} <span class="label" style="font-weight:500">${DOW[parseYmd(l.date).getUTCDay()]}</span> · ${esc(l.siteName)}</div><div class="s">${l.attendance === 'half' ? '반일' : '1일'}${l.overtimeHours ? ` + 연장 ${l.overtimeHours}시간` : ''}${l.expenses?.length ? ` · 경비 ${l.expenses.length}건` : ''}${l.invoiceId ? ' · 청구됨' : ''}</div></div><div class="amt">${won(l.net)}</div></a>`
 
   async function renderHome() {
+    const hq = route().query
+    if (hq.do === 'checkout' && hq.log) { // 푸시 알림의 «퇴근 기록» 버튼
+      history.replaceState(null, '', '#/home')
+      try { const l = await api('/worklogs/' + encodeURIComponent(hq.log), { method: 'PUT', body: { checkOutAt: nowHm(), checkOutOnly: true, onlyIfEmpty: true } }); toast(`퇴근 ${l.checkOutAt} 기록 · 근무 ${worked(l.checkInAt, l.checkOutAt) || '-'}`) } catch (e) { toast(e.message, true) }
+    }
     const month = S.month || (S.month = todayKst().slice(0, 7))
     app.innerHTML = screen(`<div class="hdr"><div class="brand"><div class="logo"><i>J</i>JOBS</div></div><div class="skeleton" style="background:rgba(255,255,255,.2)"></div></div><div class="skeleton"></div>`, 'home')
     const [d, sites] = await Promise.all([api('/dashboard?month=' + month), loadSites()])
@@ -209,13 +216,14 @@
     const noSites = activeSites().length === 0
     app.innerHTML = screen(`
       <div class="hdr">
-        <div class="brand"><div class="logo"><i>J</i>JOBS</div><a href="#/settings" class="tb" style="color:#fff;display:flex;align-items:center;justify-content:center;min-width:44px;height:44px" aria-label="설정"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a></div>
+        <div class="brand"><div class="logo"><i>J</i>JOBS</div><div style="display:flex;align-items:center"><a href="#/notifications" class="tb hdr-ic" aria-label="알림"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 9a6 6 0 0 1 12 0c0 5 2 7 2 7H4s2-2 2-7"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>${d.unreadNotifications ? `<i class="dotn">${d.unreadNotifications > 9 ? '9+' : d.unreadNotifications}</i>` : ''}</a><a href="#/settings" class="tb hdr-ic" aria-label="설정"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></a></div></div>
         <div class="sub" style="display:flex;align-items:center;gap:4px"><button class="tb" data-act="month.prev" style="color:#fff;font-size:22px;min-width:36px;height:36px;padding:0">‹</button><span>${kmonth(month)} 수익</span><button class="tb" data-act="month.next" style="color:#fff;font-size:22px;min-width:36px;height:36px;padding:0">›</button></div>
         <div class="big">${fmt(d.monthNet)}<small>원</small></div>
         <div class="line"><span>청구 (출근 ${d.monthDays}일)</span><span class="num">${won(d.monthGross)}</span></div>
         <div class="line"><span>세액공제</span><span class="red num">− ${won(d.monthTax)}</span></div>
         <div class="kpi inhdr"><div><div class="l">정산 완료</div><b>${man(d.kpi.settled)}</b></div><div><div class="l">미정산</div><b>${man(d.kpi.unsettledMonth)}</b></div><div><div class="l">출근</div><b>${d.kpi.days}일</b></div></div>
       </div>
+      ${(d.autoCheckouts || []).map(a => `<div class="card sky" style="display:flex;align-items:center;gap:10px"><div class="main" style="flex:1;min-width:0"><b>퇴근 시간을 ${esc(a.checkOutAt)}으로 넣었어요</b><div class="s">${esc(a.siteName)} · ${kdate(a.date)} — 응답이 없어 퇴근 알람 시각으로 기록했습니다</div></div><button class="btn sm" data-act="co.ok" data-id="${a.id}">맞아요</button><a class="btn sm primary" href="#/log/${a.id}">수정</a></div>`).join('')}
       ${noSites ? `<div class="card"><div class="empty"><b>현장을 먼저 만들어 주세요</b>현장을 한 번 만들어 두면 이후 기록 · 청구 · 입금이 전부 자동입니다.</div><button class="btn primary" data-act="nav" data-to="#/site/new">현장 추가</button></div>` : `
       <div class="card" style="display:flex;align-items:center;gap:12px;padding:14px 16px">
         <span class="choice-ck" style="width:40px;height:40px;border-radius:12px;background:${hasToday ? 'var(--blue)' : '#E9E9EE'};color:#fff;display:flex;align-items:center;justify-content:center;flex:none">${ck}</span>
@@ -840,7 +848,7 @@
   // ------------------------------------------------------------ S-37 설정 ----
   async function renderSettings() {
     const u = S.user
-    if (!S.draft) S.draft = { name: u.name || '', bizNo: u.bizNo || '', defaultTaxMode: u.defaultTaxMode || 'rate33', clockOutTime: u.clockOutTime || '18:00', prefs: { due: true, clockOut: true, ...(u.notifPrefs || {}) } }
+    if (!S.draft) S.draft = { name: u.name || '', bizNo: u.bizNo || '', defaultTaxMode: u.defaultTaxMode || 'rate33', clockOutTime: u.clockOutTime || '18:00', prefs: { due: true, clockOut: true, noRecord: true, ...(u.notifPrefs || {}) } }
     const d = S.draft
     app.innerHTML = screen(`
       ${topbar('뒤로', '설정', '', { leftAct: 'nav', leftTo: '#/all' })}
@@ -852,10 +860,12 @@
       ${seg(Object.entries(TAX).map(([k, v]) => [k, v.short]), d.defaultTaxMode, 'set.tax')}
       <div class="note" style="margin-top:10px">새 현장을 만들 때 기본으로 들어갑니다. 지난 기록은 바뀌지 않습니다. 현장별 설정(S-08)이 우선입니다.</div>
       ${sec('알림')}
+      <div class="card" id="pushCard"><div class="label">이 기기 알림 상태 확인 중…</div></div>
       <div class="field"><label>퇴근 알람 시간</label><input type="time" data-bind="clockOutTime" value="${esc(d.clockOutTime)}" style="text-align:right"></div>
-      <div class="field"><label>독촉 예정일 알림 (D-3 · 초과)</label>${toggle(d.prefs.due, 'set.pref', 'data-k="due"')}</div>
-      <div class="field"><label>퇴근 알람</label>${toggle(d.prefs.clockOut, 'set.pref', 'data-k="clockOut"')}</div>
-      <div class="note">잠금화면 알림(S-05)과 입금 알림은 앱 스토어 버전(푸시)에서 켜집니다. 지금은 설정값만 저장합니다.</div>
+      <div class="field"><label>퇴근 알람 (30분 간격 3회, 응답 없으면 자동 기록)</label>${toggle(d.prefs.clockOut, 'set.pref', 'data-k="clockOut"')}</div>
+      <div class="field"><label>입금 예정일 · 연체 알림 (D-3 · 초과 · 10일)</label>${toggle(d.prefs.due, 'set.pref', 'data-k="due"')}</div>
+      <div class="field"><label>출근 미기록 알림 (평일 저녁 7시)</label>${toggle(d.prefs.noRecord, 'set.pref', 'data-k="noRecord"')}</div>
+      <div class="note">현장마다 퇴근 알람 시각이 있으면 현장 설정이 우선합니다. 알림은 푸시를 켜지 않아도 홈의 종 아이콘(알림함)에 쌓입니다.</div>
       ${sec('연결된 계좌')}
       <div class="card"><b>아직 연결할 수 없습니다</b><div class="s label" style="margin-top:4px">조회 전용 오픈뱅킹(금융결제원 이용기관 등록) 심사 후 제공합니다. 그때까지 입금은 청구서에서 직접 기록합니다.</div></div>
       ${sec('계정 · 약관')}
@@ -869,6 +879,45 @@
       <div class="version">JOBS ${esc(window.JOBS_VERSION || '')}</div>
       ${fixed('<button class="btn primary" data-act="set.save">저장</button>')}
     `, 'all')
+    refreshPushCard()
+  }
+
+  // ------------------------------------------------------------ 웹 푸시 (이 기기 알림) ----
+  const b64urlFromBuf = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const b64uToU8 = s => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)); return Uint8Array.from(b, ch => ch.charCodeAt(0)) }
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
+  const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent)
+  const isStandalone = () => window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true
+  async function currentSub() { try { const reg = await navigator.serviceWorker.getRegistration('/jobs/'); return reg ? await reg.pushManager.getSubscription() : null } catch { return null } }
+  async function refreshPushCard() {
+    const el = document.getElementById('pushCard'); if (!el) return
+    let html
+    if (!pushSupported()) html = isIos() && !isStandalone()
+      ? '<b>아이폰은 홈 화면에 추가한 뒤 켤 수 있어요</b><div class="s label" style="margin-top:4px">Safari 공유 버튼 → «홈 화면에 추가» → 그 아이콘으로 JOBS를 열고 여기서 켜 주세요 (iOS 16.4 이상)</div>'
+      : '<b>이 브라우저는 푸시 알림을 지원하지 않습니다</b><div class="s label" style="margin-top:4px">알림은 홈의 종 아이콘(알림함)에서 볼 수 있습니다</div>'
+    else {
+      const [key, sub] = await Promise.all([api('/push/key').then(r => r.publicKey).catch(() => null), currentSub()])
+      if (!key) html = '<b>푸시 알림 준비 중</b><div class="s label" style="margin-top:4px">서버 푸시 키가 아직 설정되지 않았습니다. 알림은 홈의 종 아이콘(알림함)에 쌓입니다</div>'
+      else if (Notification.permission === 'denied') html = '<b class="red">알림이 차단되어 있습니다</b><div class="s label" style="margin-top:4px">브라우저(또는 휴대폰) 설정 → 사이트 알림에서 JOBS를 «허용»으로 바꿔 주세요</div>'
+      else if (sub) html = '<div style="display:flex;align-items:center;gap:10px"><div class="main" style="flex:1"><b>이 기기에서 알림을 받고 있습니다</b><div class="s label">퇴근 알람 · 입금 예정일 · 연체 알림이 잠금화면에 뜹니다</div></div></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn sm" data-act="push.test">테스트 알림</button><button class="btn sm ghost" data-act="push.off">끄기</button></div>'
+      else html = '<b>이 기기에서 알림 받기</b><div class="s label" style="margin:4px 0 10px">앱을 닫아 둬도 퇴근 알람 · 입금 예정일을 알려 드립니다</div><button class="btn sm primary" data-act="push.on">알림 켜기</button>'
+    }
+    if (document.getElementById('pushCard') === el) el.innerHTML = html
+  }
+
+  // ------------------------------------------------------------ 알림함 ----
+  const ago = iso => { const t = Date.parse(iso); if (!t) return ''; const m = Math.floor((Date.now() - t) / 60000); if (m < 1) return '방금'; if (m < 60) return `${m}분 전`; if (m < 1440) return `${Math.floor(m / 60)}시간 전`; const d = new Date(t + 9 * 3600e3); return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일` }
+  const NT_IC = { clockout: '⏰', checkout_auto: '⏰', due_soon: '₩', overdue: '!', no_record: '✎', payment_review: '₩', test: '🔔' }
+  async function renderNotifications() {
+    app.innerHTML = screen(topbar('뒤로', '알림', '', { leftAct: 'nav', leftTo: '#/home' }) + '<div class="skeleton"></div>', 'home')
+    const r = await api('/notifications')
+    if (route().path !== 'notifications') return
+    app.innerHTML = screen(`
+      ${topbar('뒤로', '알림', r.unread ? '모두 읽음' : '', { leftAct: 'nav', leftTo: '#/home', rightAct: 'nt.readall' })}
+      ${r.devices ? '' : '<div class="note">이 기기에서 푸시 알림을 받으려면 <a href="#/settings" style="text-decoration:underline">설정 → 알림 켜기</a>를 눌러 주세요. 켜지 않아도 알림은 여기에 쌓입니다.</div>'}
+      ${r.items.length ? `<div class="card tight">${r.items.map(n => `<button type="button" class="row link nt ${n.read ? 'read' : ''}" data-act="nt.open" data-id="${n.id}" data-url="${esc(n.url)}" style="width:100%;border:0;background:none;text-align:left"><span class="nt-ic ${esc(n.kind)}">${NT_IC[n.kind] || '•'}</span><div class="main"><div class="t">${esc(n.title)}</div><div class="s">${esc(n.body)}</div><div class="s">${esc(ago(n.createdAt))}</div></div>${n.read ? '' : '<i class="dot blue"></i>'}</button>`).join('')}</div>`
+        : '<div class="card"><div class="empty"><b>알림이 없습니다</b>퇴근 알람 · 입금 예정일 · 연체 알림이 여기에 쌓입니다</div></div>'}
+    `, 'home')
   }
 
   // ------------------------------------------------------------ 액션 ----
@@ -1060,6 +1109,32 @@
       await busy(async () => { await api('/me/withdraw', { body: { confirm: true } }); closeSheet(); toast('탈퇴했습니다'); logout(false) })
     },
     'set.pref'(el) { S.draft.prefs[el.dataset.k] = !S.draft.prefs[el.dataset.k]; render() },
+    async 'co.ok'(el) { await busy(async () => { await api('/worklogs/' + el.dataset.id, { method: 'PUT', body: { confirmCheckout: true } }); toast('확인했습니다'); render() }) },
+    async 'nt.open'(el) {
+      api('/notifications/read', { body: { ids: [el.dataset.id] } }).catch(() => null)
+      const u = el.dataset.url || ''
+      const i = u.indexOf('#')
+      if (i >= 0) location.hash = u.slice(i); else render()
+    },
+    async 'nt.readall'() { await busy(async () => { await api('/notifications/read', { body: { all: true } }); render() }) },
+    async 'push.on'() {
+      await busy(async () => {
+        const key = (await api('/push/key')).publicKey
+        if (!key) return toast('서버 푸시 키가 아직 설정되지 않았습니다', true)
+        const perm = await Notification.requestPermission()
+        if (perm !== 'granted') { refreshPushCard(); return toast('알림을 허용해야 받을 수 있습니다', true) }
+        const reg = await navigator.serviceWorker.register('/jobs/sw.js')
+        await navigator.serviceWorker.ready
+        let sub = await reg.pushManager.getSubscription()
+        if (sub && sub.options?.applicationServerKey && b64urlFromBuf(sub.options.applicationServerKey) !== key) { await sub.unsubscribe(); sub = null } // 서버 키가 바뀐 경우
+        if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(key) })
+        const j = sub.toJSON()
+        await api('/push/subscribe', { body: { endpoint: j.endpoint, keys: j.keys } })
+        toast('이 기기에서 알림을 받습니다'); refreshPushCard()
+      })
+    },
+    async 'push.off'() { await busy(async () => { const sub = await currentSub(); if (sub) { await api('/push/unsubscribe', { body: { endpoint: sub.endpoint } }).catch(() => null); await sub.unsubscribe() } ; toast('이 기기 알림을 껐습니다'); refreshPushCard() }) },
+    async 'push.test'() { await busy(async () => { const r = await api('/push/test', { method: 'POST' }); toast(r.sent ? '테스트 알림을 보냈습니다' : r.skipped ? '이 계정에 연결된 기기가 없습니다' : '푸시 전송에 실패했습니다', !r.sent) }) },
     async 'set.save'() { await busy(async () => { const d = S.draft; const r = await api('/me', { method: 'PUT', body: { name: d.name, bizNo: d.bizNo, defaultTaxMode: d.defaultTaxMode, clockOutTime: d.clockOutTime, notifPrefs: d.prefs } }); S.user = r.user; toast('저장했습니다'); S.draft = null; go('#/all') }) },
   }
 
@@ -1102,6 +1177,9 @@
     }
   })
   window.addEventListener('hashchange', render)
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('/jobs/sw.js').catch(() => null)
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(location.hostname))) {
+    navigator.serviceWorker.register('/jobs/sw.js').catch(() => null)
+    navigator.serviceWorker.addEventListener('message', ev => { if (ev.data && ev.data.type === 'jobs-nav' && typeof ev.data.url === 'string' && ev.data.url.startsWith('/jobs/')) location.href = ev.data.url })
+  }
   render()
 })()

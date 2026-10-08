@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   taxOf, taxBreakdown, calcWorkLog, buildInvoice, retaxInvoice, dueDateFor, invoiceStatus, dunningLevel,
   matchPayment, normalizePayer, floor10, fmt, addDays, monthEnd, daysBetween,
-  calcQuote, applyQuoteToRows, summarizeYear,
+  calcQuote, applyQuoteToRows, summarizeYear, clockoutStage,
 } from '../src/jobs/calc.ts'
 
 // ---- 명세 03 검증용 실제 수치 (8월 · 문정동) --------------------------------
@@ -188,4 +188,18 @@ test('연간 세액 정산서 집계 — 현장 · 월 · 세액공제 방식별
   assert.equal(y.byMonth.length, 12); assert.equal(y.byMonth[7].days, 2); assert.equal(y.byMonth[8].net, 135_380); assert.equal(y.byMonth[0].net, 0)
   assert.deepEqual(y.bySite.map(s => [s.siteName, s.days]), [['문정동', 2], ['위례', 0.5]])
   assert.deepEqual(y.byTaxMode.map(m => [m.taxMode, m.net]), [['rate33', 541_520], ['dailyWorker', 135_380]])
+})
+
+test('퇴근 알람 단계 — 30분 간격 3회 후 자동 기록, 야간 출근 제외', () => {
+  assert.equal(clockoutStage('18:00', '17:59', '07:30'), 0)
+  assert.equal(clockoutStage('18:00', '18:00', '07:30'), 1)
+  assert.equal(clockoutStage('18:00', '18:29', '07:30'), 1)
+  assert.equal(clockoutStage('18:00', '18:30', '07:30'), 2)
+  assert.equal(clockoutStage('18:00', '19:00', '07:30'), 3)
+  assert.equal(clockoutStage('18:00', '19:29', '07:30'), 3)
+  assert.equal(clockoutStage('18:00', '19:30', '07:30'), 4)
+  assert.equal(clockoutStage('18:00', '23:59'), 4)
+  assert.equal(clockoutStage('18:00', '20:00', '19:00'), 0) // 퇴근 알람 이후 출근(야간 작업)
+  assert.equal(clockoutStage('', '20:00', '07:00'), 0)
+  assert.equal(clockoutStage('18:00', 'xx', '07:00'), 0)
 })

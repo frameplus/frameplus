@@ -251,3 +251,11 @@ textarea.ta { width: 100%; min-height: 150px; border: 0; background: var(--card)
 /* ---------- 주 보기 가로 막대 ---------- */
 .wbar { height: 14px; background: var(--bg); border-radius: 7px; overflow: hidden; margin: 3px 0 4px; }
 .wbar i { display: block; height: 100%; background: var(--blue); border-radius: 7px; }
+
+/* ---------- 알림 (종 아이콘 · 알림함) ---------- */
+.hdr-ic { position: relative; color: #fff; display: flex; align-items: center; justify-content: center; min-width: 44px; height: 44px; }
+.dotn { position: absolute; top: 4px; right: 2px; min-width: 18px; height: 18px; border-radius: 9px; background: var(--red); color: #fff; font-style: normal; font-size: 11px; font-weight: 800; display: flex; align-items: center; justify-content: center; padding: 0 4px; box-shadow: 0 0 0 2px var(--blue); }
+.nt-ic { width: 36px; height: 36px; border-radius: 10px; background: var(--bg); display: flex; align-items: center; justify-content: center; font-weight: 800; flex: none; }
+.nt-ic.overdue { background: var(--red-tint); color: var(--red); }
+.nt-ic.clockout, .nt-ic.checkout_auto { background: var(--blue-tint); }
+.row.nt.read .t { font-weight: 500; color: var(--label); }
