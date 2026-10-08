@@ -247,3 +247,7 @@ textarea.ta { width: 100%; min-height: 150px; border: 0; background: var(--card)
   .card { border: 1px solid #ddd; break-inside: avoid; }
   .card.blue { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
+
+/* ---------- 주 보기 가로 막대 ---------- */
+.wbar { height: 14px; background: var(--bg); border-radius: 7px; overflow: hidden; margin: 3px 0 4px; }
+.wbar i { display: block; height: 100%; background: var(--blue); border-radius: 7px; }

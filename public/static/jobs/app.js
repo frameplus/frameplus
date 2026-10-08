@@ -112,6 +112,7 @@
       img.onerror = () => rej(new Error('사진을 읽지 못했습니다')); img.src = url
     })
   }
+  const sentMsg = (chn, via) => (chn === 'email' ? '메일로 보냈습니다' : via === 'kakao' ? '카카오톡으로 보냈습니다' : chn === 'kakao' ? '카카오톡 대신 문자로 보냈습니다 (알림톡 템플릿 등록 전)' : '문자로 보냈습니다')
   async function copyText(t) { try { await navigator.clipboard.writeText(t); toast('복사했습니다') } catch { prompt('복사해 주세요', t) } }
 
   // ------------------------------------------------------------ 라우터 ----
@@ -247,30 +248,53 @@
   }
   const worked = (a, b) => { if (!/^\d{2}:\d{2}$/.test(a || '') || !/^\d{2}:\d{2}$/.test(b || '')) return ''; let m = (+b.slice(0, 2) * 60 + +b.slice(3)) - (+a.slice(0, 2) * 60 + +a.slice(3)); if (m < 0) m += 1440; return `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ''}` }
 
-  // ------------------------------------------------------------ S-07 캘린더 ----
+  // ------------------------------------------------------------ S-07 캘린더 (월 · 주) ----
+  const dayCard = l => `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:17px">${esc(l.siteName)}</b><a href="#/log/${l.id}" class="btn sm">수정</a></div>
+      <div class="sum"><div class="line"><span class="l">근무</span><span>${l.attendance === 'half' ? '반일' : '1일'}${l.overtimeHours ? ` + 연장 ${l.overtimeHours}시간` : ''}</span></div>
+      ${l.checkInAt || l.checkOutAt ? `<div class="line"><span class="l">출퇴근</span><span>${esc(l.checkInAt || '-')} ~ ${esc(l.checkOutAt || '-')}${worked(l.checkInAt, l.checkOutAt) ? ` (${worked(l.checkInAt, l.checkOutAt)})` : ''}</span></div>` : ''}
+      ${l.expenses?.length ? `<div class="line"><span class="l">경비</span><span>${l.expenses.map(e => `${esc(e.typeLabel)} ${fmt(e.amount)}${e.chargeToClient ? '' : '(제외)'}`).join(' · ')}</span></div>` : ''}
+      <div class="line"><span class="l">청구</span><span>${won(l.gross)}</span></div><div class="line"><span class="l">세액공제</span><span class="red">− ${won(l.tax)}</span></div><div class="line net"><span class="l">수익</span><span>${won(l.net)}</span></div></div>
+    </div>`
+  const dayDetail = (sel, dayLogs) => sec(kdate(sel)) + (dayLogs.length
+    ? dayLogs.map(dayCard).join('') + `<button class="btn" data-act="nav" data-to="#/log/new?date=${sel}">+ 같은 날 다른 현장 기록</button>`
+    : `<div class="card"><div class="empty"><b>${[0, 6].includes(parseYmd(sel).getUTCDay()) ? '쉬는 날' : '기록 없음'}</b>${sel > todayKst() ? '아직 오지 않은 날입니다' : '이 날 일했다면 지금 넣어 두세요'}</div>${sel <= todayKst() ? `<button class="btn primary" data-act="sheet.record" data-date="${sel}">이 날 기록하기</button>` : ''}</div>`)
   async function renderCal(q) {
     const month = S.month || (S.month = todayKst().slice(0, 7))
     const sel = S.draft?.sel || (isYmd(q.d) ? q.d : (month === todayKst().slice(0, 7) ? todayKst() : month + '-01'))
     S.draft = { sel }
-    app.innerHTML = screen(`<div class="skeleton"></div>`, 'cal')
+    if (S.calMode === 'w') return renderWeek(sel)
+    app.innerHTML = screen('<div class="skeleton"></div>', 'cal')
     const d = await api('/dashboard?month=' + month)
     if (route().path !== 'cal') return
     const dayLogs = d.logs.filter(l => l.date === sel)
-    const dow = parseYmd(sel).getUTCDay()
     app.innerHTML = screen(`
       <div class="topbar" style="height:60px"><div style="display:flex;align-items:center;gap:2px"><button class="tb" data-act="month.prev" style="font-size:22px">‹</button><b style="font-size:22px">${kmonth(month)}</b><button class="tb" data-act="month.next" style="font-size:22px">›</button></div>
         ${seg([['m', '월'], ['w', '주']], 'm', 'cal.mode', 'dark')}</div>
       <div class="kpi"><div><div class="l">출근</div><b>${d.monthDays}일</b></div><div><div class="l">수익</div><b>${man(d.monthNet)}</b></div><div><div class="l">미정산</div><b>${man(d.kpi.unsettledMonth)}</b></div></div>
       ${calGrid(month, d.calendar, { sel, legend: true })}
-      ${sec(kdate(sel), dayLogs.length ? '' : '', '')}
-      ${dayLogs.length ? dayLogs.map(l => `<div class="card">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:17px">${esc(l.siteName)}</b><a href="#/log/${l.id}" class="btn sm">수정</a></div>
-          <div class="sum"><div class="line"><span class="l">근무</span><span>${l.attendance === 'half' ? '반일' : '1일'}${l.overtimeHours ? ` + 연장 ${l.overtimeHours}시간` : ''}</span></div>
-          ${l.checkInAt || l.checkOutAt ? `<div class="line"><span class="l">출퇴근</span><span>${esc(l.checkInAt || '-')} ~ ${esc(l.checkOutAt || '-')}</span></div>` : ''}
-          ${l.expenses?.length ? `<div class="line"><span class="l">경비</span><span>${l.expenses.map(e => `${esc(e.typeLabel)} ${fmt(e.amount)}${e.chargeToClient ? '' : '(제외)'}`).join(' · ')}</span></div>` : ''}
-          <div class="line"><span class="l">청구</span><span>${won(l.gross)}</span></div><div class="line"><span class="l">세액공제</span><span class="red">− ${won(l.tax)}</span></div><div class="line net"><span class="l">수익</span><span>${won(l.net)}</span></div></div>
-        </div>`).join('') + `<button class="btn" data-act="nav" data-to="#/log/new?date=${sel}">+ 같은 날 다른 현장 기록</button>`
-      : `<div class="card"><div class="empty"><b>${dow === 0 || dow === 6 ? '쉬는 날' : '기록 없음'}</b>${sel > todayKst() ? '아직 오지 않은 날입니다' : '이 날 일했다면 지금 넣어 두세요'}</div>${sel <= todayKst() ? `<button class="btn primary" data-act="sheet.record" data-date="${sel}">이 날 기록하기</button>` : ''}</div>`}
+      ${dayDetail(sel, dayLogs)}
+    `, 'cal')
+  }
+  // 주 보기 — 요일별 금액이 가로 막대로 (S-07 규칙)
+  async function renderWeek(sel) {
+    const start = addDays(sel, -parseYmd(sel).getUTCDay()), end = addDays(start, 6)
+    app.innerHTML = screen('<div class="skeleton"></div>', 'cal')
+    const logs = await api(`/worklogs?from=${start}&to=${end}`)
+    if (route().path !== 'cal') return
+    const byDate = {}
+    for (const l of logs) (byDate[l.date] = byDate[l.date] || []).push(l)
+    const days = Array.from({ length: 7 }, (_, i) => addDays(start, i))
+    const netOf = d => (byDate[d] || []).reduce((s, l) => s + l.net, 0)
+    const max = Math.max(1, ...days.map(netOf))
+    const tot = logs.reduce((a, l) => { a.net += l.net; a.days += l.attendance === 'half' ? 0.5 : 1; a.ot += l.overtimeHours || 0; return a }, { net: 0, days: 0, ot: 0 })
+    app.innerHTML = screen(`
+      <div class="topbar" style="height:60px"><div style="display:flex;align-items:center;gap:2px"><button class="tb" data-act="week.prev" style="font-size:22px">‹</button><b style="font-size:17px">${kshort(start)} ~ ${kshort(end)}</b><button class="tb" data-act="week.next" style="font-size:22px">›</button></div>
+        ${seg([['m', '월'], ['w', '주']], 'w', 'cal.mode', 'dark')}</div>
+      <div class="kpi"><div><div class="l">출근</div><b>${tot.days}일</b></div><div><div class="l">수익</div><b>${man(tot.net)}</b></div><div><div class="l">연장</div><b>${tot.ot}시간</b></div></div>
+      <div class="card tight">${days.map(dt => { const ls = byDate[dt] || [], net = netOf(dt), dow = parseYmd(dt).getUTCDay()
+        return `<button type="button" class="row link" data-act="cal.sel" data-date="${dt}" style="width:100%;border:0;text-align:left;border-radius:8px;background:${dt === sel ? 'var(--blue-tint)' : 'none'}"><div style="width:56px;flex:none"><div class="t" style="${dow === 0 ? 'color:var(--red)' : ''}">${DOW[dow]} ${+dt.slice(8)}</div>${dt === todayKst() ? '<div class="s" style="color:var(--blue);font-weight:700">오늘</div>' : ''}</div><div class="main"><div class="wbar"><i style="width:${net ? Math.max(4, Math.round(net / max * 100)) : 0}%"></i></div><div class="s">${ls.length ? ls.map(l => esc(l.siteName) + (l.attendance === 'half' ? '(반)' : '') + (l.overtimeHours ? `+${l.overtimeHours}h` : '')).join(' · ') : (dow === 0 || dow === 6 ? '' : '기록 없음')}</div></div><div class="amt">${net ? won(net) : ''}</div></button>` }).join('')}</div>
+      ${dayDetail(sel, byDate[sel] || [])}
     `, 'cal')
   }
 
@@ -390,7 +414,7 @@
         S.draft = { id: null, siteId: site.id, date: isYmd(q.date) ? q.date : todayKst(), attendance: 'full', overtimeHours: 0, dayRate: site.dayRate, hourRate: site.overtimeRate || site.hourRate, ratesTouched: false, taxModeOverride: null, checkInAt: '', checkOutAt: '', expenses: [], photos: [], memo: '', geo: null, invoiceId: null }
       } else {
         const l = await api('/worklogs/' + id)
-        S.draft = { id: l.id, siteId: l.siteId, date: l.date, attendance: l.attendance, overtimeHours: l.overtimeHours, dayRate: l.dayRate, hourRate: l.hourRate, ratesTouched: true, taxModeOverride: l.taxModeOverride, checkInAt: l.checkInAt, checkOutAt: l.checkOutAt, expenses: l.expenses.map(e => ({ type: e.type, name: e.name, amount: e.amount, chargeToClient: e.chargeToClient })), photos: l.photos.map(p => ({ uri: p.uri, takenAt: p.takenAt, lat: p.lat, lng: p.lng, label: p.label })), memo: l.memo, geo: l.checkInLat ? { lat: l.checkInLat, lng: l.checkInLng, dist: l.geoDistanceM } : null, invoiceId: l.invoiceId }
+        S.draft = { id: l.id, siteId: l.siteId, date: l.date, attendance: l.attendance, overtimeHours: l.overtimeHours, dayRate: l.dayRate, hourRate: l.hourRate, ratesTouched: true, taxModeOverride: l.taxModeOverride, checkInAt: l.checkInAt, checkOutAt: l.checkOutAt, expenses: l.expenses.map(e => ({ type: e.type, name: e.name, amount: e.amount, chargeToClient: e.chargeToClient })), photos: l.photos.map(p => ({ id: p.id, uri: p.uri, takenAt: p.takenAt, lat: p.lat, lng: p.lng, label: p.label })), memo: l.memo, geo: l.checkInLat ? { lat: l.checkInLat, lng: l.checkInLng, dist: l.geoDistanceM } : null, invoiceId: l.invoiceId }
       }
     }
     const d = S.draft, site = siteById(d.siteId), c = calcDraft(d)
@@ -839,7 +863,7 @@
         <a class="row link" href="/jobs/legal/terms" target="_blank" rel="noopener"><div class="main"><div class="t">이용약관</div></div><span class="chev">›</span></a>
         <a class="row link" href="/jobs/legal/privacy" target="_blank" rel="noopener"><div class="main"><div class="t">개인정보처리방침</div></div><span class="chev">›</span></a>
         <a class="row link" href="/jobs/legal/location" target="_blank" rel="noopener"><div class="main"><div class="t">위치정보 이용약관</div></div><span class="chev">›</span></a>
-        <button class="row link" data-act="soon" data-msg="회원 탈퇴는 미입금 청구서 확인 절차와 함께 다음 버전에 들어갑니다" style="width:100%;background:none;border:0;text-align:left"><div class="main"><div class="t red">회원 탈퇴</div></div><span class="badge">준비 중</span></button>
+        <button class="row link" data-act="me.withdraw" style="width:100%;background:none;border:0;text-align:left"><div class="main"><div class="t red">회원 탈퇴</div><div class="s">기록 · 사진은 삭제, 청구서 · 입금 기록은 보관</div></div><span class="chev">›</span></button>
       </div>
       <button class="btn ghost" data-act="logout">로그아웃</button>
       <div class="version">JOBS ${esc(window.JOBS_VERSION || '')}</div>
@@ -860,7 +884,9 @@
     'home.range'(el) { S.rangeTab = el.dataset.v; render() },
     'cal.sel'(el) { S.draft = { sel: el.dataset.date }; render() },
     'cal.go'(el) { S.draft = null; go('#/cal?d=' + el.dataset.date) },
-    'cal.mode'(el) { if (el.dataset.v === 'w') toast('주 보기는 다음 버전에 들어갑니다') },
+    'cal.mode'(el) { S.calMode = el.dataset.v; render() },
+    'week.prev'() { const sel = addDays(S.draft?.sel || todayKst(), -7); S.month = sel.slice(0, 7); S.draft = { sel }; render() },
+    'week.next'() { const sel = addDays(S.draft?.sel || todayKst(), 7); S.month = sel.slice(0, 7); S.draft = { sel }; render() },
     'sheet.record'(el) { recordSheet(el.dataset.date) },
     async 'log.copy'(el) { closeSheet(); await busy(async () => { const l = await api('/worklogs/copy', { body: { date: el.dataset.date } }); toast(`${l.siteName} 기록을 복사했습니다`); S.month = l.date.slice(0, 7); go('#/log/' + l.id) }) },
     // 로그인
@@ -910,7 +936,7 @@
       if (num(d.dayRate) <= 0) return toast('1일 단가를 입력해 주세요', true)
       await busy(async () => {
         const body = { siteId: d.siteId, date: d.date, attendance: d.attendance, overtimeHours: num(d.overtimeHours), dayRate: num(d.dayRate), hourRate: num(d.hourRate), taxModeOverride: d.taxModeOverride, checkInAt: d.checkInAt, checkOutAt: d.checkOutAt, memo: d.memo, source: 'manual',
-          expenses: d.expenses.map(e => ({ type: e.type, name: e.name, amount: num(e.amount), chargeToClient: e.chargeToClient })).filter(e => e.amount > 0), photos: d.photos,
+          expenses: d.expenses.map(e => ({ type: e.type, name: e.name, amount: num(e.amount), chargeToClient: e.chargeToClient })).filter(e => e.amount > 0), photos: d.photos.map(p => p.id ? { id: p.id } : { uri: p.uri, takenAt: p.takenAt, lat: p.lat, lng: p.lng, label: p.label }),
           ...(d.geo ? { checkInLat: d.geo.lat, checkInLng: d.geo.lng, geoDistanceM: d.geo.dist } : {}) }
         try {
           const l = d.id ? await api('/worklogs/' + d.id, { method: 'PUT', body }) : await api('/worklogs', { body })
@@ -983,7 +1009,7 @@
         closeSheet()
         if (chn === 'link') { if (navigator.share) { try { await navigator.share({ title: '견적서', text: r.text, url: r.link }) } catch { /* 취소 */ } } else await copyText(r.text) }
         else if (chn === 'pdf') window.open(r.link, '_blank')
-        else toast(chn === 'email' ? '메일로 보냈습니다' : chn === 'kakao' ? '카카오톡 대신 문자로 보냈습니다' : '문자로 보냈습니다')
+        else toast(sentMsg(chn, r.via))
         S.draft = null; render()
       })
     },
@@ -1002,8 +1028,8 @@
           S.draft = null; render(); return
         }
         if (chn === 'pdf') { await api(`/invoices/${i.id}/send`, { body: { channel: 'pdf' } }); closeSheet(); window.open(i.shareUrl, '_blank'); S.draft = null; render(); return }
-        await api(`/invoices/${i.id}/send`, { body: { channel: chn, to: chn === 'email' ? S.draft.email : S.draft.to } })
-        closeSheet(); toast(chn === 'email' ? '메일로 보냈습니다' : chn === 'kakao' ? '카카오톡 대신 문자로 보냈습니다' : '문자로 보냈습니다'); S.draft = null; render()
+        const r = await api(`/invoices/${i.id}/send`, { body: { channel: chn, to: chn === 'email' ? S.draft.email : S.draft.to } })
+        closeSheet(); toast(sentMsg(chn, r.via)); S.draft = null; render()
       })
     },
     async 'inv.del'(el) { if (!confirm('청구서를 삭제할까요? 출근 기록은 남고 다시 청구서를 만들 수 있습니다.')) return; await busy(async () => { await api('/invoices/' + el.dataset.id, { method: 'DELETE' }); toast('삭제했습니다'); S.draft = null; go('#/settle') }) },
@@ -1018,6 +1044,21 @@
     async 'dun.send'() { await busy(async () => { const d = S.draft; await api(`/invoices/${d.id}/dunning`, { body: { level: d.level, channel: 'sms', to: d.to, text: d.text } }); toast('독촉 문자를 보냈습니다'); S.draft = null; go('#/invoice/' + d.id) }) },
     // 설정
     'set.tax'(el) { S.draft.defaultTaxMode = el.dataset.v; render() },
+    'sheet.close'() { closeSheet() },
+    async 'me.withdraw'() {
+      await busy(async () => {
+        const w = await api('/me/withdraw-check')
+        sheet(`<h3>회원 탈퇴</h3><div class="s">탈퇴하면 되돌릴 수 없습니다</div>
+          ${w.openInvoices ? `<div class="card danger"><b class="red">미입금 청구서 ${w.openInvoices}건 · ${won(w.unpaid)}</b><div class="s">탈퇴하면 보낸 청구서 링크가 더 이상 열리지 않습니다. 입금을 다 받은 뒤 탈퇴하기를 권합니다.</div></div>` : ''}
+          <div class="note">삭제: 계정 · 현장 연락처 · 위치 · 출근 기록 ${w.worklogs}건 · 사진 ${w.photos}장<br>보관(분쟁 근거 · 법령): 청구서 ${w.invoices}건 · 견적서 ${w.quotes}건 · 입금 · 보낸 기록 — 이름 · 번호는 지워집니다</div>
+          <button class="btn dark" data-act="me.withdraw.go">탈퇴하기</button>
+          <button class="btn ghost" data-act="sheet.close">취소</button>`)
+      })
+    },
+    async 'me.withdraw.go'() {
+      if (!confirm('정말 탈퇴할까요? 되돌릴 수 없습니다.')) return
+      await busy(async () => { await api('/me/withdraw', { body: { confirm: true } }); closeSheet(); toast('탈퇴했습니다'); logout(false) })
+    },
     'set.pref'(el) { S.draft.prefs[el.dataset.k] = !S.draft.prefs[el.dataset.k]; render() },
     async 'set.save'() { await busy(async () => { const d = S.draft; const r = await api('/me', { method: 'PUT', body: { name: d.name, bizNo: d.bizNo, defaultTaxMode: d.defaultTaxMode, clockOutTime: d.clockOutTime, notifPrefs: d.prefs } }); S.user = r.user; toast('저장했습니다'); S.draft = null; go('#/all') }) },
   }

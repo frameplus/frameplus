@@ -17,8 +17,14 @@ export type JobsBindings = {
   JOBS_DEV_OTP?: string
   /** 공유 링크의 origin (예: https://www.frameplus.kr). 없으면 요청 origin */
   JOBS_PUBLIC_ORIGIN?: string
+  /** R2 버킷(선택) — 있으면 사진을 R2 에 저장(키 photos/{user}/{id}.ext), 없으면 D1 base64 */
+  JOBS_PHOTOS?: R2Bucket
+  /** 카카오 알림톡 템플릿 ID(심사 완료 후) — 없으면 카카오톡 채널은 문자로 대체 */
+  JOBS_KAKAO_TPL_INVOICE?: string
+  JOBS_KAKAO_TPL_DUNNING?: string
+  JOBS_KAKAO_TPL_QUOTE?: string
 }
-export type SmsSender = (env: any, opts: { to: string; text: string; type?: 'SMS' | 'LMS'; subject?: string }) => Promise<{ ok: boolean; error?: string }>
+export type SmsSender = (env: any, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string; variables?: Record<string, string> }) => Promise<{ ok: boolean; error?: string }>
 export type EmailSender = (env: any, opts: { to: string; subject: string; html: string }) => Promise<{ ok: boolean; error?: string }>
 export type JobsDeps = { sendSms: SmsSender; sendEmail: EmailSender; version: string }
 
@@ -46,6 +52,24 @@ function safeJson<T>(s: unknown, def: T): T { try { return s ? JSON.parse(String
 const period = (a: string, b: string) => `${a.slice(5).replace('-', '.')}~${b.slice(5).replace('-', '.')}`
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',')
 
+// ---- 사진 저장: R2 바인딩이 있으면 R2, 없으면 D1 base64(data URI). 조회는 /jobs/photo/:id (추측 불가능한 id 기반 비공개 URL [가정]) ----
+const DATA_URI_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/
+const b64ToBytes = (b64: string) => { const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out }
+async function storePhoto(bucket: R2Bucket | undefined, userId: string, photoId: string, dataUri: string): Promise<string> {
+  const m = DATA_URI_RE.exec(dataUri)
+  if (!bucket || !m) return dataUri
+  const ext = m[1] === 'image/png' ? 'png' : m[1] === 'image/webp' ? 'webp' : 'jpg'
+  const key = `photos/${userId}/${photoId}.${ext}`
+  await bucket.put(key, b64ToBytes(m[2]), { httpMetadata: { contentType: m[1], cacheControl: 'private, max-age=86400' } })
+  return 'r2:' + key
+}
+async function deletePhotoObjects(bucket: R2Bucket | undefined, uris: string[]): Promise<void> {
+  if (!bucket) return
+  const keys = uris.filter(u => typeof u === 'string' && u.startsWith('r2:')).map(u => u.slice(3))
+  if (keys.length) await bucket.delete(keys)
+}
+const photoUrl = (p: { id: string; uri: string }) => (p.uri && p.uri.startsWith('r2:') ? `/jobs/photo/${p.id}` : p.uri)
+
 function siteOut(s: any) {
   return {
     id: s.id, name: s.name, company: s.company || '', address: s.address || '', lat: s.lat, lng: s.lng, geoRadius: s.geo_radius ?? 150,
@@ -66,7 +90,7 @@ function logOut(w: any) {
   }
 }
 const expOut = (e: any) => ({ id: e.id, worklogId: e.worklog_id, type: e.type, typeLabel: EXPENSE_TYPES[e.type as ExpenseType] || e.type, name: e.name || '', amount: e.amount || 0, chargeToClient: !!e.charge_to_client, receiptUri: e.receipt_uri || '' })
-const photoOut = (p: any) => ({ id: p.id, worklogId: p.worklog_id, uri: p.uri, takenAt: p.taken_at || '', lat: p.lat, lng: p.lng, label: p.label || '', attachToInvoice: !!p.attach_to_invoice })
+const photoOut = (p: any) => ({ id: p.id, worklogId: p.worklog_id, uri: photoUrl(p), takenAt: p.taken_at || '', lat: p.lat, lng: p.lng, label: p.label || '', attachToInvoice: !!p.attach_to_invoice })
 function invoiceOut(i: any, today: string) {
   const remaining = Math.max(0, (i.net || 0) - (i.paid_amount || 0))
   const over = i.due_date && i.status !== 'paid' && i.status !== 'draft' ? Math.max(0, daysBetween(i.due_date, today)) : 0
@@ -155,7 +179,7 @@ export function createJobsApi(deps: JobsDeps) {
       user = (await db.prepare('SELECT * FROM jobs_users WHERE id = ?').bind(id).first<UserRow>())!
       isNew = true
     }
-    if (user.status === 'restricted') return c.json({ error: '이용이 제한된 계정입니다' }, 403)
+    if (user.status === 'restricted' || user.status === 'deleted') return c.json({ error: '이용이 제한된 계정입니다' }, 403)
     const token = randomHex(32)
     await db.batch([
       db.prepare('INSERT INTO jobs_sessions (id, user_id, expires_at) VALUES (?, ?, ?)').bind(await sha256Hex(token), user.id, plusMs(30 * 86_400_000)),
@@ -195,6 +219,42 @@ export function createJobsApi(deps: JobsDeps) {
     await c.env.DB.prepare(`UPDATE jobs_users SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run()
     const fresh = await c.env.DB.prepare('SELECT * FROM jobs_users WHERE id = ?').bind(u.id).first<UserRow>()
     return c.json({ user: publicUser(fresh!) })
+  })
+
+  // 회원 탈퇴 (S-37) — 미입금 청구서가 있으면 경고 후 진행. 개인정보 · 위치 · 사진 · 출근 기록은 즉시 삭제,
+  // 청구서 · 견적서 · 입금 · 보낸 기록은 분쟁 근거 · 법령 보관(개인정보는 익명화, 공유 링크는 폐기)
+  api.get('/me/withdraw-check', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const [open, sites, logs, photos, invs, quotes] = await Promise.all([
+      db.prepare("SELECT COUNT(*) n, COALESCE(SUM(net - paid_amount), 0) unpaid FROM jobs_invoices WHERE user_id = ? AND status IN ('sent','partial','overdue')").bind(u.id).first<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_sites WHERE user_id = ?').bind(u.id).first<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_worklogs WHERE user_id = ?').bind(u.id).first<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_photos WHERE user_id = ?').bind(u.id).first<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_invoices WHERE user_id = ?').bind(u.id).first<any>(),
+      db.prepare('SELECT COUNT(*) n FROM jobs_quotes WHERE user_id = ?').bind(u.id).first<any>(),
+    ])
+    return c.json({ openInvoices: open?.n || 0, unpaid: open?.unpaid || 0, sites: sites?.n || 0, worklogs: logs?.n || 0, photos: photos?.n || 0, invoices: invs?.n || 0, quotes: quotes?.n || 0 })
+  })
+  api.post('/me/withdraw', async (c) => {
+    const u = c.get('jobsUser'), db = c.env.DB
+    const body = await c.req.json<any>().catch(() => ({}))
+    if (body.confirm !== true) return c.json({ error: '탈퇴 확인이 필요합니다' }, 400)
+    const ph = await db.prepare('SELECT uri FROM jobs_photos WHERE user_id = ?').bind(u.id).all<any>()
+    const now = nowIso()
+    await db.batch([
+      db.prepare('DELETE FROM jobs_sessions WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_otp WHERE phone = ?').bind(u.phone),
+      db.prepare('DELETE FROM jobs_photos WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_expenses WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_worklogs WHERE user_id = ?').bind(u.id),
+      db.prepare('DELETE FROM jobs_payer_rules WHERE user_id = ?').bind(u.id),
+      db.prepare("UPDATE jobs_sites SET contact_name = '', contact_phone = '', address = '', lat = NULL, lng = NULL, memo = '', archived = 1, updated_at = ? WHERE user_id = ?").bind(now, u.id),
+      db.prepare("UPDATE jobs_quotes SET contact_phone = '', share_token = NULL, updated_at = ? WHERE user_id = ?").bind(now, u.id),
+      db.prepare('UPDATE jobs_invoices SET share_token = NULL, updated_at = ? WHERE user_id = ?').bind(now, u.id),
+      db.prepare("UPDATE jobs_users SET phone = ?, name = '', biz_no = '', notif_prefs = '{}', status = 'deleted', deleted_at = ?, updated_at = ? WHERE id = ?").bind('del_' + randomHex(8), now, now, u.id),
+    ])
+    await deletePhotoObjects(c.env.JOBS_PHOTOS, (ph.results || []).map((p: any) => p.uri))
+    return c.json({ ok: true })
   })
 
   // ============================================================== SITES ====
@@ -389,13 +449,15 @@ export function createJobsApi(deps: JobsDeps) {
     }
     const calcExpenses = expenses ?? (typeof keptExpenses !== 'undefined' ? keptExpenses : [])
     // 사진
-    let photos: { uri: string; takenAt: string; lat: number | null; lng: number | null; label: string }[] | null = null
+    // 사진: {id} 는 기존 사진 유지, {uri: data URI} 는 새 사진. photos 키가 없으면 그대로 둔다.
+    let photos: { id?: string; uri: string; takenAt: string; lat: number | null; lng: number | null; label: string }[] | null = null
     if (Array.isArray(body.photos)) {
       if (body.photos.length > 6) return c.json({ error: '사진은 6장까지 붙일 수 있습니다' }, 400)
       photos = []
       for (const p of body.photos) {
+        if (p && typeof p.id === 'string' && !p.uri) { photos.push({ id: str(p.id, 40), uri: '', takenAt: '', lat: null, lng: null, label: '' }); continue }
         const uri = String(p?.uri || '')
-        if (!/^data:image\/(jpeg|png|webp);base64,/.test(uri)) return c.json({ error: '사진 형식이 올바르지 않습니다' }, 400)
+        if (!DATA_URI_RE.test(uri)) return c.json({ error: '사진 형식이 올바르지 않습니다' }, 400)
         if (uri.length > 700_000) return c.json({ error: '사진 한 장은 500KB 이하로 줄여 주세요' }, 400)
         photos.push({ uri, takenAt: str(p?.takenAt, 30), lat: numOrNull(p?.lat), lng: numOrNull(p?.lng), label: str(p?.label, 40) })
       }
@@ -429,12 +491,23 @@ export function createJobsApi(deps: JobsDeps) {
       stmts.push(db.prepare('DELETE FROM jobs_expenses WHERE worklog_id = ?').bind(id))
       for (const e of expenses) stmts.push(db.prepare('INSERT INTO jobs_expenses (id, user_id, worklog_id, type, name, amount, charge_to_client) VALUES (?,?,?,?,?,?,?)').bind(newId('ex'), u.id, id, e.type, e.name, e.amount, e.chargeToClient ? 1 : 0))
     }
+    let removedUris: string[] = []
     if (photos) {
-      stmts.push(db.prepare('DELETE FROM jobs_photos WHERE worklog_id = ?').bind(id))
-      for (const p of photos) stmts.push(db.prepare('INSERT INTO jobs_photos (id, user_id, worklog_id, uri, taken_at, lat, lng, label) VALUES (?,?,?,?,?,?,?,?)').bind(newId('ph'), u.id, id, p.uri, p.takenAt, p.lat, p.lng, p.label))
+      const prevPhotos = existing ? ((await db.prepare('SELECT id, uri FROM jobs_photos WHERE worklog_id = ?').bind(id).all<any>()).results || []) : []
+      const keep = new Set(photos.filter(p => p.id).map(p => p.id as string))
+      const removed = prevPhotos.filter((p: any) => !keep.has(p.id))
+      removedUris = removed.map((p: any) => p.uri)
+      for (const p of removed) stmts.push(db.prepare('DELETE FROM jobs_photos WHERE id = ?').bind(p.id))
+      for (const p of photos.filter(p => !p.id)) {
+        const pid = newId('ph')
+        const uri = await storePhoto(c.env.JOBS_PHOTOS, u.id, pid, p.uri)
+        stmts.push(db.prepare('INSERT INTO jobs_photos (id, user_id, worklog_id, uri, taken_at, lat, lng, label) VALUES (?,?,?,?,?,?,?,?)').bind(pid, u.id, id, uri, p.takenAt, p.lat, p.lng, p.label))
+      }
     }
     await db.batch(stmts)
+    await deletePhotoObjects(c.env.JOBS_PHOTOS, removedUris)
     const rows = await loadLogs(db, u.id, 'AND w.id = ?', [id])
+    rows[0].photos = (await db.prepare('SELECT * FROM jobs_photos WHERE worklog_id = ? ORDER BY taken_at').bind(id).all<any>()).results || []
     return c.json(logOut(rows[0]), existing ? 200 : 201)
   }
   api.post('/worklogs', (c) => saveWorkLog(c, null))
@@ -448,11 +521,13 @@ export function createJobsApi(deps: JobsDeps) {
     const existing = await db.prepare('SELECT * FROM jobs_worklogs WHERE id = ? AND user_id = ?').bind(id, u.id).first<any>()
     if (!existing) return c.json({ error: '기록을 찾을 수 없습니다' }, 404)
     if (existing.invoice_id) return c.json({ error: '청구서에 들어간 기록은 지울 수 없습니다. 청구서를 먼저 삭제해 주세요' }, 409)
+    const ph = await db.prepare('SELECT uri FROM jobs_photos WHERE worklog_id = ?').bind(id).all<any>()
     await db.batch([
       db.prepare('DELETE FROM jobs_expenses WHERE worklog_id = ?').bind(id),
       db.prepare('DELETE FROM jobs_photos WHERE worklog_id = ?').bind(id),
       db.prepare('DELETE FROM jobs_worklogs WHERE id = ?').bind(id),
     ])
+    await deletePhotoObjects(c.env.JOBS_PHOTOS, (ph.results || []).map((p: any) => p.uri))
     return c.json({ ok: true })
   })
   // S-02 «어제와 같이» — 직전 기록을 복제하고 날짜만 바꾼다
@@ -681,11 +756,15 @@ export function createJobsApi(deps: JobsDeps) {
     const channel = ['sms', 'kakao', 'email', 'link', 'pdf'].includes(body.channel) ? body.channel : 'link'
     const link = shareUrl(c, inv.share_token)
     const text = invoiceText(inv, link)
-    let to = ''
+    let to = '', via: string = channel
     if (channel === 'sms' || channel === 'kakao') {
       to = normPhone(body.to || (await loadSite(db, u.id, inv.site_id))?.contact_phone)
       if (!isPhone(to) && !/^0\d{8,10}$/.test(to)) return c.json({ error: '받는 사람 번호를 입력해 주세요' }, 400)
-      const r = await deps.sendSms(c.env, { to, text, type: 'LMS', subject: `${inv.site_name} 청구서` })
+      const tpl = channel === 'kakao' ? c.env.JOBS_KAKAO_TPL_INVOICE : ''
+      via = tpl ? 'kakao' : 'sms'
+      const r = tpl
+        ? await deps.sendSms(c.env, { to, text, type: 'ATA', templateId: tpl, variables: { '#{업체}': inv.site_company || inv.site_name, '#{현장}': inv.site_name, '#{기간}': period(inv.period_start, inv.period_end), '#{청구금액}': fmt(inv.gross), '#{세액}': fmt(inv.tax), '#{실수령}': fmt(inv.net), '#{예정일}': inv.due_date, '#{링크}': link } })
+        : await deps.sendSms(c.env, { to, text, type: 'LMS', subject: `${inv.site_name} 청구서` })
       if (!r.ok) return c.json({ error: '문자를 보내지 못했습니다', detail: r.error }, 503)
     } else if (channel === 'email') {
       to = str(body.to, 120).toLowerCase()
@@ -700,7 +779,7 @@ export function createJobsApi(deps: JobsDeps) {
       stmts.push(db.prepare('UPDATE jobs_invoices SET status = ?, updated_at = ? WHERE id = ?').bind(next, nowIso(), inv.id))
     }
     await db.batch(stmts)
-    return c.json({ ok: true, channel, link, text, invoice: invoiceOut(await loadInvoice(db, u.id, inv.id), today) })
+    return c.json({ ok: true, channel, via, link, text, invoice: invoiceOut(await loadInvoice(db, u.id, inv.id), today) })
   })
   // S-14 독촉 문안 · 발송
   api.get('/invoices/:id/dunning', async (c) => {
@@ -720,7 +799,7 @@ export function createJobsApi(deps: JobsDeps) {
     const level = body.level === 'firm' ? 'firm' : 'polite'
     const channel = ['sms', 'kakao', 'email', 'link'].includes(body.channel) ? body.channel : 'link'
     const text = typeof body.text === 'string' && body.text.trim() ? body.text.trim().slice(0, 1000) : dunningText(inv, level, shareUrl(c, inv.share_token), today)
-    let to = ''
+    let to = '', via: string = channel
     if (channel === 'email') {
       to = str(body.to, 120).toLowerCase()
       if (!isEmail(to)) return c.json({ error: '받는 메일 주소를 입력해 주세요' }, 400)
@@ -729,11 +808,15 @@ export function createJobsApi(deps: JobsDeps) {
     } else if (channel !== 'link') {
       to = normPhone(body.to || (await loadSite(db, u.id, inv.site_id))?.contact_phone)
       if (!isPhone(to) && !/^0\d{8,10}$/.test(to)) return c.json({ error: '받는 사람 번호를 입력해 주세요' }, 400)
-      const r = await deps.sendSms(c.env, { to, text, type: 'LMS', subject: '입금 요청' })
+      const tpl = channel === 'kakao' ? c.env.JOBS_KAKAO_TPL_DUNNING : ''
+      via = tpl ? 'kakao' : 'sms'
+      const r = tpl
+        ? await deps.sendSms(c.env, { to, text, type: 'ATA', templateId: tpl, variables: { '#{업체}': inv.site_company || inv.site_name, '#{현장}': inv.site_name, '#{기간}': period(inv.period_start, inv.period_end), '#{잔액}': fmt(Math.max(0, inv.net - (inv.paid_amount || 0))), '#{예정일}': inv.due_date, '#{경과일}': String(Math.max(0, daysBetween(inv.due_date, today))), '#{링크}': shareUrl(c, inv.share_token) } })
+        : await deps.sendSms(c.env, { to, text, type: 'LMS', subject: '입금 요청' })
       if (!r.ok) return c.json({ error: '문자를 보내지 못했습니다', detail: r.error }, 503)
     }
     await db.prepare('INSERT INTO jobs_sendlogs (id, user_id, doc_type, doc_id, channel, to_addr, amount, dunning_level, sent_at) VALUES (?,?,?,?,?,?,?,?,?)').bind(newId('sl'), u.id, 'dunning', inv.id, channel, to, Math.max(0, inv.net - (inv.paid_amount || 0)), level, nowIso()).run()
-    return c.json({ ok: true, text })
+    return c.json({ ok: true, via, text })
   })
   // S-13 입금 확인 · 일부 입금 (source manual)
   api.post('/invoices/:id/payments', async (c) => {
@@ -858,11 +941,15 @@ export function createJobsApi(deps: JobsDeps) {
     const channel = ['sms', 'kakao', 'email', 'link', 'pdf'].includes(body.channel) ? body.channel : 'link'
     const qo = quoteOut(q), link = shareUrl(c, q.share_token, 'q')
     const text = `[JOBS 견적서] ${qo.clientName || qo.siteName} 귀하\n${qo.siteName ? qo.siteName + ' · ' : ''}${qo.periodStart ? period(qo.periodStart, qo.periodEnd || qo.periodStart) : '기간 미정'}\n견적 합계 ${fmt(qo.total)}원 (${qo.vatLabel})\n견적서 보기: ${link}`
-    let to = ''
+    let to = '', via: string = channel
     if (channel === 'sms' || channel === 'kakao') {
       to = normPhone(body.to || q.contact_phone)
       if (!isPhone(to) && !/^0\d{8,10}$/.test(to)) return c.json({ error: '받는 사람 번호를 입력해 주세요' }, 400)
-      const r = await deps.sendSms(c.env, { to, text, type: 'LMS', subject: `${qo.siteName || '견적서'}` })
+      const tpl = channel === 'kakao' ? c.env.JOBS_KAKAO_TPL_QUOTE : ''
+      via = tpl ? 'kakao' : 'sms'
+      const r = tpl
+        ? await deps.sendSms(c.env, { to, text, type: 'ATA', templateId: tpl, variables: { '#{업체}': qo.clientName || qo.siteName, '#{현장}': qo.siteName || qo.clientName, '#{기간}': qo.periodStart ? period(qo.periodStart, qo.periodEnd || qo.periodStart) : '기간 미정', '#{합계}': fmt(qo.total), '#{부가세}': qo.vatLabel, '#{링크}': link } })
+        : await deps.sendSms(c.env, { to, text, type: 'LMS', subject: `${qo.siteName || '견적서'}` })
       if (!r.ok) return c.json({ error: '문자를 보내지 못했습니다', detail: r.error }, 503)
     } else if (channel === 'email') {
       to = str(body.to, 120).toLowerCase()
@@ -874,7 +961,7 @@ export function createJobsApi(deps: JobsDeps) {
     const stmts = [db.prepare('INSERT INTO jobs_sendlogs (id, user_id, doc_type, doc_id, channel, to_addr, amount, sent_at) VALUES (?,?,?,?,?,?,?,?)').bind(newId('sl'), u.id, 'quote', q.id, channel, to, qo.total, nowIso())]
     if (q.status === 'draft') stmts.push(db.prepare("UPDATE jobs_quotes SET status = 'sent', updated_at = ? WHERE id = ?").bind(nowIso(), q.id))
     await db.batch(stmts)
-    return c.json({ ok: true, channel, link, text, quote: quoteOut(await loadQuote(db, u.id, q.id)) })
+    return c.json({ ok: true, channel, via, link, text, quote: quoteOut(await loadQuote(db, u.id, q.id)) })
   })
   // S-16 견적 → 청구 전환 — 미리보기(견적 vs 실제) · 전환
   async function convertPreview(c: any, q: any, body: any) {
@@ -942,7 +1029,8 @@ export async function loadInvoiceByToken(db: D1Database, token: string) {
   await ensureJobsTables(db)
   const inv = await db.prepare('SELECT i.*, s.name AS site_name, s.company AS site_company, s.address AS site_address, s.contact_name AS site_contact, u.name AS user_name, u.phone AS user_phone, u.biz_no AS user_biz FROM jobs_invoices i JOIN jobs_sites s ON s.id = i.site_id JOIN jobs_users u ON u.id = i.user_id WHERE i.share_token = ?').bind(token).first<any>()
   if (!inv) return null
-  const photos = inv.attach_photos ? await db.prepare('SELECT p.uri, p.taken_at, p.lat, p.lng FROM jobs_photos p JOIN jobs_worklogs w ON w.id = p.worklog_id WHERE w.invoice_id = ? AND p.attach_to_invoice = 1 ORDER BY p.taken_at LIMIT 12').bind(inv.id).all<any>() : { results: [] }
+  const photos = inv.attach_photos ? await db.prepare('SELECT p.id, p.uri, p.taken_at, p.lat, p.lng FROM jobs_photos p JOIN jobs_worklogs w ON w.id = p.worklog_id WHERE w.invoice_id = ? AND p.attach_to_invoice = 1 ORDER BY p.taken_at LIMIT 12').bind(inv.id).all<any>() : { results: [] }
+  for (const p of photos.results || []) p.uri = photoUrl(p)
   const logs = await db.prepare('SELECT date, attendance, overtime_hours FROM jobs_worklogs WHERE invoice_id = ? ORDER BY date').bind(inv.id).all<any>()
   return { inv, photos: photos.results || [], logs: logs.results || [] }
 }
@@ -955,4 +1043,22 @@ export async function loadQuoteByToken(db: D1Database, token: string) {
   if (!q) return null
   const items = (() => { try { return JSON.parse(q.items || '[]') as QuoteItem[] } catch { return [] as QuoteItem[] } })()
   return { q, items, calc: calcQuote(items, q.vat_mode as VatMode) }
+}
+
+/** 사진 바이너리 — /jobs/photo/:id. R2 면 객체 스트림, D1 base64 면 디코드해서 응답 */
+export async function servePhoto(env: JobsBindings, id: string): Promise<Response | null> {
+  if (!/^ph_[0-9a-f]{20}$/.test(id)) return null
+  await ensureJobsTables(env.DB)
+  const p = await env.DB.prepare('SELECT uri FROM jobs_photos WHERE id = ?').bind(id).first<any>()
+  if (!p) return null
+  const headers: Record<string, string> = { 'Cache-Control': 'private, max-age=86400', 'X-Robots-Tag': 'noindex' }
+  if (String(p.uri).startsWith('r2:')) {
+    if (!env.JOBS_PHOTOS) return null
+    const obj = await env.JOBS_PHOTOS.get(String(p.uri).slice(3))
+    if (!obj) return null
+    return new Response(obj.body, { headers: { ...headers, 'Content-Type': obj.httpMetadata?.contentType || 'image/jpeg' } })
+  }
+  const m = DATA_URI_RE.exec(String(p.uri))
+  if (!m) return null
+  return new Response(b64ToBytes(m[2]), { headers: { ...headers, 'Content-Type': m[1] } })
 }

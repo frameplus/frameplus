@@ -1,9 +1,9 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { createJobsApi, loadInvoiceByToken, loadQuoteByToken } from './jobs/api'
+import { createJobsApi, loadInvoiceByToken, loadQuoteByToken, servePhoto } from './jobs/api'
 import { jobsShellHtml, renderPublicInvoice, renderPublicQuote, renderLegalPage, JOBS_VERSION, JOBS_SW } from './jobs/page'
 
-type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string }
+type Bindings = { DB: D1Database; RESEND_API_KEY: string; OPENWEATHER_API_KEY: string; OPENAI_API_KEY: string; NOTION_TOKEN: string; SOLAPI_API_KEY: string; SOLAPI_API_SECRET: string; SOLAPI_SENDER_PHONE: string; KAKAO_PF_ID: string; JOBS_DEV_OTP?: string; JOBS_PUBLIC_ORIGIN?: string; JOBS_PHOTOS?: R2Bucket; JOBS_KAKAO_TPL_INVOICE?: string; JOBS_KAKAO_TPL_DUNNING?: string; JOBS_KAKAO_TPL_QUOTE?: string }
 type App = { Bindings: Bindings; Variables: { role: string; userId: string } }
 
 const app = new Hono<App>()
@@ -277,6 +277,7 @@ app.get('/jobs/legal/:kind', (c) => {
   if (kind !== 'terms' && kind !== 'privacy' && kind !== 'location') return c.notFound()
   return c.html(renderLegalPage(kind))
 })
+app.get('/jobs/photo/:id', async (c) => (await servePhoto(c.env, c.req.param('id'))) || c.notFound())
 app.get('/jobs/sw.js', (c) => c.body(JOBS_SW, 200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }))
 app.get('/jobs', (c) => c.redirect('/jobs/' + (new URL(c.req.url).search || ''), 301)) // 서비스 워커 범위(/jobs/)에 맞춰 슬래시 고정
 app.get('/jobs/*', (c) => c.html(jobsShellHtml()))
@@ -2205,7 +2206,7 @@ async function _hmacSha256(secret: string, message: string): Promise<string> {
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message))
   return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
-async function sendSolapi(env: Bindings, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string }): Promise<{ ok: boolean; error?: string }> {
+async function sendSolapi(env: Bindings, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string; variables?: Record<string, string> }): Promise<{ ok: boolean; error?: string }> {
   const apiKey = env.SOLAPI_API_KEY
   const apiSecret = env.SOLAPI_API_SECRET
   const from = env.SOLAPI_SENDER_PHONE
@@ -2221,7 +2222,7 @@ async function sendSolapi(env: Bindings, opts: { to: string; text: string; type?
     if (opts.subject) message.subject = opts.subject
   } else if (opts.type === 'ATA' && opts.templateId && env.KAKAO_PF_ID) {
     message.type = 'ATA'
-    message.kakaoOptions = { pfId: env.KAKAO_PF_ID, templateId: opts.templateId, disableSms: false }
+    message.kakaoOptions = { pfId: env.KAKAO_PF_ID, templateId: opts.templateId, disableSms: false, ...(opts.variables ? { variables: opts.variables } : {}) }
   }
   try {
     const res = await fetch('https://api.solapi.com/messages/v4/send', {

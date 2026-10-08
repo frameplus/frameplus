@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS jobs_users (
   notif_prefs TEXT DEFAULT '{}',
   status TEXT DEFAULT 'active',
   last_login DATETIME,
+  deleted_at TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );

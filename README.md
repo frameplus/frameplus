@@ -13,7 +13,9 @@
 ## JOBS 앱 (현장 반장 기록 · 청구 · 입금) — 1차
 - **경로**: `/jobs/` (모바일 PWA, 휴대폰 OTP 로그인 — ERP 계정과 무관) · 공개 청구서 `/jobs/v/:token` · 공개 견적서 `/jobs/q/:token` · 약관 `/jobs/legal/{terms,privacy,location}` · API `/api/jobs/*`
 - **코드**: `src/jobs/` (calc · schema · api · page), `public/static/jobs/`, `migrations/0005_jobs_core.sql`, 테스트 `npm test`
-- **환경변수**: `JOBS_PUBLIC_ORIGIN`(공유 링크 origin), `SOLAPI_*`(인증 문자 · 청구서 문자), `RESEND_API_KEY`(청구서 · 견적서 메일), `JOBS_DEV_OTP=1`은 **로컬 전용**(인증번호를 응답에 표시)
+- **환경변수**: `JOBS_PUBLIC_ORIGIN`(공유 링크 origin), `SOLAPI_*`(인증 문자 · 청구서 문자), `RESEND_API_KEY`(청구서 · 견적서 메일), `JOBS_KAKAO_TPL_INVOICE|DUNNING|QUOTE`(알림톡 템플릿 ID, 심사 후), `JOBS_DEV_OTP=1`은 **로컬 전용**(인증번호를 응답에 표시)
+- **R2 바인딩(선택)**: Pages → Settings → Bindings → R2 bucket `JOBS_PHOTOS`(버킷 `jobs-photos`). 있으면 사진을 R2 에, 없으면 D1 base64 에 저장. 로컬: `npx wrangler pages dev dist --local --r2 JOBS_PHOTOS --binding JOBS_DEV_OTP=1`
+- **네이티브 래핑**: `capacitor.config.ts` + [docs/JOBS_CAPACITOR.md](./docs/JOBS_CAPACITOR.md), 알림톡 문안 [docs/JOBS_KAKAO_TEMPLATES.md](./docs/JOBS_KAKAO_TEMPLATES.md)
 - **검토 보고서**: [docs/JOBS_REVIEW.md](./docs/JOBS_REVIEW.md) — 구현 범위 · 실사용 판단 · 출시 리스크(위치정보 · 직업안정법 · 오픈뱅킹 · 스토어 정책) · 착수 순서
 
 ## 로그인 정보

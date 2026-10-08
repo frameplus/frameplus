@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS jobs_users (
   notif_prefs TEXT DEFAULT '{}',
   status TEXT DEFAULT 'active',
   last_login DATETIME,
+  deleted_at TEXT,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -209,6 +210,6 @@ export async function ensureJobsTables(db: D1Database): Promise<void> {
   if (ready) return
   await db.exec(JOBS_DDL.split('\n').map(l => l.trim()).filter(Boolean).join(' '))
   // 기존 DB 보강 (컬럼이 이미 있으면 무시) — ERP ensureTables 의 alterStmts 와 같은 방식
-  for (const stmt of ['ALTER TABLE jobs_invoices ADD COLUMN quote_id TEXT']) { try { await db.prepare(stmt).run() } catch { /* already exists */ } }
+  for (const stmt of ['ALTER TABLE jobs_invoices ADD COLUMN quote_id TEXT', 'ALTER TABLE jobs_users ADD COLUMN deleted_at TEXT']) { try { await db.prepare(stmt).run() } catch { /* already exists */ } }
   ready = true
 }
