@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import { ensureJobsTables } from './schema'
 import { createNotifications, flushPushQueue, runJobsCron, vapidFromEnv } from './notify'
 import { isAllowedPushEndpoint, b64urlDecode } from './webpush'
+import { signedPhotoPath, verifyPhotoSig } from './sign'
 import {
   type TaxMode, type SettlementRule, type Attendance, type InvoiceStatus, type InvoiceRow, type ExpenseType,
   TAX_MODES, EXPENSE_TYPES, isTaxMode, isSettlementRule, isExpenseType, isYmd, todayKst, monthEnd, addDays, daysBetween,
@@ -33,6 +34,8 @@ export type JobsBindings = {
   JOBS_CRON_SECRET?: string
   /** 크론 1회당 푸시 전송 상한 (기본 20) */
   JOBS_PUSH_BATCH?: string
+  /** 사진 서명 URL 비밀키(선택, 16자 이상). 없으면 첫 사용 시 무작위로 만들어 jobs_kv 에 보관 */
+  JOBS_URL_SECRET?: string
 }
 export type SmsSender = (env: any, opts: { to: string; text: string; type?: 'SMS' | 'LMS' | 'ATA'; subject?: string; templateId?: string; variables?: Record<string, string> }) => Promise<{ ok: boolean; error?: string }>
 export type EmailSender = (env: any, opts: { to: string; subject: string; html: string }) => Promise<{ ok: boolean; error?: string }>
@@ -62,7 +65,8 @@ function safeJson<T>(s: unknown, def: T): T { try { return s ? JSON.parse(String
 const period = (a: string, b: string) => `${a.slice(5).replace('-', '.')}~${b.slice(5).replace('-', '.')}`
 const placeholders = (n: number) => Array.from({ length: n }, () => '?').join(',')
 
-// ---- 사진 저장: R2 바인딩이 있으면 R2, 없으면 D1 base64(data URI). 조회는 /jobs/photo/:id (추측 불가능한 id 기반 비공개 URL [가정]) ----
+// ---- 사진 저장: R2 바인딩이 있으면 R2, 없으면 D1 base64(data URI).
+//      조회는 서명 URL /jobs/photo/:id?e=만료&s=서명 만 허용 — 앱 API 는 24시간, 공개 청구서는 6시간짜리를 매번 새로 발급 ----
 const DATA_URI_RE = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/
 const b64ToBytes = (b64: string) => { const bin = atob(b64); const out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out }
 async function storePhoto(bucket: R2Bucket | undefined, userId: string, photoId: string, dataUri: string): Promise<string> {
@@ -78,7 +82,27 @@ async function deletePhotoObjects(bucket: R2Bucket | undefined, uris: string[]):
   const keys = uris.filter(u => typeof u === 'string' && u.startsWith('r2:')).map(u => u.slice(3))
   if (keys.length) await bucket.delete(keys)
 }
-const photoUrl = (p: { id: string; uri: string }) => (p.uri && p.uri.startsWith('r2:') ? `/jobs/photo/${p.id}` : p.uri)
+/** 앱 API 가 내려주는 사진 URL 유효기간 — 화면을 다시 열면 새로 발급된다 */
+const PHOTO_TTL_APP = 86400
+/** 공개 청구서 사진 URL 유효기간 — 청구서 페이지를 열 때마다 새로 발급 */
+const PHOTO_TTL_PUBLIC = 6 * 3600
+let urlSecretCache: { v: string; at: number } | null = null
+/** 서명 비밀키 — 환경변수 우선, 없으면 jobs_kv 에 한 번 만들어 두고 쓴다 (격리 실행 간 공유) */
+async function urlSecret(env: JobsBindings): Promise<string> {
+  if (env.JOBS_URL_SECRET && env.JOBS_URL_SECRET.length >= 16) return env.JOBS_URL_SECRET
+  if (urlSecretCache && Date.now() - urlSecretCache.at < 600_000) return urlSecretCache.v
+  await env.DB.prepare("INSERT OR IGNORE INTO jobs_kv (k, v, updated_at) VALUES ('url_secret', ?, ?)").bind(randomHex(32), nowIso()).run()
+  const row = await env.DB.prepare("SELECT v FROM jobs_kv WHERE k = 'url_secret'").first<any>()
+  if (!row?.v) throw new Error('url secret unavailable')
+  urlSecretCache = { v: String(row.v), at: Date.now() }
+  return urlSecretCache.v
+}
+/** 사진 행마다 서명 URL 을 붙인다 (원본 uri — data URI · r2 키 — 는 응답에 싣지 않음) */
+async function signPhotos<T extends { id: string }>(env: JobsBindings, photos: T[], ttlSec: number): Promise<(T & { signed: string })[]> {
+  if (!photos.length) return []
+  const secret = await urlSecret(env)
+  return Promise.all(photos.map(async p => ({ ...p, signed: await signedPhotoPath(secret, p.id, ttlSec) })))
+}
 
 function siteOut(s: any) {
   return {
@@ -100,7 +124,7 @@ function logOut(w: any) {
   }
 }
 const expOut = (e: any) => ({ id: e.id, worklogId: e.worklog_id, type: e.type, typeLabel: EXPENSE_TYPES[e.type as ExpenseType] || e.type, name: e.name || '', amount: e.amount || 0, chargeToClient: !!e.charge_to_client, receiptUri: e.receipt_uri || '' })
-const photoOut = (p: any) => ({ id: p.id, worklogId: p.worklog_id, uri: photoUrl(p), takenAt: p.taken_at || '', lat: p.lat, lng: p.lng, label: p.label || '', attachToInvoice: !!p.attach_to_invoice })
+const photoOut = (p: any) => ({ id: p.id, worklogId: p.worklog_id, uri: p.signed || '', takenAt: p.taken_at || '', lat: p.lat, lng: p.lng, label: p.label || '', attachToInvoice: !!p.attach_to_invoice })
 function invoiceOut(i: any, today: string) {
   const remaining = Math.max(0, (i.net || 0) - (i.paid_amount || 0))
   const over = i.due_date && i.status !== 'paid' && i.status !== 'draft' ? Math.max(0, daysBetween(i.due_date, today)) : 0
@@ -407,8 +431,8 @@ export function createJobsApi(deps: JobsDeps) {
     const u = c.get('jobsUser'), db = c.env.DB
     const rows = await loadLogs(db, u.id, 'AND w.id = ?', [c.req.param('id')])
     if (!rows.length) return c.json({ error: '기록을 찾을 수 없습니다' }, 404)
-    const photos = await db.prepare('SELECT * FROM jobs_photos WHERE worklog_id = ? ORDER BY taken_at').bind(rows[0].id).all<any>()
-    rows[0].photos = photos.results || []
+    const photos = await db.prepare('SELECT id, worklog_id, taken_at, lat, lng, label, attach_to_invoice FROM jobs_photos WHERE worklog_id = ? ORDER BY taken_at').bind(rows[0].id).all<any>()
+    rows[0].photos = await signPhotos(c.env, photos.results || [], PHOTO_TTL_APP)
     return c.json(logOut(rows[0]))
   })
 
@@ -525,7 +549,7 @@ export function createJobsApi(deps: JobsDeps) {
     await db.batch(stmts)
     await deletePhotoObjects(c.env.JOBS_PHOTOS, removedUris)
     const rows = await loadLogs(db, u.id, 'AND w.id = ?', [id])
-    rows[0].photos = (await db.prepare('SELECT * FROM jobs_photos WHERE worklog_id = ? ORDER BY taken_at').bind(id).all<any>()).results || []
+    rows[0].photos = await signPhotos(c.env, (await db.prepare('SELECT id, worklog_id, taken_at, lat, lng, label, attach_to_invoice FROM jobs_photos WHERE worklog_id = ? ORDER BY taken_at').bind(id).all<any>()).results || [], PHOTO_TTL_APP)
     return c.json(logOut(rows[0]), existing ? 200 : 201)
   }
   api.post('/worklogs', (c) => saveWorkLog(c, null))
@@ -1110,15 +1134,16 @@ export function createJobsApi(deps: JobsDeps) {
 }
 
 /** 공개 조회 (로그인 없이 열리는 읽기 전용 청구서) 에서 쓰는 로더 */
-export async function loadInvoiceByToken(db: D1Database, token: string) {
+export async function loadInvoiceByToken(env: JobsBindings, token: string) {
   if (!/^[0-9a-f]{24}$/.test(token)) return null
+  const db = env.DB
   await ensureJobsTables(db)
   const inv = await db.prepare('SELECT i.*, s.name AS site_name, s.company AS site_company, s.address AS site_address, s.contact_name AS site_contact, u.name AS user_name, u.phone AS user_phone, u.biz_no AS user_biz FROM jobs_invoices i JOIN jobs_sites s ON s.id = i.site_id JOIN jobs_users u ON u.id = i.user_id WHERE i.share_token = ?').bind(token).first<any>()
   if (!inv) return null
-  const photos = inv.attach_photos ? await db.prepare('SELECT p.id, p.uri, p.taken_at, p.lat, p.lng FROM jobs_photos p JOIN jobs_worklogs w ON w.id = p.worklog_id WHERE w.invoice_id = ? AND p.attach_to_invoice = 1 ORDER BY p.taken_at LIMIT 12').bind(inv.id).all<any>() : { results: [] }
-  for (const p of photos.results || []) p.uri = photoUrl(p)
+  const photos = inv.attach_photos ? await db.prepare('SELECT p.id, p.taken_at, p.lat, p.lng FROM jobs_photos p JOIN jobs_worklogs w ON w.id = p.worklog_id WHERE w.invoice_id = ? AND p.attach_to_invoice = 1 ORDER BY p.taken_at LIMIT 12').bind(inv.id).all<any>() : { results: [] }
+  const signed = (await signPhotos(env, photos.results || [], PHOTO_TTL_PUBLIC)).map(p => ({ ...p, uri: p.signed }))
   const logs = await db.prepare('SELECT date, attendance, overtime_hours FROM jobs_worklogs WHERE invoice_id = ? ORDER BY date').bind(inv.id).all<any>()
-  return { inv, photos: photos.results || [], logs: logs.results || [] }
+  return { inv, photos: signed, logs: logs.results || [] }
 }
 
 /** 공개 견적서 뷰(/jobs/q/:token) 로더 */
@@ -1131,13 +1156,18 @@ export async function loadQuoteByToken(db: D1Database, token: string) {
   return { q, items, calc: calcQuote(items, q.vat_mode as VatMode) }
 }
 
-/** 사진 바이너리 — /jobs/photo/:id. R2 면 객체 스트림, D1 base64 면 디코드해서 응답 */
-export async function servePhoto(env: JobsBindings, id: string): Promise<Response | null> {
+/** 사진 바이너리 — /jobs/photo/:id?e=&s=. 서명 · 만료를 먼저 검증(실패 403), R2 면 객체 스트림, D1 base64 면 디코드해서 응답 */
+export async function servePhoto(env: JobsBindings, id: string, e: string | undefined, s: string | undefined): Promise<Response | null> {
   if (!/^ph_[0-9a-f]{20}$/.test(id)) return null
   await ensureJobsTables(env.DB)
+  const nowSec = Math.floor(Date.now() / 1000)
+  if (!(await verifyPhotoSig(await urlSecret(env), id, e, s, nowSec))) {
+    return new Response('링크가 만료되었거나 올바르지 않습니다. 앱이나 청구서 페이지를 다시 열어 주세요.', { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' } })
+  }
   const p = await env.DB.prepare('SELECT uri FROM jobs_photos WHERE id = ?').bind(id).first<any>()
   if (!p) return null
-  const headers: Record<string, string> = { 'Cache-Control': 'private, max-age=86400', 'X-Robots-Tag': 'noindex' }
+  // 브라우저 캐시는 서명 만료까지만 (같은 시간대 URL 은 동일 → 캐시 재사용)
+  const headers: Record<string, string> = { 'Cache-Control': `private, max-age=${Math.max(0, Math.min(86400, Number(e) - nowSec))}`, 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer' }
   if (String(p.uri).startsWith('r2:')) {
     if (!env.JOBS_PHOTOS) return null
     const obj = await env.JOBS_PHOTOS.get(String(p.uri).slice(3))

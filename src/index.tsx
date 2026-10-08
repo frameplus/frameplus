@@ -264,7 +264,7 @@ async function jobsSendEmail(env: Bindings, o: { to: string; subject: string; ht
 }
 app.route('/api/jobs', createJobsApi({ sendSms: (env, o) => sendSolapi(env, o), sendEmail: (env, o) => jobsSendEmail(env, o), version: JOBS_VERSION }))
 app.get('/jobs/v/:token', async (c) => {
-  const data = await loadInvoiceByToken(c.env.DB, c.req.param('token'))
+  const data = await loadInvoiceByToken(c.env, c.req.param('token'))
   if (!data) return c.html('<!DOCTYPE html><meta charset="utf-8"><p style="font:16px sans-serif;padding:40px;text-align:center">청구서를 찾을 수 없습니다.</p>', 404)
   return c.html(renderPublicInvoice(data))
 })
@@ -278,7 +278,7 @@ app.get('/jobs/legal/:kind', (c) => {
   if (kind !== 'terms' && kind !== 'privacy' && kind !== 'location') return c.notFound()
   return c.html(renderLegalPage(kind))
 })
-app.get('/jobs/photo/:id', async (c) => (await servePhoto(c.env, c.req.param('id'))) || c.notFound())
+app.get('/jobs/photo/:id', async (c) => (await servePhoto(c.env, c.req.param('id'), c.req.query('e'), c.req.query('s'))) || c.notFound()) // 서명 URL 만 허용 (위조 · 만료 403)
 app.get('/jobs/sw.js', (c) => c.body(JOBS_SW, 200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }))
 app.get('/jobs', (c) => c.redirect('/jobs/' + (new URL(c.req.url).search || ''), 301)) // 서비스 워커 범위(/jobs/)에 맞춰 슬래시 고정
 app.get('/jobs/*', (c) => c.html(jobsShellHtml()))
