@@ -116,9 +116,6 @@ function renderLoginScreen() {
         <button id="login-btn" onclick="doLogin()" style="width:100%;padding:13px;background:#DC2626;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;transition:background .2s" onmouseover="this.style.background='#991B1B'" onmouseout="this.style.background='#DC2626'">
           로그인
         </button>
-        <div style="margin-top:16px;text-align:center;font-size:11px;color:#94A3B8">
-          기본 계정: admin / admin1234
-        </div>
       </div>
       <div style="text-align:center;margin-top:20px;font-size:11px;color:rgba(255,255,255,.3)">
         © ${new Date().getFullYear()} Frame Plus ERP v8.6
@@ -244,7 +241,8 @@ function dbToProject(row) {
     contractClauses:tryP(row.contract_clauses,[]), payments:tryP(row.payments,[]),
     ganttTasks:tryP(row.gantt_tasks,[]), items:tryP(row.items,[]), createdAt:row.created_at,
     projectType:row.project_type||'', constructionStatus:row.construction_status||'',
-    scopeTags:tryP(row.scope_tags,[]), updatedAt:row.updated_at||'' };
+    scopeTags:tryP(row.scope_tags,[]), updatedAt:row.updated_at||'',
+    contract_amt:Number(row.contract_amt)||0 };
 }
 
 function projectToDb(p) {
@@ -260,6 +258,7 @@ function projectToDb(p) {
     items:JSON.stringify(p.items||[]),
     project_type:p.projectType||'', construction_status:p.constructionStatus||'',
     scope_tags:JSON.stringify(p.scopeTags||[]),
+    contract_amt:Number(p.contract_amt||p.contractAmt)||0,
     created_at:p.createdAt||today(), updated_at:today() };
 }
 
@@ -493,7 +492,9 @@ function getMonthlyAgg(ym){
   const [y,m] = ym.split('-').map(Number);
   const monthStart = new Date(y,m-1,1);
   const monthEnd = new Date(y,m,0);
-  const inMonth = (d)=>{ if(!d)return false; const dt=new Date(d); return dt>=monthStart&&dt<=monthEnd; };
+  // 문자열 비교: new Date('YYYY-MM-DD')는 UTC라 KST에서 말일 데이터가 누락됨
+  const ymKey = y+'-'+String(m).padStart(2,'0');
+  const inMonth = (d)=> !!d && String(d).slice(0,7)===ymKey;
   // 수금 (payments that were paid this month)
   let revenue = 0;
   ps.forEach(p=>{
@@ -524,7 +525,7 @@ function getRisks(p){
 }
 
 // ===== HELPERS =====
-function today(){return new Date().toISOString().split('T')[0]}
+function today(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
 function fmt(n){return Math.round(n).toLocaleString('ko-KR')}
 function fmtShort(n){if(n>=100000000)return(n/100000000).toFixed(1)+'억';if(n>=10000000)return Math.round(n/10000000)+'천만';if(n>=10000)return Math.round(n/10000)+'만';return fmt(n)}
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
@@ -533,7 +534,7 @@ function catIcon(id){return CATS.find(c=>c.id===id)?.icon||'📦'}
 function statusBadge(st){const c=STATUS_COLORS[st]||'gray';return '<span class="badge badge-'+c+'">'+(st||'-')+'</span>'}
 function diffDays(a,b){return Math.round((new Date(b)-new Date(a))/(1000*60*60*24))}
 function addDays(d,n){const dt=new Date(d);dt.setDate(dt.getDate()+n);return dt.toISOString().split('T')[0]}
-function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function escHtml(s){return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 
 // ===== PAGINATION HELPERS (v8.6 P3) =====
 // Usage: const slice = paginate(arr, page, size); const html = renderPaginator(arr.length, page, size, 'changePage');
@@ -1005,6 +1006,14 @@ function toast(msg,type=''){
 
 // ===== MODAL HELPERS =====
 function openModal(html){
+  // 구형 호출 지원: openModal(title, body, width) / openModal(title, 'md', body)
+  if(arguments.length>1){
+    const title=arguments[0];let body=arguments[1],width=arguments[2];
+    if(arguments.length>2&&/^(sm|md|lg)$/.test(String(body))){body=arguments[2];width='';}
+    html=`<div class="modal-bg"><div class="modal"${width?` style="max-width:${width};width:95%"`:''}>
+      <div class="modal-hdr"><span class="modal-title">${title}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+      <div class="modal-body">${body}</div></div></div>`;
+  }
   const area=document.getElementById('modal-area');
   area.innerHTML=html;
   const bg=area.querySelector('.modal-bg');
@@ -1056,7 +1065,7 @@ function renderDash(){
   const risks=ps.flatMap(p=>getRisks(p));
   const todayStr=today();
   const todayMeetings=meetings.filter(m=>m.date===todayStr);
-  const weekStart=new Date(todayStr);weekStart.setDate(weekStart.getDate()-weekStart.getDay()+1);
+  const weekStart=new Date(todayStr);weekStart.setDate(weekStart.getDate()-(weekStart.getDay()+6)%7);
   const weekEnd=new Date(weekStart);weekEnd.setDate(weekEnd.getDate()+6);
   const weekMeetings=meetings.filter(m=>{const d=new Date(m.date);return d>=weekStart&&d<=weekEnd});
   const thisWeekStart=new Date(weekStart).toISOString().split('T')[0];
@@ -1408,7 +1417,7 @@ function renderDash(){
     if(isAdmin()){
       const vals=months.map((_,i)=>{
         const m=String(i+1).padStart(2,'0');
-        return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).reduce((a,p)=>a+getContractAmt(p),0)/10000;
+        return ps.filter(p=>p.date&&p.date.startsWith(`${new Date().getFullYear()}-${m}`)).reduce((a,p)=>a+getContractAmt(p),0)/10000;
       });
       new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)'}]},
         options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${fmt(v)}만`,color:'#94A3B8'},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
@@ -1416,7 +1425,7 @@ function renderDash(){
       // Staff: show project count per month (no revenue data)
       const vals=months.map((_,i)=>{
         const m=String(i+1).padStart(2,'0');
-        return ps.filter(p=>p.date&&p.date.startsWith(`2026-${m}`)).length;
+        return ps.filter(p=>p.date&&p.date.startsWith(`${new Date().getFullYear()}-${m}`)).length;
       });
       new Chart(ctx,{type:'bar',data:{labels:months,datasets:[{data:vals,backgroundColor:'rgba(79,70,229,.7)',borderRadius:6,hoverBackgroundColor:'rgba(79,70,229,.9)',label:'프로젝트'}]},
         options:{plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>`${v}건`,color:'#94A3B8',stepSize:1},grid:{color:'rgba(0,0,0,.04)'}},x:{ticks:{color:'#94A3B8'},grid:{display:false}}},responsive:true,maintainAspectRatio:true}});
@@ -1426,7 +1435,7 @@ function renderDash(){
 
 function loadWeather(){
   // Open-Meteo API via server proxy (no key needed)
-  fetch('/api/weather')
+  fetch('/api/weather',{headers:{'X-Session-Id':_sessionId||''}})
     .then(r=>r.json())
     .then(d=>{
       if(d.error){console.warn('Weather error:',d.error);return;}
@@ -1452,7 +1461,7 @@ function loadWeather(){
 }
 
 function openWeatherForecast(){
-  fetch('/api/weather/forecast')
+  fetch('/api/weather/forecast',{headers:{'X-Session-Id':_sessionId||''}})
     .then(r=>r.json())
     .then(d=>{
       if(d.error||!d.forecast){toast('예보 데이터를 가져올 수 없습니다','error');return;}
@@ -1990,8 +1999,8 @@ function renderProjectRows(ps){
       </td>
       <td><div style="font-size:12.5px">${p.client}</div><div style="font-size:11px;color:var(--g500)">${p.contact||''}</div></td>
       <td>${p.area||'-'}평</td>
-      <td style="font-weight:600">${tot>0?fmt(tot)+'원':'-'}</td>
-      <td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>
+      <td style="font-weight:600">${isAdmin()?(tot>0?fmt(tot)+'원':'-'):'—'}</td>
+      ${isAdmin()?`<td style="font-weight:700;color:${mr<5?'var(--red)':mr<15?'var(--orange)':'var(--green)'}">${tot>0?mr.toFixed(1)+'%':'-'}</td>`:''}
       <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-blue" style="width:60px"><div class="prog-bar" style="width:${prog}%"></div></div><span style="font-size:11px;color:var(--blue)">${prog}%</span></div></td>
       <td><div style="display:flex;align-items:center;gap:6px"><div class="prog prog-green" style="width:60px"><div class="prog-bar" style="width:${paidPct}%"></div></div><span style="font-size:11px;color:var(--green)">${paidPct}%</span></div></td>
       <td>${statusBadge(p.status)}${p.constructionStatus?`<div style="margin-top:2px">${constrStatusBadge(p.constructionStatus)}</div>`:''}</td>
@@ -3020,7 +3029,7 @@ function buildPvPayment(p){
         <span style="color:var(--g500)">은행명</span><span style="font-weight:600">기업은행</span>
         <span style="color:var(--g500)">계좌번호</span><span style="font-weight:600">000-000000-00-000</span>
         <span style="color:var(--g500)">예금주</span><span style="font-weight:600">${co.name||'프레임플러스'}</span>
-        <span style="color:var(--g500)">사업자번호</span><span style="font-weight:600">${co.biz_no||'000-00-00000'}</span>
+        <span style="color:var(--g500)">사업자번호</span><span style="font-weight:600">${co.bizNo||'000-00-00000'}</span>
       </div>
     </div>
 
@@ -3781,7 +3790,7 @@ function renderCollection(){
   const monthlyData=[];const now=new Date();
   for(let m=5;m>=0;m--){
     const d=new Date(now.getFullYear(),now.getMonth()-m,1);
-    const ym=d.toISOString().slice(0,7);
+    const ym=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
     let paid=0;
     ps.forEach(p=>{const tot=getContractAmt(p);(p.payments||[]).forEach(pm=>{
       if(pm.paid&&pm.paidDate&&pm.paidDate.startsWith(ym))paid+=Math.round(tot*Number(pm.pct||0)/100);
@@ -3910,7 +3919,7 @@ function _collTable(ps){
   </tbody></table></div>`;
 }
 function _collCalendar(ps){
-  const y=S.calYear||new Date().getFullYear();const m=S.calMonth||new Date().getMonth();
+  const y=S.calYear||new Date().getFullYear();const m=S.calMonth??new Date().getMonth();
   const firstDay=new Date(y,m,1).getDay();const daysInMonth=new Date(y,m+1,0).getDate();
   // Collect payment events for this month
   const events={};
@@ -3995,7 +4004,7 @@ function markPaid(pid,idx){
   const p=getProject(pid);if(!p||!p.payments[idx])return;
   p.payments[idx].paid=true;p.payments[idx].paidDate=today();
   saveProject(p);toast('✅ 입금 처리되었습니다','success');
-  createNotification({type:'collection',title:`${p.nm} ${p.payments[idx].label} 입금 완료`,body:`${fmt(Math.round(getTotal(p)*p.payments[idx].pct/100))}원`,priority:'normal',relPage:'collection'});
+  createNotification({type:'collection',title:`${p.nm} ${p.payments[idx].label} 입금 완료`,message:`${fmt(Math.round(getContractAmt(p)*p.payments[idx].pct/100))}원`,priority:'normal',action_url:'collection'});
   renderCollection();
 }
 function openCollectionDetail(pid){
@@ -5687,7 +5696,7 @@ function _adminCompany(co){
           <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>단가DB</span><span style="font-weight:700">${getPriceDB().length}건</span></div>
           <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>세금계산서</span><span style="font-weight:700">${getTaxInvoices().length}건</span></div>
           <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--g100)"><span>상담</span><span style="font-weight:700">${(_d.consultations||[]).length}건</span></div>
-          <div style="display:flex;justify-content:space-between;padding:6px 0"><span>RFP</span><span style="font-weight:700">${(_d.rfp||[]).length}건</span></div>
+          <div style="display:flex;justify-content:space-between;padding:6px 0"><span>RFP</span><span style="font-weight:700">${(_d.rfpList||[]).length}건</span></div>
         </div>
       </div>
     </div>
@@ -5808,8 +5817,7 @@ async function saveEditUser(uid_,username){
     role:document.getElementById('eu_role').value,
     email:document.getElementById('eu_email').value.trim(),
     phone:document.getElementById('eu_phone').value.trim(),
-    active:Number(document.getElementById('eu_active').value),
-    password:(_usersCache||[]).find(x=>x.id===uid_)?.password||'temp1234'
+    active:Number(document.getElementById('eu_active').value)
   });
   if(res?.__error){toast('저장 실패','error');return;}
   closeModal();toast('사용자 정보가 수정되었습니다','success');
@@ -5919,7 +5927,7 @@ function _adminData(){
     projects:getProjects().length, vendors:getVendors().length, meetings:getMeetings().length,
     pricedb:getPriceDB().length, tax:getTaxInvoices().length, team:getTeam().length,
     notices:getNotices().length, as:getASList().length, labor:(_d.labor||[]).length,
-    expenses:(_d.expenses||[]).length, consultations:(_d.consultations||[]).length, rfp:(_d.rfp||[]).length,
+    expenses:(_d.expenses||[]).length, consultations:(_d.consultations||[]).length, rfp:(_d.rfpList||[]).length,
     notifications:(_d.notifications||[]).length, approvals:(_d.approvals||[]).length
   };
   const totalRecords=Object.values(counts).reduce((a,c)=>a+c,0);
@@ -6333,13 +6341,13 @@ function exportAllCSV(){
 
 // Override nav to close mobile menu
 const __origNavFn = nav;
-nav = function(page, sub, pid) {
+nav = function(page, sub, pid, ...rest) {
   closeMobileMenu();
   // Update mobile nav active states
   document.querySelectorAll('.mobile-nav-item').forEach(el=>el.classList.remove('active'));
   const mnavEl = document.getElementById('mnav-'+page);
   if(mnavEl) mnavEl.classList.add('active');
-  return __origNavFn(page, sub, pid);
+  return __origNavFn(page, sub, pid, ...rest);
 };
 
 // ===== CONTRACTS PAGE =====
@@ -6545,7 +6553,7 @@ function renderLabor(){
   const totalLabor=labor.reduce((a,l)=>a+(Number(l.net_amount)||0),0);
   const unpaidLabor=labor.filter(l=>!l.paid).reduce((a,l)=>a+(Number(l.net_amount)||0),0);
   
-  const groups=groupByMonth(labor);
+  const groups=Object.fromEntries(groupByMonth(labor)); // groupByMonth는 [ym, items][] 반환
   
   // Monthly summary for chart
   const monthKeys=Object.keys(groups).sort().reverse();
@@ -6958,7 +6966,7 @@ function renderExpenses(){
     </div>
     <div class="kpi-card" style="border-left:3px solid var(--red)">
       <div class="kpi-label">반려</div>
-      <div class="kpi-value" style="color:var(--red)">${exps.filter(e=>e.status==='반려').length}<span style="font-size:12px">건</span></div>
+      <div class="kpi-value" style="color:var(--red)">${allExps.filter(e=>e.status==='반려').length}<span style="font-size:12px">건</span></div>
     </div>
   </div>
   
@@ -6987,7 +6995,7 @@ function renderExpenses(){
             <td><span class="badge badge-${stColor}">${e.status}</span></td>
             <td>
               <div style="display:flex;gap:4px">
-                ${e.status==='대기'?`<button class="btn btn-green btn-sm" onclick="approveExpense('${e.id}')" style="padding:3px 8px;font-size:11px">승인</button>
+                ${e.status==='대기'&&isAdmin()?`<button class="btn btn-green btn-sm" onclick="approveExpense('${e.id}')" style="padding:3px 8px;font-size:11px">승인</button>
                 <button class="btn btn-red btn-sm" onclick="rejectExpense('${e.id}')" style="padding:3px 8px;font-size:11px">반려</button>`:''}
                 <button class="btn btn-ghost btn-sm btn-icon" onclick="openEditExpense('${e.id}')" title="수정">${svgIcon('edit',12)}</button>
                 <button class="btn btn-ghost btn-sm btn-icon" onclick="deleteExpense('${e.id}')" title="삭제" style="color:var(--red)">${svgIcon('trash',12)}</button>
@@ -8097,15 +8105,15 @@ function renderConsultCards(cs){
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div>
             <div style="font-size:14px;font-weight:700;color:var(--text)">${escHtml(c.client_name||'(미입력)')}</div>
-            <div style="font-size:11px;color:var(--text-muted)">${c.client_phone||''} ${c.client_email?'· '+c.client_email:''}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${escHtml(c.client_phone||'')} ${c.client_email?'· '+escHtml(c.client_email):''}</div>
           </div>
           <span style="background:${stColor};color:#fff;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${PIPELINE_ICONS[c.pipeline_stage]||''} ${c.pipeline_stage}</span>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-          ${c.project_type?`<span class="badge badge-blue">${c.project_type}</span>`:''}
+          ${c.project_type?`<span class="badge badge-blue">${escHtml(c.project_type)}</span>`:''}
           ${c.area?`<span class="badge badge-gray">${c.area}평</span>`:''}
-          ${c.budget?`<span class="badge badge-green">${c.budget}</span>`:''}
-          ${c.source?`<span class="badge badge-purple">${c.source}</span>`:''}
+          ${c.budget?`<span class="badge badge-green">${escHtml(c.budget)}</span>`:''}
+          ${c.source?`<span class="badge badge-purple">${escHtml(c.source)}</span>`:''}
           ${amt?`<span class="badge" style="background:var(--success-light,#d1fae5);color:var(--success)">${fmtShort(amt)}</span>`:''}
         </div>
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--text-muted)">
@@ -8213,17 +8221,17 @@ function openEditConsult(id){
     <div class="modal-body">
       <div class="form-row form-row-3" style="margin-bottom:12px">
         <div><label class="lbl">고객명 *</label><input class="inp" id="ec_client" value="${escHtml(c.client_name||'')}"></div>
-        <div><label class="lbl">연락처</label><input class="inp" id="ec_phone" value="${c.client_phone||''}"></div>
-        <div><label class="lbl">이메일</label><input class="inp" id="ec_email" value="${c.client_email||''}"></div>
+        <div><label class="lbl">연락처</label><input class="inp" id="ec_phone" value="${escHtml(c.client_phone||'')}"></div>
+        <div><label class="lbl">이메일</label><input class="inp" id="ec_email" value="${escHtml(c.client_email||'')}"></div>
       </div>
       <div class="form-row form-row-4" style="margin-bottom:12px">
         <div><label class="lbl">유입경로</label><select class="sel" id="ec_source">${CONSULT_SOURCES.map(s=>`<option${c.source===s?' selected':''}>${s}</option>`).join('')}</select></div>
         <div><label class="lbl">프로젝트 유형</label><select class="sel" id="ec_type">${PROJECT_TYPES.map(t=>`<option${c.project_type===t?' selected':''}>${t}</option>`).join('')}</select></div>
         <div><label class="lbl">면적(평)</label><input class="inp" id="ec_area" type="number" value="${c.area||''}"></div>
-        <div><label class="lbl">예산 범위</label><input class="inp" id="ec_budget" value="${c.budget||''}"></div>
+        <div><label class="lbl">예산 범위</label><input class="inp" id="ec_budget" value="${escHtml(c.budget||'')}"></div>
       </div>
       <div class="form-row form-row-3" style="margin-bottom:12px">
-        <div><label class="lbl">위치</label><input class="inp" id="ec_loc" value="${c.location||''}"></div>
+        <div><label class="lbl">위치</label><input class="inp" id="ec_loc" value="${escHtml(c.location||'')}"></div>
         <div><label class="lbl">상담일</label><input class="inp" id="ec_date" type="date" value="${c.date||''}"></div>
         <div><label class="lbl">담당자</label><select class="sel" id="ec_assign">${TEAM_MEMBERS.map(m=>`<option${c.assignee===m?' selected':''}>${m}</option>`).join('')}</select></div>
       </div>
@@ -8236,11 +8244,11 @@ function openEditConsult(id){
           <div><label class="lbl">예상 계약일</label><input class="inp" id="ec_close_date" type="date" value="${c.expected_close_date||''}"></div>
           <div><label class="lbl">우선순위</label><select class="sel" id="ec_priority"><option${c.priority==='보통'?' selected':''}>보통</option><option${c.priority==='긴급'?' selected':''}>긴급</option><option${c.priority==='높음'?' selected':''}>높음</option><option${c.priority==='낮음'?' selected':''}>낮음</option></select></div>
         </div>
-        ${c.pipeline_stage==='보류'?`<div style="margin-top:8px"><label class="lbl">보류/실패 사유</label><input class="inp" id="ec_lost" value="${c.lost_reason||''}"></div>`:''}
+        ${c.pipeline_stage==='보류'?`<div style="margin-top:8px"><label class="lbl">보류/실패 사유</label><input class="inp" id="ec_lost" value="${escHtml(c.lost_reason||'')}"></div>`:''}
       </div>
-      <div style="margin-bottom:12px"><label class="lbl">상담 내용</label><textarea class="inp" id="ec_notes" rows="3">${c.notes||''}</textarea></div>
+      <div style="margin-bottom:12px"><label class="lbl">상담 내용</label><textarea class="inp" id="ec_notes" rows="3">${escHtml(c.notes||'')}</textarea></div>
       <div class="form-row form-row-2">
-        <div><label class="lbl">다음 액션</label><input class="inp" id="ec_next" value="${c.next_action||''}"></div>
+        <div><label class="lbl">다음 액션</label><input class="inp" id="ec_next" value="${escHtml(c.next_action||'')}"></div>
         <div><label class="lbl">다음 일정</label><input class="inp" id="ec_next_date" type="date" value="${c.next_date||''}"></div>
       </div>
     </div>
@@ -9124,7 +9132,7 @@ function openUploadAttachment(pid){
     <div class="modal-body">
       <div class="form-row form-row-2" style="margin-bottom:12px">
         <div><label class="lbl">폴더 *</label><select class="sel" id="att_folder">${folders.map(f=>`<option>${f}</option>`).join('')}</select></div>
-        <div><label class="lbl">업로더</label><input class="inp" id="att_uploader" value="${S.userName||''}"></div>
+        <div><label class="lbl">업로더</label><input class="inp" id="att_uploader" value="${_authUser?.name||''}"></div>
       </div>
       <div style="margin-bottom:12px">
         <label class="lbl">파일 선택 *</label>
@@ -9190,7 +9198,7 @@ function handleFileDrop(e,pid){
         await api('erp-attachments','POST',{
           id:'att'+Date.now()+cnt, pid, folder:'기타', file_name:file.name,
           file_type:file.type, file_size:file.size, file_data:data,
-          uploader:S.userName||'', memo:'', created_at:new Date().toISOString()
+          uploader:_authUser?.name||'', memo:'', created_at:new Date().toISOString()
         });
         cnt++;
       }catch(e){}
@@ -9937,7 +9945,7 @@ function renderSitePhotos(){
           <div style="padding:12px">
             <div style="font-size:14px;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(p.title||p.file_name||'무제')}</div>
             <div style="font-size:12px;color:var(--g400);display:flex;justify-content:space-between">
-              <span>${p.taken_date?fmtShort(p.taken_date):'날짜 없음'}</span>
+              <span>${p.taken_date||'날짜 없음'}</span>
               <span>${escHtml(p.taken_by||'')}</span>
             </div>
           </div>
@@ -10192,7 +10200,7 @@ function buildSiteLogForm(prefix,l){
     <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">작업 요약</label>
       <textarea id="${prefix}_summary" rows="2" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="오늘의 주요 작업 내용">${escHtml(l?.summary||'')}</textarea></div>
     <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">작업 내역 (한 줄에 하나씩)</label>
-      <textarea id="${prefix}_works" rows="4" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="목공 경량칸막이 설치&#10;전기 배선 작업&#10;바닥 타일 시공">${wd.map(w=>typeof w==='string'?w:(w.task||'')).join('\\n')}</textarea></div>
+      <textarea id="${prefix}_works" rows="4" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px;resize:vertical" placeholder="목공 경량칸막이 설치&#10;전기 배선 작업&#10;바닥 타일 시공">${wd.map(w=>typeof w==='string'?w:(w.task||'')).join('\n')}</textarea></div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
       <div><label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">투입 인원(명)</label>
         <input id="${prefix}_workers" type="number" min="0" value="${l?.workers_count||0}" style="width:100%;padding:8px 12px;border:1px solid var(--g200);border-radius:var(--radius);font-size:13px"></div>
@@ -10218,7 +10226,7 @@ function collectSiteLogData(prefix){
   const workDetails=worksRaw.split('\n').filter(s=>s.trim()).map(s=>({task:s.trim()}));
   return{log_date:v(prefix+'_date')||today(),weather:v(prefix+'_weather')||'맑음',temperature:v(prefix+'_temp')||'',
     summary:v(prefix+'_summary')||'',work_details:JSON.stringify(workDetails),workers_count:parseInt(v(prefix+'_workers'))||0,
-    progress_pct:parseFloat(v(prefix+'_progress'))||0,safety_check:parseInt(v(prefix+'_safety'))||1,
+    progress_pct:parseFloat(v(prefix+'_progress'))||0,safety_check:v(prefix+'_safety')==='0'?0:1,
     inspector:v(prefix+'_inspector')||'',issues:v(prefix+'_issues')||'',notes:v(prefix+'_notes')||'',
     updated_at:new Date().toISOString()};
 }
@@ -10636,7 +10644,7 @@ function openPOPreview(oid){
           <div><strong>회사명:</strong> ${escHtml(co.nameKo||co.name||'Frame Plus')}</div>
           <div><strong>대표자:</strong> ${escHtml(co.ceo||'')}</div>
           <div><strong>사업자등록번호:</strong> ${escHtml(co.bizNo||'')}</div>
-          <div><strong>주소:</strong> ${escHtml(co.address||'')}</div>
+          <div><strong>주소:</strong> ${escHtml(co.addr||'')}</div>
           <div><strong>담당자:</strong> ${escHtml(o.assignee||'')}</div>
         </div>
       </div>
@@ -10761,12 +10769,6 @@ function printPO(){
   w.document.close();
 }
 
-// ===== VERSION BADGE UPDATE =====
-// Update footer badge
-(function(){
-  const badge = document.querySelector('.fs-badge');
-  if(badge) badge.textContent = 'v8.6 Full-Stack · D1 Database · RBAC';
-})();
 
 // ================================================================
 //  FRAME PLUS ERP — 정산관리 모듈 (stl prefix)

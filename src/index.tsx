@@ -31,6 +31,17 @@ app.use('/api/*', async (c, next) => {
   await next()
 })
 
+// 관리자 전용 라우트 가드
+const requireAdmin = async (c: any, next: any) => {
+  if (c.get('role') !== 'admin') return c.json({ error: '관리자 권한이 필요합니다' }, 403)
+  await next()
+}
+// 요청 본문의 키를 실제 컬럼명으로만 제한 (동적 SQL 컬럼명 인젝션 방지)
+async function tableColumns(db: D1Database, table: string): Promise<Set<string>> {
+  const { results } = await db.prepare(`PRAGMA table_info(${table})`).all()
+  return new Set((results || []).map((r: any) => String(r.name)))
+}
+
 // ===== DB INIT =====
 async function ensureTables(db: D1Database) {
   // Auto-create tables if not exists (for first run)
@@ -253,6 +264,7 @@ app.route('/api/vendors', crud('vendors'))
 app.route('/api/meetings', crud('meetings'))
 app.route('/api/pricedb', crud('pricedb'))
 app.route('/api/orders', crud('orders_manual'))
+app.route('/api/orders_manual', crud('orders_manual')) // 프론트 일부가 이 경로로 PUT/DELETE 호출
 app.route('/api/as', crud('as_list'))
 app.route('/api/notices', crud('notices'))
 app.route('/api/tax', crud('tax_invoices'))
@@ -365,8 +377,10 @@ app.post('/api/stl/bulk-save/:pid', async (c) => {
   }
   // Insert new rows
   const insertRows = async (table: string, rows: any[]) => {
+    const cols = await tableColumns(db, table)
     for (const row of rows) {
-      const keys = Object.keys(row)
+      const keys = Object.keys(row).filter(k => cols.has(k))
+      if (!keys.length) continue
       const placeholders = keys.map(() => '?').join(',')
       const vals = keys.map(k => row[k])
       await db.prepare(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`).bind(...vals).run()
@@ -405,10 +419,11 @@ app.get('/api/company', async (c) => {
   }
   return c.json(row)
 })
-app.put('/api/company', async (c) => {
+app.put('/api/company', requireAdmin, async (c) => {
   const db = c.env.DB
   const body = await c.req.json()
-  const keys = Object.keys(body).filter(k => k !== 'id')
+  const cols = await tableColumns(db, 'company')
+  const keys = Object.keys(body).filter(k => k !== 'id' && cols.has(k))
   if (!keys.length) return c.json({ error: 'No fields' }, 400)
   const sets = keys.map(k => `${k} = ?`).join(', ')
   const vals = keys.map(k => body[k])
@@ -561,6 +576,16 @@ app.post('/api/users', async (c) => {
   // Hash password with PBKDF2 for new users / password updates
   let pw = body.password || ''
   if (pw && !pw.startsWith('pbkdf2:')) pw = await hashPassword(pw)
+  // 기존 사용자 수정: 전달된 필드만 갱신 (비밀번호·입사일 등 나머지 컬럼 보존)
+  const existing = await db.prepare('SELECT id FROM users WHERE id = ?').bind(id).first()
+  if (existing) {
+    await db.prepare('UPDATE users SET username = ?, name = ?, role = ?, email = ?, phone = ?, active = ? WHERE id = ?').bind(
+      body.username, body.name || '', body.role || 'staff', body.email || '', body.phone || '', body.active ?? 1, id
+    ).run()
+    if (pw) await db.prepare('UPDATE users SET password = ? WHERE id = ?').bind(pw, id).run()
+    return c.json({ success: true, id })
+  }
+  if (!pw) return c.json({ error: '비밀번호를 입력하세요' }, 400)
   await db.prepare('INSERT OR REPLACE INTO users (id, username, password, name, role, email, phone, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(
     id, body.username, pw, body.name || '', body.role || 'staff', body.email || '', body.phone || '', body.active ?? 1
   ).run()
@@ -583,6 +608,7 @@ app.delete('/api/users/:id', async (c) => {
 app.put('/api/users/:id/password', async (c) => {
   const db = c.env.DB
   const id = c.req.param('id')
+  if (c.get('role') !== 'admin' && c.get('userId') !== id) return c.json({ error: '본인 또는 관리자만 변경할 수 있습니다' }, 403)
   const { password } = await c.req.json()
   if (!password || password.length < 4) return c.json({ error: '비밀번호는 4자 이상이어야 합니다' }, 400)
   const hashed = await hashPassword(password)
@@ -1064,6 +1090,7 @@ async function notionQuery(token: string, dbId: string, startCursor?: string): P
     headers: { 'Authorization': `Bearer ${token}`, 'Notion-Version': '2022-06-28', 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  if (!res.ok) throw new Error(`Notion API ${res.status}: ${(await res.text()).slice(0, 200)}`)
   return res.json()
 }
 
@@ -1097,7 +1124,7 @@ app.get('/api/notion/status', async (c) => {
 })
 
 // Migrate a specific table from Notion
-app.post('/api/notion/migrate/:target', async (c) => {
+app.post('/api/notion/migrate/:target', requireAdmin, async (c) => {
   const db = c.env.DB
   const target = c.req.param('target')
   const body = await c.req.json() as { token?: string; mode?: string; batch_size?: number; batch_offset?: number }
@@ -1449,7 +1476,7 @@ app.post('/api/inquiry', async (c) => {
 
 // ===== SETTLEMENT MIGRATION (stl_* → ERP core tables) — P5 단계 2 =====
 // POST body: { dryRun?: boolean, mode?: 'merge' | 'replace' }
-app.post('/api/migrate-settlement', async (c) => {
+app.post('/api/migrate-settlement', requireAdmin, async (c) => {
   const body = await c.req.json<any>().catch(() => ({}))
   const dryRun = !!body.dryRun
   const mode = body.mode === 'replace' ? 'replace' : 'merge'
@@ -2201,7 +2228,7 @@ async function sendSolapi(env: Bindings, opts: { to: string; text: string; type?
   } catch (e: any) { return { ok: false, error: e?.message || 'send failed' } }
 }
 // Admin-only test endpoint
-app.post('/api/solapi/test', async (c) => {
+app.post('/api/solapi/test', requireAdmin, async (c) => {
   const { to, text, type, subject } = await c.req.json<any>().catch(() => ({}))
   if (!to || !text) return c.json({ error: 'to, text required' }, 400)
   return c.json(await sendSolapi(c.env, { to, text, type, subject }))
@@ -2306,7 +2333,7 @@ async function runMeetingNotify(env: Bindings): Promise<{ todayCount: number; to
 }
 
 // Manual trigger (admin only via auth middleware) — for testing the digest immediately
-app.post('/api/cron/meeting-notify', async (c) => {
+app.post('/api/cron/meeting-notify', requireAdmin, async (c) => {
   const result = await runMeetingNotify(c.env)
   return c.json({ ok: true, ...result })
 })
