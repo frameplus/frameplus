@@ -60,7 +60,7 @@
 
       <div class="row row2">
         <div>
-          <label>연락처<span class="req">*</span></label>
+          <label>연락처 <span style="font-weight:400;color:#94A3B8">(연락처 또는 이메일 중 하나 필수)</span></label>
           <input type="tel" name="phone" maxlength="40" placeholder="010-1234-5678" />
         </div>
         <div>
@@ -180,7 +180,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body)
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         msg.className = 'msg err';
         msg.textContent = data.error || '전송 실패. 잠시 후 다시 시도해주세요.';
@@ -190,8 +190,15 @@
       }
       msg.className = 'msg ok';
       const dates = (data.suggestedDates || []).join(', ');
-      msg.innerHTML = '✓ ' + (data.message || '접수 완료')
-        + (dates ? '<br><br><b>추천 미팅 후보일:</b> ' + dates : '');
+      msg.textContent = '✓ ' + (data.message || '접수 완료');
+      if (dates) {
+        msg.appendChild(document.createElement('br'));
+        msg.appendChild(document.createElement('br'));
+        const b = document.createElement('b');
+        b.textContent = '추천 미팅 후보일: ';
+        msg.appendChild(b);
+        msg.appendChild(document.createTextNode(dates));
+      }
       form.querySelectorAll('input, select, textarea, button').forEach(el => el.disabled = true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {

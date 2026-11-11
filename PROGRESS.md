@@ -198,7 +198,7 @@
 - [x] Auth 미들웨어 적용 — 모든 `/api/*` 엔드포인트에 세션 검증 (health, login, init-tables 제외)
 - [x] PBKDF2-SHA256 비밀번호 해싱 (100k iterations, Web Crypto API)
 - [x] 평문 비밀번호 자동 업그레이드 (로그인 시 PBKDF2로 마이그레이션)
-- [x] CEO 계정 생성 (`ceo` / `FramePlus2026!`), 기본 admin 비활성화 (프로덕션)
+- [x] CEO 계정 생성, 기본 admin 비활성화 (프로덕션) — 계정 정보는 문서에 기재하지 않음
 - [x] Cloudflare Pages 수동 배포 완료
 
 ### Notion 연동 — 스키마 정렬 + 데이터 마이그레이션 (2026-05-28)
@@ -465,8 +465,7 @@ npx wrangler pages deploy dist --project-name frameplus-erp # 프로덕션 배�
 
 ### 로컬 DB 접근
 ```bash
-# admin/admin1234 로 로그인 (로컬)
-# 프로덕션: ceo/FramePlus2026!
+# 로그인 계정은 문서에 기재하지 않음 (관리자에게 문의)
 ```
 
 ### 주요 코드 패턴

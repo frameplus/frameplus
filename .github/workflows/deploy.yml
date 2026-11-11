@@ -21,7 +21,7 @@ jobs:
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Cache-bust asset versions (app.js/style.css 내용 해시 주입)
         run: |
